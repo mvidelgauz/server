@@ -6,6 +6,7 @@
  * @author Georg Ehrke <oc.list@georgehrke.com>
  * @author Joas Schilling <coding@schilljs.com>
  * @author Robin Appelman <robin@icewind.nl>
+ * @author Roeland Jago Douma <roeland@famdouma.nl>
  * @author Thomas Citharel <tcit@tcit.fr>
  * @author Thomas Müller <thomas.mueller@tmit.eu>
  *
@@ -21,7 +22,7 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
 
@@ -33,10 +34,10 @@ use OCA\DAV\CalDAV\CalDavBackend;
 use OCA\DAV\CalDAV\Calendar;
 use OCP\IConfig;
 use OCP\IL10N;
+use Sabre\DAV\Exception\NotFound;
 use Sabre\DAV\PropPatch;
 use Sabre\DAV\Xml\Property\Href;
 use Sabre\DAVACL\IACL;
-use Sabre\DAV\Exception\NotFound;
 
 /**
  * Class CalDavBackendTest
@@ -279,11 +280,11 @@ EOD;
 		$this->assertCount(0, $calendarObjects);
 	}
 
-	/**
-	 * @expectedException \Sabre\DAV\Exception\BadRequest
-	 * @expectedExceptionMessage Calendar object with uid already exists in this calendar collection.
-	 */
+	
 	public function testMultipleCalendarObjectsWithSameUID() {
+		$this->expectException(\Sabre\DAV\Exception\BadRequest::class);
+		$this->expectExceptionMessage('Calendar object with uid already exists in this calendar collection.');
+
 		$calendarId = $this->createTestCalendar();
 
 		$calData = <<<'EOD'

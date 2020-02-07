@@ -21,14 +21,12 @@
  *
  */
 
-
 namespace Test\AppFramework\Http;
 
 
-use OCP\AppFramework\Http\Response;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Response;
 use OCP\AppFramework\Utility\ITimeFactory;
-
 
 class ResponseTest extends \Test\TestCase {
 
@@ -37,7 +35,7 @@ class ResponseTest extends \Test\TestCase {
 	 */
 	private $childResponse;
 
-	protected function setUp(){
+	protected function setUp(): void {
 		parent::setUp();
 		$this->childResponse = new Response();
 	}
@@ -60,6 +58,7 @@ class ResponseTest extends \Test\TestCase {
 		$this->childResponse->setHeaders($expected);
 		$headers = $this->childResponse->getHeaders();
 		$expected['Content-Security-Policy'] = "default-src 'none';base-uri 'none';manifest-src 'self'";
+		$expected['Feature-Policy'] = "autoplay 'none';camera 'none';fullscreen 'none';geolocation 'none';microphone 'none';payment 'none'";
 
 		$this->assertEquals($expected, $headers);
 	}
@@ -92,7 +91,7 @@ class ResponseTest extends \Test\TestCase {
 	public function testAddHeaderValueNullDeletesIt(){
 		$this->childResponse->addHeader('hello', 'world');
 		$this->childResponse->addHeader('hello', null);
-		$this->assertEquals(2, count($this->childResponse->getHeaders()));
+		$this->assertEquals(3, count($this->childResponse->getHeaders()));
 	}
 
 

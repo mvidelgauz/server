@@ -3,12 +3,14 @@
  * @copyright Copyright (c) 2016, ownCloud, Inc.
  *
  * @author Björn Schießle <bjoern@schiessle.org>
- * @author Felix A. Epp <work@felixepp.de>
+ * @author Daniel Kesselberg <mail@danielkesselberg.de>
  * @author Jan-Christoph Borchardt <hey@jancborchardt.net>
+ * @author Jörn Friedrich Dreyer <jfd@butonic.de>
  * @author Julius Haertl <jus@bitgrid.net>
  * @author Julius Härtl <jus@bitgrid.net>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
  * @author Lukas Reschke <lukas@statuscode.ch>
+ * @author Markus Staab <markus.staab@redaxo.de>
+ * @author Michael Weimann <mail@michael-weimann.eu>
  * @author Morris Jobke <hey@morrisjobke.de>
  * @author Pascal de Bruijn <pmjdebruijn@pcode.nl>
  * @author Robin Appelman <robin@icewind.nl>
@@ -30,7 +32,7 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
 class OC_Defaults {
@@ -52,7 +54,6 @@ class OC_Defaults {
 	private $defaultTextColorPrimary;
 
 	public function __construct() {
-		$l10n = \OC::$server->getL10N('lib');
 		$config = \OC::$server->getConfig();
 
 		$this->defaultEntity = 'Nextcloud'; /* e.g. company name, used for footers and copyright notices */
@@ -65,7 +66,6 @@ class OC_Defaults {
 		$this->defaultAndroidClientUrl = $config->getSystemValue('customclient_android', 'https://play.google.com/store/apps/details?id=com.nextcloud.client');
 		$this->defaultDocBaseUrl = 'https://docs.nextcloud.com';
 		$this->defaultDocVersion = \OC_Util::getVersion()[0]; // used to generate doc links
-		$this->defaultSlogan = $l10n->t('a safe home for all your data');
 		$this->defaultColorPrimary = '#0082c9';
 		$this->defaultTextColorPrimary = '#ffffff';
 
@@ -219,6 +219,10 @@ class OC_Defaults {
 		if ($this->themeExist('getSlogan')) {
 			return $this->theme->getSlogan();
 		} else {
+			if ($this->defaultSlogan === null) {
+				$l10n = \OC::$server->getL10N('lib');
+				$this->defaultSlogan = $l10n->t('a safe home for all your data');
+			}
 			return $this->defaultSlogan;
 		}
 	}

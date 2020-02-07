@@ -36,7 +36,7 @@ class AppsDisableTest extends TestCase {
 	/** @var CommandTester */
 	private $commandTester;
 
-	public function setUp() {
+	protected function setUp(): void {
 		parent::setUp();
 
 		$command = new Disable(
@@ -61,7 +61,7 @@ class AppsDisableTest extends TestCase {
 
 		$this->commandTester->execute($input);
 
-		$this->assertContains($output, $this->commandTester->getDisplay());
+		$this->assertStringContainsString($output, $this->commandTester->getDisplay());
 		$this->assertSame($statusCode, $this->commandTester->getStatusCode());
 	}
 

@@ -1,10 +1,17 @@
 <?php
+
 declare(strict_types=1);
+
 /**
  * @copyright Copyright (c) 2016, ownCloud, Inc.
  *
+ * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
  * @author Bernhard Posselt <dev@bernhard-posselt.com>
+ * @author Bjoern Schiessle <bjoern@schiessle.org>
+ * @author Christoph Wurst <christoph@winzerhof-wurst.at>
+ * @author Daniel Kesselberg <mail@danielkesselberg.de>
  * @author Joas Schilling <coding@schilljs.com>
+ * @author Julien Veyssier <eneiluj@posteo.net>
  * @author Lukas Reschke <lukas@statuscode.ch>
  * @author Morris Jobke <hey@morrisjobke.de>
  * @author Roeland Jago Douma <roeland@famdouma.nl>
@@ -24,10 +31,9 @@ declare(strict_types=1);
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
-
 
 namespace OC\AppFramework\Middleware\Security;
 
@@ -35,29 +41,24 @@ use OC\AppFramework\Middleware\Security\Exceptions\AppNotEnabledException;
 use OC\AppFramework\Middleware\Security\Exceptions\CrossSiteRequestForgeryException;
 use OC\AppFramework\Middleware\Security\Exceptions\NotAdminException;
 use OC\AppFramework\Middleware\Security\Exceptions\NotLoggedInException;
+use OC\AppFramework\Middleware\Security\Exceptions\SecurityException;
 use OC\AppFramework\Middleware\Security\Exceptions\StrictCookieMissingException;
 use OC\AppFramework\Utility\ControllerMethodReflector;
-use OC\Security\CSP\ContentSecurityPolicyManager;
-use OC\Security\CSP\ContentSecurityPolicyNonceManager;
-use OC\Security\CSRF\CsrfTokenManager;
 use OCP\App\AppPathNotFoundException;
 use OCP\App\IAppManager;
-use OCP\AppFramework\Http\ContentSecurityPolicy;
-use OCP\AppFramework\Http\EmptyContentSecurityPolicy;
+use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\Http\RedirectResponse;
+use OCP\AppFramework\Http\Response;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Middleware;
-use OCP\AppFramework\Http\Response;
-use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\OCSController;
 use OCP\IL10N;
-use OCP\INavigationManager;
-use OCP\IURLGenerator;
-use OCP\IRequest;
 use OCP\ILogger;
-use OCP\AppFramework\Controller;
+use OCP\INavigationManager;
+use OCP\IRequest;
+use OCP\IURLGenerator;
 use OCP\Util;
-use OC\AppFramework\Middleware\Security\Exceptions\SecurityException;
 
 /**
  * Used to do all the authentication and checking stuff for a controller method
@@ -84,12 +85,6 @@ class SecurityMiddleware extends Middleware {
 	private $isAdminUser;
 	/** @var bool */
 	private $isSubAdmin;
-	/** @var ContentSecurityPolicyManager */
-	private $contentSecurityPolicyManager;
-	/** @var CsrfTokenManager */
-	private $csrfTokenManager;
-	/** @var ContentSecurityPolicyNonceManager */
-	private $cspNonceManager;
 	/** @var IAppManager */
 	private $appManager;
 	/** @var IL10N */
@@ -104,9 +99,6 @@ class SecurityMiddleware extends Middleware {
 								bool $isLoggedIn,
 								bool $isAdminUser,
 								bool $isSubAdmin,
-								ContentSecurityPolicyManager $contentSecurityPolicyManager,
-								CsrfTokenManager $csrfTokenManager,
-								ContentSecurityPolicyNonceManager $cspNonceManager,
 								IAppManager $appManager,
 								IL10N $l10n
 	) {
@@ -119,9 +111,6 @@ class SecurityMiddleware extends Middleware {
 		$this->isLoggedIn = $isLoggedIn;
 		$this->isAdminUser = $isAdminUser;
 		$this->isSubAdmin = $isSubAdmin;
-		$this->contentSecurityPolicyManager = $contentSecurityPolicyManager;
-		$this->csrfTokenManager = $csrfTokenManager;
-		$this->cspNonceManager = $cspNonceManager;
 		$this->appManager = $appManager;
 		$this->l10n = $l10n;
 	}
@@ -133,12 +122,18 @@ class SecurityMiddleware extends Middleware {
 	 * @param Controller $controller the controller
 	 * @param string $methodName the name of the method
 	 * @throws SecurityException when a security check fails
+	 *
+	 * @suppress PhanUndeclaredClassConstant
 	 */
 	public function beforeController($controller, $methodName) {
 
 		// this will set the current navigation entry of the app, use this only
 		// for normal HTML requests and not for AJAX requests
 		$this->navigationManager->setActiveEntry($this->appName);
+
+		if (get_class($controller) === \OCA\Talk\Controller\PageController::class && $methodName === 'showCall') {
+			$this->navigationManager->setActiveEntry('spreed');
+		}
 
 		// security checks
 		$isPublicPage = $this->reflector->hasAnnotation('PublicPage');
@@ -201,34 +196,6 @@ class SecurityMiddleware extends Middleware {
 		if ($appPath !== false && !$isPublicPage && !$this->appManager->isEnabledForUser($this->appName)) {
 			throw new AppNotEnabledException();
 		}
-	}
-
-	/**
-	 * Performs the default CSP modifications that may be injected by other
-	 * applications
-	 *
-	 * @param Controller $controller
-	 * @param string $methodName
-	 * @param Response $response
-	 * @return Response
-	 */
-	public function afterController($controller, $methodName, Response $response): Response {
-		$policy = !is_null($response->getContentSecurityPolicy()) ? $response->getContentSecurityPolicy() : new ContentSecurityPolicy();
-
-		if (get_class($policy) === EmptyContentSecurityPolicy::class) {
-			return $response;
-		}
-
-		$defaultPolicy = $this->contentSecurityPolicyManager->getDefaultPolicy();
-		$defaultPolicy = $this->contentSecurityPolicyManager->mergePolicies($defaultPolicy, $policy);
-
-		if($this->cspNonceManager->browserSupportsCspV3()) {
-			$defaultPolicy->useJsNonce($this->csrfTokenManager->getToken()->getEncryptedValue());
-		}
-
-		$response->setContentSecurityPolicy($defaultPolicy);
-
-		return $response;
 	}
 
 	/**

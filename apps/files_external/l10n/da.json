@@ -22,7 +22,7 @@
     "Admin defined" : "Bestemt af administrator",
     "Delete storage?" : "Slet lager?",
     "Saved" : "Gemt",
-    "Saving..." : "Gemmer...",
+    "Saving …" : "Gemmer…",
     "Save" : "Gem",
     "Empty response from the server" : "Svar fra serveren uden data",
     "Couldn't access. Please log out and in again to activate this mount point" : "Kunne ikke forbinde. Log venligst ud og ind igen for at aktivere dette mount point.",
@@ -96,6 +96,8 @@
     "SFTP with secret key login" : "SFTP med hemmelig nøglelogin",
     "SMB / CIFS" : "SMB / CIFS",
     "Share" : "Del",
+    "Show hidden files" : "Vis skjulte filer",
+    "Timeout" : "Timeout",
     "SMB / CIFS using OC login" : "SMB / CIFS med OC-login",
     "Username as share" : "Brugernavn som deling",
     "OpenStack Object Storage" : "OpenStack Object Storage",
@@ -106,6 +108,7 @@
     "Name" : "Navn",
     "Storage type" : "Lagertype",
     "Scope" : "Anvendelsesområde",
+    "Open documentation" : "Åbn dokumentation",
     "Folder name" : "Mappenavn",
     "External storage" : "Eksternt lager",
     "Authentication" : "Godkendelse",
@@ -114,7 +117,6 @@
     "Add storage" : "Tilføj lager",
     "Advanced settings" : "Avancerede indstillinger",
     "Allow users to mount external storage" : "Tillad brugere at montere eksternt lager",
-    "Some of the configured external mount points are not connected. Please click on the red row(s) for more information" : "Nogle af de konfigureret eksterne mount points er ikke forbundet. Klik venligst på de(n) røde række(r) for mere information",
-    "\"%s\" is not installed. Mounting of %s is not possible. Please ask your system administrator to install it." : "\"%s\" er ikke installeret. Monteringen af %s er ikke mulig. Anmod din systemadministrator om at installere det."
+    "Saving..." : "Gemmer..."
 },"pluralForm" :"nplurals=2; plural=(n != 1);"
 }

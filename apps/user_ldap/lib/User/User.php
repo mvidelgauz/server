@@ -4,8 +4,8 @@
  *
  * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
  * @author Joas Schilling <coding@schilljs.com>
- * @author Juan Pablo Villafáñez <jvillafanez@solidgear.es>
  * @author Jörn Friedrich Dreyer <jfd@butonic.de>
+ * @author Juan Pablo Villafáñez <jvillafanez@solidgear.es>
  * @author Morris Jobke <hey@morrisjobke.de>
  * @author Roger Szabo <roger.szabo@web.de>
  * @author Thomas Müller <thomas.mueller@tmit.eu>
@@ -24,7 +24,7 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
 
@@ -173,6 +173,21 @@ class User {
 				$this->markRefreshTime();
 			}
 		}
+	}
+
+	/**
+	 * marks a user as deleted
+	 *
+	 * @throws \OCP\PreConditionNotMetException
+	 */
+	public function markUser() {
+		$curValue = $this->config->getUserValue($this->getUsername(), 'user_ldap', 'isDeleted', '0');
+		if($curValue === '1') {
+			// the user is already marked, do not write to DB again
+			return;
+		}
+		$this->config->setUserValue($this->getUsername(), 'user_ldap', 'isDeleted', '1');
+		$this->config->setUserValue($this->getUsername(), 'user_ldap', 'foundDeleted', (string)time());
 	}
 
 	/**
@@ -584,10 +599,26 @@ class User {
 			//not set, nothing left to do;
 			return false;
 		}
+
 		if(!$this->image->loadFromBase64(base64_encode($avatarImage))) {
 			return false;
 		}
-		return $this->setOwnCloudAvatar();
+
+		// use the checksum before modifications
+		$checksum = md5($this->image->data());
+
+		if($checksum === $this->config->getUserValue($this->uid, 'user_ldap', 'lastAvatarChecksum', '')) {
+			return true;
+		}
+
+		$isSet = $this->setOwnCloudAvatar();
+
+		if($isSet) {
+			// save checksum only after successful setting
+			$this->config->setUserValue($this->uid, 'user_ldap', 'lastAvatarChecksum', $checksum);
+		}
+
+		return $isSet;
 	}
 
 	/**
@@ -599,8 +630,10 @@ class User {
 			$this->log->log('avatar image data from LDAP invalid for '.$this->dn, ILogger::ERROR);
 			return false;
 		}
+
+
 		//make sure it is a square and not bigger than 128x128
-		$size = min(array($this->image->width(), $this->image->height(), 128));
+		$size = min([$this->image->width(), $this->image->height(), 128]);
 		if(!$this->image->centerCrop($size)) {
 			$this->log->log('croping image for avatar failed for '.$this->dn, ILogger::ERROR);
 			return false;

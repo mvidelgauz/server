@@ -5,9 +5,9 @@
  * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
  * @author Frédéric Fortier <frederic.fortier@oronospolytechnique.com>
  * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
  * @author Morris Jobke <hey@morrisjobke.de>
  * @author Roeland Jago Douma <roeland@famdouma.nl>
+ * @author Roland Tapken <roland@bitarbeiter.net>
  * @author Thomas Müller <thomas.mueller@tmit.eu>
  * @author Victor Dubiniuk <dubiniuk@owncloud.com>
  * @author Vincent Petry <pvince81@owncloud.com>
@@ -26,19 +26,19 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
 
 namespace OCA\User_LDAP\Tests;
 
-use OCA\User_LDAP\GroupPluginManager;
-use OCP\GroupInterface;
 use OCA\User_LDAP\Access;
 use OCA\User_LDAP\Connection;
 use OCA\User_LDAP\Group_LDAP as GroupLDAP;
+use OCA\User_LDAP\GroupPluginManager;
 use OCA\User_LDAP\ILDAPWrapper;
 use OCA\User_LDAP\User\Manager;
+use OCP\GroupInterface;
 use Test\TestCase;
 
 /**
@@ -770,10 +770,10 @@ class Group_LDAPTest extends TestCase {
 		$this->assertEquals($ldap->createGroup('gid'),true);
 	}
 
-	/**
-	 * @expectedException \Exception
-	 */
+	
 	public function testCreateGroupFailing() {
+		$this->expectException(\Exception::class);
+
 		/** @var GroupPluginManager|\PHPUnit_Framework_MockObject_MockObject $pluginManager */
 		$pluginManager = $this->getMockBuilder('\OCA\User_LDAP\GroupPluginManager')
 			->setMethods(['implementsActions', 'createGroup'])
@@ -825,10 +825,10 @@ class Group_LDAPTest extends TestCase {
 		$this->assertEquals($ldap->deleteGroup('gid'),'result');
 	}
 
-	/**
-	 * @expectedException \Exception
-	 */
+	
 	public function testDeleteGroupFailing() {
+		$this->expectException(\Exception::class);
+
 		/** @var GroupPluginManager|\PHPUnit_Framework_MockObject_MockObject $pluginManager */
 		$pluginManager = $this->getMockBuilder('\OCA\User_LDAP\GroupPluginManager')
 			->setMethods(['implementsActions', 'deleteGroup'])
@@ -871,10 +871,10 @@ class Group_LDAPTest extends TestCase {
 		$this->assertEquals($ldap->addToGroup('uid', 'gid'),'result');
 	}
 
-	/**
-	 * @expectedException \Exception
-	 */
+	
 	public function testAddToGroupFailing() {
+		$this->expectException(\Exception::class);
+
 		/** @var GroupPluginManager|\PHPUnit_Framework_MockObject_MockObject $pluginManager */
 		$pluginManager = $this->getMockBuilder('\OCA\User_LDAP\GroupPluginManager')
 			->setMethods(['implementsActions', 'addToGroup'])
@@ -917,10 +917,10 @@ class Group_LDAPTest extends TestCase {
 		$this->assertEquals($ldap->removeFromGroup('uid', 'gid'),'result');
 	}
 
-	/**
-	 * @expectedException \Exception
-	 */
+	
 	public function testRemoveFromGroupFailing() {
+		$this->expectException(\Exception::class);
+
 		/** @var GroupPluginManager|\PHPUnit_Framework_MockObject_MockObject $pluginManager */
 		$pluginManager = $this->getMockBuilder('\OCA\User_LDAP\GroupPluginManager')
 			->setMethods(['implementsActions', 'removeFromGroup'])
@@ -963,10 +963,10 @@ class Group_LDAPTest extends TestCase {
 		$this->assertEquals($ldap->getGroupDetails('gid'),'result');
 	}
 
-	/**
-	 * @expectedException \Exception
-	 */
+	
 	public function testGetGroupDetailsFailing() {
+		$this->expectException(\Exception::class);
+
 		/** @var GroupPluginManager|\PHPUnit_Framework_MockObject_MockObject $pluginManager */
 		$pluginManager = $this->getMockBuilder('\OCA\User_LDAP\GroupPluginManager')
 			->setMethods(['implementsActions', 'getGroupDetails'])
@@ -1054,7 +1054,7 @@ class Group_LDAPTest extends TestCase {
 		$ldap = new GroupLDAP($access, $pluginManager);
 		$resultingMembers = $this->invokePrivate($ldap, '_groupMembers', [$groupDN]);
 
-		$this->assertEquals($expectedMembers, $resultingMembers, '', 0.0, 10, true);
+		$this->assertEqualsCanonicalizing($expectedMembers, $resultingMembers);
 	}
 
 	public function displayNameProvider() {

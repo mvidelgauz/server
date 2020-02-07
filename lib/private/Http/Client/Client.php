@@ -1,10 +1,15 @@
 <?php
+
 declare(strict_types=1);
+
 /**
  * @copyright Copyright (c) 2016, ownCloud, Inc.
  *
+ * @author Daniel Kesselberg <mail@danielkesselberg.de>
  * @author Lukas Reschke <lukas@statuscode.ch>
  * @author Robin Appelman <robin@icewind.nl>
+ * @author Roeland Jago Douma <roeland@famdouma.nl>
+ * @author Scott Shambarger <devel@shambarger.net>
  *
  * @license AGPL-3.0
  *
@@ -18,7 +23,7 @@ declare(strict_types=1);
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
 
@@ -63,6 +68,7 @@ class Client implements IClient {
 		$defaults = [
 			RequestOptions::PROXY => $this->getProxyUri(),
 			RequestOptions::VERIFY => $this->getCertBundle(),
+			RequestOptions::TIMEOUT => 30,
 		];
 
 		$options = array_merge($defaults, $options);
@@ -95,15 +101,15 @@ class Client implements IClient {
 	 * @return string|null
 	 */
 	private function getProxyUri(): ?string {
-		$proxyHost = $this->config->getSystemValue('proxy', null);
+		$proxyHost = $this->config->getSystemValue('proxy', '');
 
-		if ($proxyHost === null) {
+		if ($proxyHost === '' || $proxyHost === null) {
 			return null;
 		}
 
-		$proxyUserPwd = $this->config->getSystemValue('proxyuserpwd', null);
+		$proxyUserPwd = $this->config->getSystemValue('proxyuserpwd', '');
 
-		if ($proxyUserPwd === null) {
+		if ($proxyUserPwd === '' || $proxyUserPwd === null) {
 			return $proxyHost;
 		}
 

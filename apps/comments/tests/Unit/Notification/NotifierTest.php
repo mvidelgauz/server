@@ -4,6 +4,8 @@
  *
  * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
  * @author Joas Schilling <coding@schilljs.com>
+ * @author Morris Jobke <hey@morrisjobke.de>
+ * @author Roeland Jago Douma <roeland@famdouma.nl>
  *
  * @license GNU AGPL version 3 or any later version
  *
@@ -18,7 +20,7 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -62,7 +64,7 @@ class NotifierTest extends TestCase {
 	/** @var string */
 	protected $lc = 'tlh_KX';
 
-	protected function setUp() {
+	protected function setUp(): void {
 		parent::setUp();
 
 		$this->l10nFactory = $this->createMock(IFactory::class);
@@ -339,10 +341,10 @@ class NotifierTest extends TestCase {
 		$this->notifier->prepare($this->notification, $this->lc);
 	}
 
-	/**
-	 * @expectedException \InvalidArgumentException
-	 */
+	
 	public function testPrepareDifferentApp() {
+		$this->expectException(\InvalidArgumentException::class);
+
 		$this->folder
 			->expects($this->never())
 			->method('getById');
@@ -376,10 +378,10 @@ class NotifierTest extends TestCase {
 		$this->notifier->prepare($this->notification, $this->lc);
 	}
 
-	/**
-	 * @expectedException \InvalidArgumentException
-	 */
+	
 	public function testPrepareNotFound() {
+		$this->expectException(\InvalidArgumentException::class);
+
 		$this->folder
 			->expects($this->never())
 			->method('getById');
@@ -414,10 +416,10 @@ class NotifierTest extends TestCase {
 		$this->notifier->prepare($this->notification, $this->lc);
 	}
 
-	/**
-	 * @expectedException \InvalidArgumentException
-	 */
+	
 	public function testPrepareDifferentSubject() {
+		$this->expectException(\InvalidArgumentException::class);
+
 		$displayName = 'Huraga';
 
 		/** @var IUser|\PHPUnit_Framework_MockObject_MockObject $user */
@@ -477,10 +479,10 @@ class NotifierTest extends TestCase {
 		$this->notifier->prepare($this->notification, $this->lc);
 	}
 
-	/**
-	 * @expectedException \InvalidArgumentException
-	 */
+	
 	public function testPrepareNotFiles() {
+		$this->expectException(\InvalidArgumentException::class);
+
 		$displayName = 'Huraga';
 
 		/** @var IUser|\PHPUnit_Framework_MockObject_MockObject $user */
@@ -541,10 +543,10 @@ class NotifierTest extends TestCase {
 		$this->notifier->prepare($this->notification, $this->lc);
 	}
 
-	/**
-	 * @expectedException \OCP\Notification\AlreadyProcessedException
-	 */
+	
 	public function testPrepareUnresolvableFileID() {
+		$this->expectException(\OCP\Notification\AlreadyProcessedException::class);
+
 		$displayName = 'Huraga';
 
 		/** @var IUser|\PHPUnit_Framework_MockObject_MockObject $user */

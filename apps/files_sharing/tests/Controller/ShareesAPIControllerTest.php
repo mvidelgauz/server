@@ -4,6 +4,7 @@
  *
  * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
  * @author Bjoern Schiessle <bjoern@schiessle.org>
+ * @author Christoph Wurst <christoph@winzerhof-wurst.at>
  * @author Joas Schilling <coding@schilljs.com>
  * @author Lukas Reschke <lukas@statuscode.ch>
  * @author Robin Appelman <robin@icewind.nl>
@@ -22,7 +23,7 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
 
@@ -62,7 +63,7 @@ class ShareesAPIControllerTest extends TestCase {
 	/** @var  ISearch|\PHPUnit_Framework_MockObject_MockObject */
 	protected $collaboratorSearch;
 
-	protected function setUp() {
+	protected function setUp(): void {
 		parent::setUp();
 
 		$this->uid = 'test123';
@@ -270,9 +271,12 @@ class ShareesAPIControllerTest extends TestCase {
 			->setMethods(['isRemoteSharingAllowed', 'shareProviderExists', 'isRemoteGroupSharingAllowed'])
 			->getMock();
 
+		$expectedShareTypes = $shareTypes;
+		sort($expectedShareTypes);
+
 		$this->collaboratorSearch->expects($this->once())
 			->method('search')
-			->with($search, $shareTypes, $this->anything(), $perPage, $perPage * ($page -1))
+			->with($search, $expectedShareTypes, $this->anything(), $perPage, $perPage * ($page -1))
 			->willReturn([[], false]);
 
 		$sharees->expects($this->any())
@@ -397,11 +401,11 @@ class ShareesAPIControllerTest extends TestCase {
 		$this->assertSame($expected, $this->invokePrivate($this->sharees, 'isRemoteSharingAllowed', [$itemType]));
 	}
 
-	/**
-	 * @expectedException \OCP\AppFramework\OCS\OCSBadRequestException
-	 * @expectedExceptionMessage Missing itemType
-	 */
+
 	public function testSearchNoItemType() {
+		$this->expectException(\OCP\AppFramework\OCS\OCSBadRequestException::class);
+		$this->expectExceptionMessage('Missing itemType');
+
 		$this->sharees->search('', null, 1, 10, [], false);
 	}
 

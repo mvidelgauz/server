@@ -3,14 +3,17 @@
  * @copyright Copyright (c) 2016, ownCloud, Inc.
  *
  * @author Bart Visscher <bartv@thisnet.nl>
+ * @author Bjoern Schiessle <bjoern@schiessle.org>
  * @author Christopher Schäpers <kondou@ts.unde.re>
  * @author Clark Tomlinson <fallen013@gmail.com>
+ * @author Daniel Calviño Sánchez <danxuliu@gmail.com>
+ * @author Guillaume COMPAGNON <gcompagnon@outlook.com>
  * @author Hendrik Leppelsack <hendrik@leppelsack.de>
  * @author Joas Schilling <coding@schilljs.com>
  * @author John Molakvoæ (skjnldsv) <skjnldsv@protonmail.com>
+ * @author Jörn Friedrich Dreyer <jfd@butonic.de>
  * @author Julius Haertl <jus@bitgrid.net>
  * @author Julius Härtl <jus@bitgrid.net>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
  * @author Lukas Reschke <lukas@statuscode.ch>
  * @author Michael Gapczynski <GapczynskiM@gmail.com>
  * @author Morris Jobke <hey@morrisjobke.de>
@@ -19,6 +22,7 @@
  * @author Robin Appelman <robin@icewind.nl>
  * @author Robin McCorkell <robin@mccorkell.me.uk>
  * @author Roeland Jago Douma <roeland@famdouma.nl>
+ * @author Thomas Citharel <tcit@tcit.fr>
  * @author Thomas Müller <thomas.mueller@tmit.eu>
  *
  * @license AGPL-3.0
@@ -33,16 +37,18 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
+
 namespace OC;
 
+use OC\AppFramework\Http\Request;
 use OC\Template\JSCombiner;
 use OC\Template\JSConfigHelper;
 use OC\Template\SCSSCacher;
 use OCP\Defaults;
-use OC\AppFramework\Http\Request;
+use OCP\Support\Subscription\IRegistry;
 
 class TemplateLayout extends \OC_Template {
 
@@ -113,6 +119,8 @@ class TemplateLayout extends \OC_Template {
 				$this->assign('themingInvertMenu', $util->invertTextColor(\OC::$server->getThemingDefaults()->getColorPrimary()));
 			} catch (\OCP\AppFramework\QueryException $e) {
 				$this->assign('themingInvertMenu', false);
+			} catch (\OCP\AutoloadNotAllowedException $e) {
+				$this->assign('themingInvertMenu', false);
 			}
 
 		} else if ($renderAs === 'error') {
@@ -132,7 +140,14 @@ class TemplateLayout extends \OC_Template {
 			parent::__construct('core', 'layout.public');
 			$this->assign( 'appid', $appId );
 			$this->assign('bodyid', 'body-public');
-			$this->assign('showSimpleSignUpLink', $this->config->getSystemValue('simpleSignUpLink.shown', true) !== false);
+
+			/** @var IRegistry $subscription */
+			$subscription = \OC::$server->query(IRegistry::class);
+			$showSimpleSignup = $this->config->getSystemValueBool('simpleSignUpLink.shown', true);
+			if ($showSimpleSignup && $subscription->delegateHasValidSubscription()) {
+				$showSimpleSignup = false;
+			}
+			$this->assign('showSimpleSignUpLink', $showSimpleSignup);
 		} else {
 			parent::__construct('core', 'layout.base');
 
@@ -140,7 +155,6 @@ class TemplateLayout extends \OC_Template {
 		// Send the language and the locale to our layouts
 		$lang = \OC::$server->getL10NFactory()->findLanguage();
 		$locale = \OC::$server->getL10NFactory()->findLocale($lang);
-		$localeLang = \OC::$server->getL10NFactory()->findLanguageFromLocale('lib', $locale);
 
 		$lang = str_replace('_', '-', $lang);
 		$this->assign('language', $lang);
@@ -162,7 +176,7 @@ class TemplateLayout extends \OC_Template {
 		if ($this->config->getSystemValue('installed', false) && $renderAs != 'error') {
 			if (\OC::$server->getContentSecurityPolicyNonceManager()->browserSupportsCspV3()) {
 				$jsConfigHelper = new JSConfigHelper(
-					\OC::$server->getL10N('lib', $localeLang ?: $lang),
+					\OC::$server->getL10N('lib'),
 					\OC::$server->query(Defaults::class),
 					\OC::$server->getAppManager(),
 					\OC::$server->getSession(),

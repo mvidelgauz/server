@@ -11,6 +11,7 @@ OC.L10N.register(
     "Update for {app} to version %s is available." : "Yra prieinamas {app} atnaujinimas į versiją %s.",
     "Update notification" : "Atnaujinimų pranešimas",
     "The version you are running is not maintained anymore. Please make sure to update to a supported version as soon as possible." : "Jūsų naudojama versija daugiau nebeprižiūrima. Esant galimybei, kaip įmanoma greičiau atnaujinkite į palaikomą versiją.",
+    "View in store" : "Rodyti parduotuvėje",
     "Open updater" : "Atverti atnaujinimo programą",
     "Download now" : "Atsisiųsti dabar",
     "What's new?" : "Kas naujo?",
@@ -25,8 +26,10 @@ OC.L10N.register(
     "The selected update channel does not support updates of the server." : "Pasirinktas kanalas nepalaiko serverio atnaujinimų.",
     "A new version is available: <strong>{newVersionString}</strong>" : "Yra prieinama nauja versija: <strong>{newVersionString}</strong>",
     "Checked on {lastCheckedDate}" : "Tikrinta {lastCheckedDate}",
+    "Checking apps for compatible updates" : "Tikrinama, ar yra suderinamų programėlių atnaujinimų",
+    "Please make sure your config.php does not set <samp>appstoreenabled</samp> to false." : "Įsitikinkite, kad jūsų config.php nenustato <samp>appstoreenabled</samp> į neigiamą reikšmę.",
+    "Could not connect to the appstore or the appstore returned no updates at all. Search manually for updates or make sure your server has access to the internet and can connect to the appstore." : "Nepavyko prisijungti prie programėlių parduotuvės arba programėlių parduotuvė negrąžino visiškai jokių atnaujinimų. Atlikite rankinę atnaujinimų paiešką arba įsitikinkite, kad jūsų serveris turi prieigą prie interneto ir gali prisijungti prie programėlių parduotuvės.",
     "View changelog" : "Rodyti keitinių žurnalą",
-    "You can always update to a newer version / experimental channel. But you can never downgrade to a more stable channel." : "Visada galite atnaujinti į naujesnę versiją / eksperimentinį kanalą. Tačiau niekada negalite sendinti versijos ar persijungti į stabilų kanalą.",
-    "Could not start updater, please try the manual update" : "Nepavyko paleisti atnaujinimo programos, prašome bandyti atnaujinimą rankiniu būdu"
+    "Beta" : "Beta"
 },
 "nplurals=4; plural=(n % 10 == 1 && (n % 100 > 19 || n % 100 < 11) ? 0 : (n % 10 >= 2 && n % 10 <=9) && (n % 100 > 19 || n % 100 < 11) ? 1 : n % 1 != 0 ? 2: 3);");

@@ -1,4 +1,4 @@
-/*
+/**
  * @copyright 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
  *
  * @author 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
@@ -19,15 +19,17 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-import {addScript, addStyle} from './legacy-loader'
+import { subscribe } from '@nextcloud/event-bus'
+
+import { addScript, addStyle } from './legacy-loader'
 import {
 	ajaxConnectionLostHandler,
 	processAjaxError,
 	registerXHRForErrorProcessing,
 } from './xhr-error'
 import Apps from './apps'
-import {AppConfig, appConfig} from './appconfig'
-import {appSettings} from './appsettings'
+import { AppConfig, appConfig } from './appconfig'
+import { appSettings } from './appsettings'
 import appswebroots from './appswebroots'
 import Backbone from './backbone'
 import {
@@ -36,7 +38,7 @@ import {
 	encodePath,
 	isSamePath,
 	joinPaths,
-} from './path'
+} from '@nextcloud/paths'
 import {
 	build as buildQueryString,
 	parse as parseQueryString,
@@ -55,11 +57,11 @@ import {
 	TAG_FAVORITE,
 } from './constants'
 import ContactsMenu from './contactsmenu'
-import {currentUser, getCurrentUser} from './currentuser'
+import { currentUser, getCurrentUser } from './currentuser'
 import Dialogs from './dialogs'
 import EventSource from './eventsource'
-import {get, set} from './get_set'
-import {getCapabilities} from './capabilities'
+import { get, set } from './get_set'
+import { getCapabilities } from './capabilities'
 import {
 	getHost,
 	getHostName,
@@ -68,7 +70,6 @@ import {
 } from './host'
 import {
 	getToken as getRequestToken,
-	subscribe as subscribeToRequestTokenChange,
 } from './requesttoken'
 import {
 	hideMenus,
@@ -76,13 +77,13 @@ import {
 	showMenu,
 	unregisterMenu,
 } from './menu'
-import {isUserAdmin} from './admin'
-import L10N from './l10n'
-import {
+import { isUserAdmin } from './admin'
+import L10N, {
 	getCanonicalLocale,
 	getLanguage,
 	getLocale,
 } from './l10n'
+
 import {
 	filePath,
 	generateUrl,
@@ -98,10 +99,10 @@ import Notification from './notification'
 import PasswordConfirmation from './password-confirmation'
 import Plugins from './plugins'
 import search from './search'
-import {theme} from './theme'
+import { theme } from './theme'
 import Util from './util'
-import {debug} from './debug'
-import {redirect, reload} from './navigation'
+import { debug } from './debug'
+import { redirect, reload } from './navigation'
 import webroot from './webroot'
 
 /** @namespace OC */
@@ -126,6 +127,7 @@ export default {
 	/**
 	 * Check if a user file is allowed to be handled.
 	 * @param {string} file to check
+	 * @returns {Boolean}
 	 * @deprecated 17.0.0
 	 */
 	fileIsBlacklisted: file => !!(file.match(Config.blacklist_files_regex)),
@@ -187,10 +189,25 @@ export default {
 	/*
 	 * Path helpers
 	 */
+	/**
+	 * @deprecated 18.0.0 use https://www.npmjs.com/package/@nextcloud/paths
+	 */
 	basename,
+	/**
+	 * @deprecated 18.0.0 use https://www.npmjs.com/package/@nextcloud/paths
+	 */
 	encodePath,
+	/**
+	 * @deprecated 18.0.0 use https://www.npmjs.com/package/@nextcloud/paths
+	 */
 	dirname,
+	/**
+	 * @deprecated 18.0.0 use https://www.npmjs.com/package/@nextcloud/paths
+	 */
 	isSamePath,
+	/**
+	 * @deprecated 18.0.0 use https://www.npmjs.com/package/@nextcloud/paths
+	 */
 	joinPaths,
 
 	/**
@@ -257,4 +274,9 @@ export default {
 }
 
 // Keep the request token prop in sync
-subscribeToRequestTokenChange(token => OC.requestToken = token)
+subscribe('csrf-token-update', e => {
+	OC.requestToken = e.token
+
+	// Logging might help debug (Sentry) issues
+	console.info('OC.requestToken changed', e.token)
+})

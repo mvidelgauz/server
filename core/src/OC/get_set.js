@@ -1,4 +1,4 @@
-/*
+/**
  * @copyright 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
  *
  * @author 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
@@ -21,14 +21,14 @@
 
 /**
  * Get a variable by name
- * @param {string} name
- * @return {*}
+ * @param {string} context context
+ * @returns {Function} getter
  */
 export const get = context => name => {
 	const namespaces = name.split('.')
 	const tail = namespaces.pop()
 
-	for (var i = 0; i < namespaces.length; i++) {
+	for (let i = 0; i < namespaces.length; i++) {
 		context = context[namespaces[i]]
 		if (!context) {
 			return false
@@ -39,11 +39,11 @@ export const get = context => name => {
 
 /**
  * Set a variable by name
- * @param {string} name
- * @param {*} value
+ * @param {string} context context
+ * @returns {Function} setter
  */
 export const set = context => (name, value) => {
-	const namespaces = name.split(".")
+	const namespaces = name.split('.')
 	const tail = namespaces.pop()
 
 	for (let i = 0; i < namespaces.length; i++) {
@@ -53,4 +53,5 @@ export const set = context => (name, value) => {
 		context = context[namespaces[i]]
 	}
 	context[tail] = value
+	return value
 }

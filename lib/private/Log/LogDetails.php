@@ -13,7 +13,7 @@
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License
@@ -90,12 +90,12 @@ abstract class LogDetails {
 		// them manually.
 		foreach($entry as $key => $value) {
 			if(is_string($value)) {
-				$testEncode = json_encode($value);
+				$testEncode = json_encode($value, JSON_UNESCAPED_SLASHES);
 				if($testEncode === false) {
 					$entry[$key] = utf8_encode($value);
 				}
 			}
 		}
-		return json_encode($entry, JSON_PARTIAL_OUTPUT_ON_ERROR);
+		return json_encode($entry, JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_UNESCAPED_SLASHES);
 	}
 }

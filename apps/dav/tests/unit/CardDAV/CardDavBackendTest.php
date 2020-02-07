@@ -2,6 +2,7 @@
 /**
  * @copyright Copyright (c) 2016, ownCloud, Inc.
  *
+ * @author Arne Hamann <kontakt+github@arne.email>
  * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
  * @author Bjoern Schiessle <bjoern@schiessle.org>
  * @author Björn Schießle <bjoern@schiessle.org>
@@ -25,13 +26,14 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
 
 namespace OCA\DAV\Tests\unit\CardDAV;
 
 use InvalidArgumentException;
+use OCA\DAV\CalDAV\Proxy\ProxyMapper;
 use OCA\DAV\CardDAV\AddressBook;
 use OCA\DAV\CardDAV\CardDavBackend;
 use OCA\DAV\Connector\Sabre\Principal;
@@ -120,7 +122,7 @@ class CardDavBackendTest extends TestCase {
 						'N:TestNoUID;;;;'.PHP_EOL.
 						'END:VCARD';
 
-	public function setUp() {
+	protected function setUp(): void {
 		parent::setUp();
 
 		$this->userManager = $this->createMock(IUserManager::class);
@@ -131,8 +133,9 @@ class CardDavBackendTest extends TestCase {
 				$this->groupManager,
 				$this->createMock(ShareManager::class),
 				$this->createMock(IUserSession::class),
-				$this->createMock(IConfig::class),
 				$this->createMock(IAppManager::class),
+				$this->createMock(ProxyMapper::class),
+				$this->createMock(IConfig::class),
 				])
 			->setMethods(['getPrincipalByPath', 'getGroupMembership'])
 			->getMock();
@@ -158,7 +161,7 @@ class CardDavBackendTest extends TestCase {
 		$this->tearDown();
 	}
 
-	public function tearDown() {
+	protected function tearDown(): void {
 		parent::tearDown();
 
 		if (is_null($this->backend)) {
@@ -395,7 +398,7 @@ class CardDavBackendTest extends TestCase {
 		// create a card
 		$uri0 = $this->getUniqueID('card');
 		$this->backend->createCard($bookId, $uri0, $this->vcardTest0);
-		
+
 		// create another card with same uid
 		$uri1 = $this->getUniqueID('card');
 		$this->expectException(BadRequest::class);
@@ -630,10 +633,10 @@ class CardDavBackendTest extends TestCase {
 			$this->invokePrivate($this->backend, 'getCardId', [1, 'uri']));
 	}
 
-	/**
-	 * @expectedException InvalidArgumentException
-	 */
+	
 	public function testGetCardIdFailed() {
+		$this->expectException(\InvalidArgumentException::class);
+
 		$this->invokePrivate($this->backend, 'getCardId', [1, 'uri']);
 	}
 
@@ -783,10 +786,10 @@ class CardDavBackendTest extends TestCase {
 		$this->assertSame('uri', $this->backend->getCardUri($id));
 	}
 
-	/**
-	 * @expectedException InvalidArgumentException
-	 */
+	
 	public function testGetCardUriFailed() {
+		$this->expectException(\InvalidArgumentException::class);
+
 		$this->backend->getCardUri(1);
 	}
 

@@ -2,11 +2,13 @@
 /**
  * @copyright Copyright (c) 2016, ownCloud, Inc.
  *
+ * @author Ari Selseng <ari@selseng.net>
  * @author Daniel Jagszent <daniel@jagszent.de>
  * @author Joas Schilling <coding@schilljs.com>
  * @author Morris Jobke <hey@morrisjobke.de>
  * @author Robin Appelman <robin@icewind.nl>
  * @author Robin McCorkell <robin@mccorkell.me.uk>
+ * @author Roeland Jago Douma <roeland@famdouma.nl>
  * @author Vincent Petry <pvince81@owncloud.com>
  *
  * @license AGPL-3.0
@@ -21,15 +23,15 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
 
 namespace OC\Files\Cache\Wrapper;
 
 use OC\Files\Cache\Cache;
-use OCP\Files\Cache\ICacheEntry;
 use OCP\Files\Cache\ICache;
+use OCP\Files\Cache\ICacheEntry;
 use OCP\Files\Search\ISearchQuery;
 
 class CacheWrapper extends Cache {
@@ -237,18 +239,6 @@ class CacheWrapper extends Cache {
 
 	public function searchQuery(ISearchQuery $query) {
 		$results = $this->getCache()->searchQuery($query);
-		return array_map(array($this, 'formatCacheEntry'), $results);
-	}
-
-	/**
-	 * search for files by tag
-	 *
-	 * @param string|int $tag name or tag id
-	 * @param string $userId owner of the tags
-	 * @return ICacheEntry[] file data
-	 */
-	public function searchByTag($tag, $userId) {
-		$results = $this->getCache()->searchByTag($tag, $userId);
 		return array_map(array($this, 'formatCacheEntry'), $results);
 	}
 

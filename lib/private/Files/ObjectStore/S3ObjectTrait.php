@@ -2,7 +2,9 @@
 /**
  * @copyright Copyright (c) 2017 Robin Appelman <robin@icewind.nl>
  *
+ * @author Morris Jobke <hey@morrisjobke.de>
  * @author Robin Appelman <robin@icewind.nl>
+ * @author Roeland Jago Douma <roeland@famdouma.nl>
  *
  * @license GNU AGPL version 3 or any later version
  *
@@ -17,7 +19,7 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -91,7 +93,7 @@ trait S3ObjectTrait {
 		try {
 			$uploader->upload();
 		} catch (S3MultipartUploadException $e) {
-			// This is an emty file so just touch it then
+			// This is an empty file so just touch it then
 			if ($count === 0 && feof($countStream)) {
 				$uploader = new ObjectUploader($this->getConnection(), $this->bucket, $urn, '');
 				$uploader->upload();

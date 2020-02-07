@@ -24,7 +24,7 @@ OC.L10N.register(
     "Admin defined" : "Ορίσθηκε διαχειριστής ",
     "Delete storage?" : "Διαγραφή αποθηκευτικού χώρου;",
     "Saved" : "Αποθηκεύτηκαν",
-    "Saving..." : "Γίνεται αποθήκευση...",
+    "Saving …" : "Αποθηκεύεται ...",
     "Save" : "Αποθήκευση",
     "Empty response from the server" : "Κενή απάντηση από τον διακομιστή",
     "Couldn't access. Please log out and in again to activate this mount point" : "Αδυναμία πρόσβασης. Παρακαλούμε αποσυνδεθείτε και συνδεθείτε ξανά για ενεργοποίηση του σημείου προσάρτησης",
@@ -98,6 +98,8 @@ OC.L10N.register(
     "SFTP with secret key login" : "SFTP με σύνδεση με κρυφό κλειδί",
     "SMB / CIFS" : "SMB / CIFS",
     "Share" : "Διαμοιράστε",
+    "Show hidden files" : "Εμφάνιση κρυφών αρχείων",
+    "Timeout" : "Λήξη χρόνου",
     "SMB / CIFS using OC login" : "SMB / CIFS χρησιμοποιώντας λογαριασμό OC",
     "Username as share" : "Όνομα χρήστη ως διαμοιραζόμενος φάκελος",
     "OpenStack Object Storage" : "Αποθήκη αντικειμένων OpenStack",
@@ -105,9 +107,11 @@ OC.L10N.register(
     "Request timeout (seconds)" : "Χρονικό όριο αιτήματος (δευτερόλεπτα)",
     "The cURL support in PHP is not enabled or installed. Mounting of %s is not possible. Please ask your system administrator to install it." : "Η cURL υποστήριξη στην PHP δεν είναι ενεργοποιημένη. Η προσάρτηση του %s δεν είναι δυνατή. Παρακαλούμε ζητήστε από τον διαχειριστή του συστήματός σας να το εγκαταστήσει. ",
     "The FTP support in PHP is not enabled or installed. Mounting of %s is not possible. Please ask your system administrator to install it." : "Η FTP υποστήριξη στην PHP δεν είναι ενεργοποιημένη ή εγκατεστημένη. Η προσάρτηση του %s δεν είναι δυνατή. Παρακαλούμε ζητήστε τον διαχειριστή του συστήματός σας να το εγκατασταστήσει. ",
+    "External storage support" : "Υποστήριξη εξωτερικής αποθήκευσης",
     "Name" : "Όνομα",
     "Storage type" : "Τύπος αποθηκευτικού χώρου",
     "Scope" : "Εύρος",
+    "Open documentation" : "Άνοιγμα τεκμηρίωσης",
     "Folder name" : "Όνομα φακέλου",
     "External storage" : "Εξωτερική αποθήκευση",
     "Authentication" : "Πιστοποίηση",
@@ -116,7 +120,6 @@ OC.L10N.register(
     "Add storage" : "Προσθηκη αποθηκευσης",
     "Advanced settings" : "Ρυθμίσεις για προχωρημένους",
     "Allow users to mount external storage" : "Να επιτρέπεται στους χρήστες η σύνδεση εξωτερικού χώρου",
-    "Some of the configured external mount points are not connected. Please click on the red row(s) for more information" : "Μερικά από τα διαμορφωμένα εξωτερικά σημεία προσάρτησης δεν είναι συνδεδεμένα. Παρακαλούμε κάντε κλικ στο κόκκινο βέλος(οι) για περισσότερες πληροφορίες",
-    "\"%s\" is not installed. Mounting of %s is not possible. Please ask your system administrator to install it." : "\"%s\" δεν είναι εγκατεστημένο. Η προσάρτηση του %s δεν είναι δυνατή. Παρακαλούμε ζητήστε τον διαχειριστή του συστήματός σας να το εγκαταστήσει. "
+    "Saving..." : "Γίνεται αποθήκευση..."
 },
 "nplurals=2; plural=(n != 1);");

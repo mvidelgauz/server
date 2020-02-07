@@ -2,22 +2,19 @@
 /**
  * @copyright Copyright (c) 2016, ownCloud, Inc.
  *
+ * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
  * @author Bart Visscher <bartv@thisnet.nl>
  * @author Bernhard Reiter <ockham@raz.or.at>
  * @author Bjoern Schiessle <bjoern@schiessle.org>
  * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christopher Schäpers <kondou@ts.unde.re>
  * @author Joas Schilling <coding@schilljs.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
  * @author Lukas Reschke <lukas@statuscode.ch>
  * @author Morris Jobke <hey@morrisjobke.de>
  * @author Robin Appelman <robin@icewind.nl>
  * @author Robin McCorkell <robin@mccorkell.me.uk>
  * @author Roeland Jago Douma <roeland@famdouma.nl>
  * @author Sebastian Döll <sebastian.doell@libasys.de>
- * @author Stefan Weil <sw@weilnetz.de>
  * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Torben Dannhauer <torben@dannhauer.de>
  * @author Vincent Petry <pvince81@owncloud.com>
  * @author Volkan Gezer <volkangezer@gmail.com>
  *
@@ -33,7 +30,7 @@
  * GNU Affero General Public License for more details.
  *
  * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * along with this program. If not, see <http://www.gnu.org/licenses/>
  *
  */
 
@@ -84,9 +81,6 @@ class Share extends Constants {
 					'collectionOf' => $collectionOf,
 					'supportedFileExtensions' => $supportedFileExtensions
 				);
-				if(count(self::$backendTypes) === 1) {
-					Util::addScript('core', 'dist/share_backend');
-				}
 				return true;
 			}
 			\OCP\Util::writeLog('OCP\Share',
@@ -1324,35 +1318,6 @@ class Share extends Constants {
 
 		return $id;
 
-	}
-
-	/**
-	 * In case a password protected link is not yet authenticated this function will return false
-	 *
-	 * @param array $linkItem
-	 * @return boolean
-	 */
-	public static function checkPasswordProtectedShare(array $linkItem) {
-		if (!isset($linkItem['share_with'])) {
-			return true;
-		}
-		if (!isset($linkItem['share_type'])) {
-			return true;
-		}
-		if (!isset($linkItem['id'])) {
-			return true;
-		}
-
-		if ($linkItem['share_type'] != \OCP\Share::SHARE_TYPE_LINK) {
-			return true;
-		}
-
-		if ( \OC::$server->getSession()->exists('public_link_authenticated')
-			&& \OC::$server->getSession()->get('public_link_authenticated') === (string)$linkItem['id'] ) {
-			return true;
-		}
-
-		return false;
 	}
 
 	/**

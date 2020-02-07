@@ -77,7 +77,7 @@ kbd {
 
 /* APP-NAVIGATION ------------------------------------------------------------ */
 /* Navigation: folder like structure */
-#app-navigation {
+#app-navigation:not(.vue) {
 	width: $navigation-width;
 	position: fixed;
 	top: $header-height;
@@ -736,7 +736,8 @@ $min-content-width: $breakpoint-mobile - $navigation-width - $list-min-width;
 		border-top: solid 1px var(--color-border);
 	}
 	&:hover,
-	&:focus {
+	&:focus,
+	&.opened {
 		background-color: var(--color-main-background);
 		opacity: 1;
 		box-shadow: inset 4px 0 var(--color-primary);
@@ -874,6 +875,7 @@ $outter-margin: ($popoveritem-height - $popovericon-size) / 2;
 	right: 0;
 	filter: drop-shadow(0 1px 3px var(--color-box-shadow));
 	display: none;
+	will-change: filter;
 
 	&:after {
 		bottom: 100%;
