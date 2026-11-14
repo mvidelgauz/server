@@ -3,67 +3,46 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2017 Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Security\Bruteforce;
 
 use OC\Security\Bruteforce\Capabilities;
-use OC\Security\Bruteforce\Throttler;
 use OCP\IRequest;
+use OCP\Security\Bruteforce\IThrottler;
 use Test\TestCase;
 
 class CapabilitiesTest extends TestCase {
 	/** @var Capabilities */
 	private $capabilities;
 
-	/** @var IRequest|\PHPUnit\Framework\MockObject\MockObject */
-	private $request;
-
-	/** @var Throttler|\PHPUnit\Framework\MockObject\MockObject */
-	private $throttler;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->request = $this->createMock(IRequest::class);
-
-		$this->throttler = $this->createMock(Throttler::class);
-
-		$this->capabilities = new Capabilities(
-			$this->request,
-			$this->throttler
-		);
+		$this->capabilities = $this->createInstanceWithMocks(Capabilities::class);
 	}
 
-	public function testGetCapabilities() {
-		$this->throttler->expects($this->atLeastOnce())
+	public function testGetCapabilities(): void {
+		$this->getAutoMock(IThrottler::class)->expects($this->atLeastOnce())
 			->method('getDelay')
 			->with('10.10.10.10')
 			->willReturn(42);
 
-		$this->request->method('getRemoteAddress')
+		$this->getAutoMock(IThrottler::class)->expects($this->atLeastOnce())
+			->method('isBypassListed')
+			->with('10.10.10.10')
+			->willReturn(true);
+
+		$this->getAutoMock(IRequest::class)->method('getRemoteAddress')
 			->willReturn('10.10.10.10');
 
 		$expected = [
 			'bruteforce' => [
-				'delay' => 42
+				'delay' => 42,
+				'allow-listed' => true,
 			]
 		];
 		$result = $this->capabilities->getCapabilities();
@@ -71,18 +50,19 @@ class CapabilitiesTest extends TestCase {
 		$this->assertEquals($expected, $result);
 	}
 
-	public function testGetCapabilitiesOnCli() {
-		$this->throttler->expects($this->atLeastOnce())
+	public function testGetCapabilitiesOnCli(): void {
+		$this->getAutoMock(IThrottler::class)->expects($this->atLeastOnce())
 			->method('getDelay')
 			->with('')
 			->willReturn(0);
 
-		$this->request->method('getRemoteAddress')
+		$this->getAutoMock(IRequest::class)->method('getRemoteAddress')
 			->willReturn('');
 
 		$expected = [
 			'bruteforce' => [
-				'delay' => 0
+				'delay' => 0,
+				'allow-listed' => false,
 			]
 		];
 		$result = $this->capabilities->getCapabilities();

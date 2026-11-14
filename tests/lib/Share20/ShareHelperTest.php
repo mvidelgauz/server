@@ -1,24 +1,8 @@
 <?php
+
 /**
- * @copyright 2017, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Share20;
@@ -30,22 +14,17 @@ use OCP\Share\IManager;
 use Test\TestCase;
 
 class ShareHelperTest extends TestCase {
-
-	/** @var IManager|\PHPUnit\Framework\MockObject\MockObject */
-	private $manager;
-
 	/** @var ShareHelper */
 	private $helper;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->manager = $this->createMock(IManager::class);
-
-		$this->helper = new ShareHelper($this->manager);
+		$this->helper = $this->createInstanceWithMocks(ShareHelper::class);
 	}
 
-	public function dataGetPathsForAccessList() {
+	public static function dataGetPathsForAccessList(): array {
 		return [
 			[[], [], false, [], [], false, [
 				'users' => [],
@@ -66,11 +45,9 @@ class ShareHelperTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider dataGetPathsForAccessList
-	 */
-	public function testGetPathsForAccessList(array $userList, array $userMap, $resolveUsers, array $remoteList, array $remoteMap, $resolveRemotes, array $expected) {
-		$this->manager->expects($this->once())
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataGetPathsForAccessList')]
+	public function testGetPathsForAccessList(array $userList, array $userMap, $resolveUsers, array $remoteList, array $remoteMap, $resolveRemotes, array $expected): void {
+		$this->getAutoMock(IManager::class)->expects($this->once())
 			->method('getAccessList')
 			->willReturn([
 				'users' => $userList,
@@ -81,8 +58,8 @@ class ShareHelperTest extends TestCase {
 		$node = $this->createMock(Node::class);
 		/** @var ShareHelper|\PHPUnit\Framework\MockObject\MockObject $helper */
 		$helper = $this->getMockBuilder(ShareHelper::class)
-			->setConstructorArgs([$this->manager])
-			->setMethods(['getPathsForUsers', 'getPathsForRemotes'])
+			->setConstructorArgs([$this->getAutoMock(IManager::class)])
+			->onlyMethods(['getPathsForUsers', 'getPathsForRemotes'])
 			->getMock();
 
 		$helper->expects($resolveUsers ? $this->once() : $this->never())
@@ -98,7 +75,7 @@ class ShareHelperTest extends TestCase {
 		$this->assertSame($expected, $helper->getPathsForAccessList($node));
 	}
 
-	public function dataGetPathsForUsers() {
+	public static function dataGetPathsForUsers(): array {
 		return [
 			[[], [23 => 'TwentyThree', 42 => 'FortyTwo'], []],
 			[
@@ -119,13 +96,13 @@ class ShareHelperTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider dataGetPathsForUsers
 	 *
 	 * @param array $users
 	 * @param array $nodes
 	 * @param array $expected
 	 */
-	public function testGetPathsForUsers(array $users, array $nodes, array $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataGetPathsForUsers')]
+	public function testGetPathsForUsers(array $users, array $nodes, array $expected): void {
 		$lastNode = null;
 		foreach ($nodes as $nodeId => $nodeName) {
 			/** @var Node|\PHPUnit\Framework\MockObject\MockObject $node */
@@ -151,7 +128,7 @@ class ShareHelperTest extends TestCase {
 		$this->assertEquals($expected, self::invokePrivate($this->helper, 'getPathsForUsers', [$lastNode, $users]));
 	}
 
-	public function dataGetPathsForRemotes() {
+	public static function dataGetPathsForRemotes(): array {
 		return [
 			[[], [23 => 'TwentyThree', 42 => 'FortyTwo'], []],
 			[
@@ -176,13 +153,13 @@ class ShareHelperTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider dataGetPathsForRemotes
 	 *
 	 * @param array $remotes
 	 * @param array $nodes
 	 * @param array $expected
 	 */
-	public function testGetPathsForRemotes(array $remotes, array $nodes, array $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataGetPathsForRemotes')]
+	public function testGetPathsForRemotes(array $remotes, array $nodes, array $expected): void {
 		$lastNode = null;
 		foreach ($nodes as $nodeId => $nodePath) {
 			/** @var Node|\PHPUnit\Framework\MockObject\MockObject $node */
@@ -208,7 +185,7 @@ class ShareHelperTest extends TestCase {
 		$this->assertEquals($expected, self::invokePrivate($this->helper, 'getPathsForRemotes', [$lastNode, $remotes]));
 	}
 
-	public function dataGetMountedPath() {
+	public static function dataGetMountedPath(): array {
 		return [
 			['/admin/files/foobar', '/foobar'],
 			['/admin/files/foo/bar', '/foo/bar'],
@@ -216,11 +193,11 @@ class ShareHelperTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider dataGetMountedPath
 	 * @param string $path
 	 * @param string $expected
 	 */
-	public function testGetMountedPath($path, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataGetMountedPath')]
+	public function testGetMountedPath($path, $expected): void {
 		/** @var Node|\PHPUnit\Framework\MockObject\MockObject $node */
 		$node = $this->createMock(Node::class);
 		$node->expects($this->once())

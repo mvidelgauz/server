@@ -1,24 +1,8 @@
 <?php
+
 /**
- * @copyright 2017, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\AppFramework\Middleware\Security;
@@ -30,104 +14,114 @@ use OC\AppFramework\Middleware\Security\SameSiteCookieMiddleware;
 use OC\AppFramework\Utility\ControllerMethodReflector;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\NoSameSiteCookieRequired;
+use OCP\AppFramework\Http\Response;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 use Test\TestCase;
 
+class HasAnnotationController extends Controller {
+	#[NoSameSiteCookieRequired]
+	public function foo(): Response {
+		return new Response();
+	}
+}
+
+class NoAnnotationController extends Controller {
+	public function foo(): Response {
+		return new Response();
+	}
+}
+
 class SameSiteCookieMiddlewareTest extends TestCase {
+	private SameSiteCookieMiddleware $middleware;
+	private LoggerInterface&MockObject $logger;
 
-	/** @var SameSiteCookieMiddleware */
-	private $middleware;
-
-	/** @var Request|\PHPUnit\Framework\MockObject\MockObject */
-	private $request;
-
-	/** @var ControllerMethodReflector|\PHPUnit\Framework\MockObject\MockObject */
-	private $reflector;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
-
-		$this->request = $this->createMock(Request::class);
-		$this->reflector = $this->createMock(ControllerMethodReflector::class);
-		$this->middleware = new SameSiteCookieMiddleware($this->request, $this->reflector);
+		$this->logger = $this->createMock(LoggerInterface::class);
+		$this->middleware = $this->createInstanceWithMocks(SameSiteCookieMiddleware::class);
 	}
 
-	public function testBeforeControllerNoIndex() {
-		$this->request->method('getScriptName')
+	#[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
+	public function testBeforeControllerNoIndex(): void {
+		$this->getAutoMock(Request::class)->method('getScriptName')
 			->willReturn('/ocs/v2.php');
 
-		$this->middleware->beforeController($this->createMock(Controller::class), 'foo');
-		$this->addToAssertionCount(1);
+		$this->middleware->beforeController(new NoAnnotationController('foo', $this->getAutoMock(Request::class)), 'foo');
 	}
 
-	public function testBeforeControllerIndexHasAnnotation() {
-		$this->request->method('getScriptName')
+	public function testBeforeControllerIndexHasAnnotation(): void {
+		$this->getAutoMock(Request::class)->method('getScriptName')
 			->willReturn('/index.php');
 
-		$this->reflector->method('hasAnnotation')
-			->with('NoSameSiteCookieRequired')
+		$this->getAutoMock(ControllerMethodReflector::class)->expects(self::once())
+			->method('hasAnnotationOrAttribute')
+			->with('NoSameSiteCookieRequired', NoSameSiteCookieRequired::class)
 			->willReturn(true);
 
-		$this->middleware->beforeController($this->createMock(Controller::class), 'foo');
-		$this->addToAssertionCount(1);
+		$this->middleware->beforeController(new HasAnnotationController('foo', $this->getAutoMock(Request::class)), 'foo');
 	}
 
-	public function testBeforeControllerIndexNoAnnotationPassingCheck() {
-		$this->request->method('getScriptName')
+	public function testBeforeControllerIndexNoAnnotationPassingCheck(): void {
+		$this->getAutoMock(Request::class)->method('getScriptName')
 			->willReturn('/index.php');
 
-		$this->reflector->method('hasAnnotation')
-			->with('NoSameSiteCookieRequired')
+		$this->getAutoMock(ControllerMethodReflector::class)->expects(self::once())
+			->method('hasAnnotationOrAttribute')
+			->with('NoSameSiteCookieRequired', NoSameSiteCookieRequired::class)
 			->willReturn(false);
 
-		$this->request->method('passesLaxCookieCheck')
+		$this->getAutoMock(Request::class)->method('passesLaxCookieCheck')
 			->willReturn(true);
 
-		$this->middleware->beforeController($this->createMock(Controller::class), 'foo');
-		$this->addToAssertionCount(1);
+		$this->middleware->beforeController(new NoAnnotationController('foo', $this->getAutoMock(Request::class)), 'foo');
 	}
 
-	public function testBeforeControllerIndexNoAnnotationFailingCheck() {
+	public function testBeforeControllerIndexNoAnnotationFailingCheck(): void {
 		$this->expectException(LaxSameSiteCookieFailedException::class);
 
-		$this->request->method('getScriptName')
+		$this->getAutoMock(Request::class)->method('getScriptName')
 			->willReturn('/index.php');
 
-		$this->reflector->method('hasAnnotation')
-			->with('NoSameSiteCookieRequired')
+		$this->getAutoMock(ControllerMethodReflector::class)->expects(self::once())
+			->method('hasAnnotationOrAttribute')
+			->with('NoSameSiteCookieRequired', NoSameSiteCookieRequired::class)
 			->willReturn(false);
 
-		$this->request->method('passesLaxCookieCheck')
+		$this->getAutoMock(Request::class)->method('passesLaxCookieCheck')
 			->willReturn(false);
 
-		$this->middleware->beforeController($this->createMock(Controller::class), 'foo');
+		$this->middleware->beforeController(new NoAnnotationController('foo', $this->getAutoMock(Request::class)), 'foo');
 	}
 
-	public function testAfterExceptionNoLaxCookie() {
+	public function testAfterExceptionNoLaxCookie(): void {
 		$ex = new SecurityException();
 
 		try {
-			$this->middleware->afterException($this->createMock(Controller::class), 'foo', $ex);
+			$this->middleware->afterException(new NoAnnotationController('foo', $this->getAutoMock(Request::class)), 'foo', $ex);
 			$this->fail();
 		} catch (\Exception $e) {
 			$this->assertSame($ex, $e);
 		}
 	}
 
-	public function testAfterExceptionLaxCookie() {
+	public function testAfterExceptionLaxCookie(): void {
 		$ex = new LaxSameSiteCookieFailedException();
 
-		$this->request->method('getRequestUri')
+		$this->getAutoMock(Request::class)->method('getRequestUri')
 			->willReturn('/myrequri');
 
 		$middleware = $this->getMockBuilder(SameSiteCookieMiddleware::class)
-			->setConstructorArgs([$this->request, $this->reflector])
-			->setMethods(['setSameSiteCookie'])
+			->setConstructorArgs([$this->getAutoMock(Request::class), $this->getAutoMock(ControllerMethodReflector::class)])
+			->onlyMethods(['setSameSiteCookie'])
 			->getMock();
 
 		$middleware->expects($this->once())
 			->method('setSameSiteCookie');
 
-		$resp = $middleware->afterException($this->createMock(Controller::class), 'foo', $ex);
+		$resp = $middleware->afterException(new NoAnnotationController('foo', $this->getAutoMock(Request::class)), 'foo', $ex);
 
 		$this->assertSame(Http::STATUS_FOUND, $resp->getStatus());
 

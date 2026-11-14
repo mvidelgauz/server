@@ -1,38 +1,23 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Felix Heidecke <felix@heidecke.me>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCP\Files;
+
+use OCP\AppFramework\Attribute\Consumable;
+use OCP\Files\Cache\ICacheEntry;
+use OCP\Files\Storage\IStorage;
 
 /**
  * Interface FileInfo
  *
  * @since 7.0.0
  */
+#[Consumable(since: '7.0.0')]
 interface FileInfo {
 	/**
 	 * @since 7.0.0
@@ -82,7 +67,7 @@ interface FileInfo {
 	 * Get the size in bytes for the file or folder
 	 *
 	 * @param bool $includeMounts whether or not to include the size of any sub mounts, since 16.0.0
-	 * @return int
+	 * @return int|float
 	 * @since 7.0.0
 	 */
 	public function getSize($includeMounts = true);
@@ -122,10 +107,9 @@ interface FileInfo {
 	/**
 	 * Get the full mimetype of the file or folder i.e. 'image/png'
 	 *
-	 * @return string
 	 * @since 7.0.0
 	 */
-	public function getMimetype();
+	public function getMimetype(): string;
 
 	/**
 	 * Get the first part of the mimetype of the file or folder i.e. 'image'
@@ -138,7 +122,7 @@ interface FileInfo {
 	/**
 	 * Get the storage the file or folder is storage on
 	 *
-	 * @return \OCP\Files\Storage
+	 * @return IStorage
 	 * @since 7.0.0
 	 */
 	public function getStorage();
@@ -152,7 +136,9 @@ interface FileInfo {
 	public function getId();
 
 	/**
-	 * Check whether the file is encrypted
+	 * Check whether the node is encrypted.
+	 * If it is a file, then it is server side encrypted.
+	 * If it is a folder, then it is end-to-end encrypted.
 	 *
 	 * @return bool
 	 * @since 7.0.0
@@ -248,13 +234,16 @@ interface FileInfo {
 	/**
 	 * Get the owner of the file
 	 *
-	 * @return \OCP\IUser
+	 * @return ?\OCP\IUser
 	 * @since 9.0.0
 	 */
 	public function getOwner();
 
 	/**
-	 * Get the stored checksum for this file
+	 * Get the stored checksum(s) for this file
+	 *
+	 * Checksums are stored in the format TYPE:CHECKSUM, here may be multiple checksums separated by a single space
+	 * e.g. MD5:d3b07384d113edec49eaa6238ad5ff00 SHA1:f1d2d2f924e986ac86fdf7b36c94bcdf32beec15
 	 *
 	 * @return string
 	 * @since 9.0.0
@@ -294,4 +283,39 @@ interface FileInfo {
 	 * @since 18.0.0
 	 */
 	public function getUploadTime(): int;
+
+	/**
+	 * Get the last activity date as unix timestamp
+	 *
+	 * Last activity is the more recent of the upload time and the modification time
+	 *
+	 * @return int
+	 * @since 34.0.0
+	 */
+	public function getLastActivity(): int;
+
+	/**
+	 * Get the fileid or the parent folder
+	 * or -1 if this item has no parent folder (because it is the root)
+	 *
+	 * @return int
+	 * @since 28.0.0
+	 */
+	public function getParentId(): int;
+
+	/**
+	 * Get the metadata, if available
+	 *
+	 * @return array<string, int|string|bool|float|string[]|int[]>
+	 * @since 28.0.0
+	 */
+	public function getMetadata(): array;
+
+	/**
+	 * Get the filecache data for the file
+	 *
+	 * @return ICacheEntry
+	 * @since 34.0.0
+	 */
+	public function getData(): ICacheEntry;
 }

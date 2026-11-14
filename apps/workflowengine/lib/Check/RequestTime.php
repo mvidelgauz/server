@@ -1,31 +1,14 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Joas Schilling <coding@schilljs.com>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\WorkflowEngine\Check;
 
 use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\Cache\CappedMemoryCache;
 use OCP\IL10N;
 use OCP\WorkflowEngine\ICheck;
 
@@ -33,21 +16,16 @@ class RequestTime implements ICheck {
 	public const REGEX_TIME = '([0-1][0-9]|2[0-3]):([0-5][0-9])';
 	public const REGEX_TIMEZONE = '([a-zA-Z]+(?:\\/[a-zA-Z\-\_]+)+)';
 
-	/** @var bool[] */
-	protected $cachedResults;
-
-	/** @var IL10N */
-	protected $l;
-
-	/** @var ITimeFactory */
-	protected $timeFactory;
+	protected CappedMemoryCache $cachedResults;
 
 	/**
 	 * @param ITimeFactory $timeFactory
 	 */
-	public function __construct(IL10N $l, ITimeFactory $timeFactory) {
-		$this->l = $l;
-		$this->timeFactory = $timeFactory;
+	public function __construct(
+		protected IL10N $l,
+		protected ITimeFactory $timeFactory,
+	) {
+		$this->cachedResults = new CappedMemoryCache();
 	}
 
 	/**
@@ -55,8 +33,9 @@ class RequestTime implements ICheck {
 	 * @param string $value
 	 * @return bool
 	 */
+	#[\Override]
 	public function executeCheck($operator, $value) {
-		$valueHash = md5($value);
+		$valueHash = sha1($operator . $value);
 
 		if (isset($this->cachedResults[$valueHash])) {
 			return $this->cachedResults[$valueHash];
@@ -74,7 +53,10 @@ class RequestTime implements ICheck {
 			$in = $timestamp1 <= $timestamp || $timestamp <= $timestamp2;
 		}
 
-		return ($operator === 'in') ? $in : !$in;
+		$result = ($operator === 'in') ? $in : !$in;
+
+		$this->cachedResults[$valueHash] = $result;
+		return $result;
 	}
 
 	/**
@@ -87,7 +69,7 @@ class RequestTime implements ICheck {
 		[$hour1, $minute1] = explode(':', $time1);
 		$date1 = new \DateTime('now', new \DateTimeZone($timezone1));
 		$date1->setTimestamp($currentTimestamp);
-		$date1->setTime($hour1, $minute1);
+		$date1->setTime((int)$hour1, (int)$minute1);
 
 		return $date1->getTimestamp();
 	}
@@ -97,8 +79,9 @@ class RequestTime implements ICheck {
 	 * @param string $value
 	 * @throws \UnexpectedValueException
 	 */
+	#[\Override]
 	public function validateCheck($operator, $value) {
-		if (!in_array($operator, ['in', '!in'])) {
+		if (!in_array($operator, ['in', '!in'], true)) {
 			throw new \UnexpectedValueException($this->l->t('The given operator is invalid'), 1);
 		}
 
@@ -109,17 +92,18 @@ class RequestTime implements ICheck {
 		}
 
 		$values = json_decode($value, true);
-		$time1 = \DateTime::createFromFormat('H:i e', $values[0]);
+		$time1 = \DateTime::createFromFormat('H:i e', (string)$values[0]);
 		if ($time1 === false) {
 			throw new \UnexpectedValueException($this->l->t('The given start time is invalid'), 3);
 		}
 
-		$time2 = \DateTime::createFromFormat('H:i e', $values[1]);
+		$time2 = \DateTime::createFromFormat('H:i e', (string)$values[1]);
 		if ($time2 === false) {
 			throw new \UnexpectedValueException($this->l->t('The given end time is invalid'), 4);
 		}
 	}
 
+	#[\Override]
 	public function isAvailableForScope(int $scope): bool {
 		return true;
 	}
@@ -132,6 +116,7 @@ class RequestTime implements ICheck {
 	 *
 	 * @since 18.0.0
 	 */
+	#[\Override]
 	public function supportedEntities(): array {
 		return [];
 	}

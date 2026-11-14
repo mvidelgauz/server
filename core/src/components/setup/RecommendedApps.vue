@@ -1,72 +1,38 @@
 <!--
-  - @copyright 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
-  -
-  - @author 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
-  -
-  - @license GNU AGPL version 3 or any later version
-  -
-  - This program is free software: you can redistribute it and/or modify
-  - it under the terms of the GNU Affero General Public License as
-  - published by the Free Software Foundation, either version 3 of the
-  - License, or (at your option) any later version.
-  -
-  - This program is distributed in the hope that it will be useful,
-  - but WITHOUT ANY WARRANTY; without even the implied warranty of
-  - MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  - GNU Affero General Public License for more details.
-  -
-  - You should have received a copy of the GNU Affero General Public License
-  - along with this program.  If not, see <http://www.gnu.org/licenses/>.
-  -->
+  - SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 
-<template>
-	<div class="body-login-container">
-		<h2>{{ t('core', 'Recommended apps') }}</h2>
-		<p v-if="loadingApps" class="loading text-center">
-			{{ t('core', 'Loading apps …') }}
-		</p>
-		<p v-else-if="loadingAppsError" class="loading-error text-center">
-			{{ t('core', 'Could not fetch list of apps from the App Store.') }}
-		</p>
-		<p v-else class="text-center">
-			{{ t('core', 'Installing apps …') }}
-		</p>
-		<div v-for="app in recommendedApps" :key="app.id" class="app">
-			<img :src="customIcon(app.id)" alt="">
-			<div class="info">
-				<h3>
-					{{ app.name }}
-					<span v-if="app.loading" class="icon icon-loading-small-dark" />
-					<span v-else-if="app.active" class="icon icon-checkmark-white" />
-				</h3>
-				<p v-html="customDescription(app.id)" />
-				<p v-if="app.installationError">
-					<strong>{{ t('core', 'App download or installation failed') }}</strong>
-				</p>
-				<p v-else-if="!app.isCompatible">
-					<strong>{{ t('core', 'Cannot install this app because it is not compatible') }}</strong>
-				</p>
-				<p v-else-if="!app.canInstall">
-					<strong>{{ t('core', 'Cannot install this app') }}</strong>
-				</p>
-			</div>
-		</div>
-		<p class="text-center">
-			<a :href="defaultPageUrl">{{ t('core', 'Cancel') }}</a>
-		</p>
-	</div>
-</template>
+<script setup lang="ts">
+import type { IAppstoreApp } from '../../../../apps/appstore/src/apps.d.ts'
 
-<script>
-import axios from '@nextcloud/axios'
-import { generateUrl, imagePath } from '@nextcloud/router'
 import { loadState } from '@nextcloud/initial-state'
-import pLimit from 'p-limit'
-import { translate as t } from '@nextcloud/l10n'
+import { t } from '@nextcloud/l10n'
+import { imagePath } from '@nextcloud/router'
+import { computed, onMounted, ref } from 'vue'
+import NcButton from '@nextcloud/vue/components/NcButton'
+import NcCheckboxRadioSwitch from '@nextcloud/vue/components/NcCheckboxRadioSwitch'
+import * as appstoreApi from '../../../../apps/appstore/src/service/api.ts'
+import { canInstall } from '../../../../apps/appstore/src/utils/appStatus.ts'
+import { logger } from '../../utils/logger.ts'
 
-import logger from '../../logger'
+interface RecommendedApp extends IAppstoreApp {
+	loading: boolean
+	isSelected: boolean
+	error?: string
+}
 
-const recommended = {
+interface Recommendation {
+	name?: string
+	description?: string
+	icon?: string
+	/** Installed along with the other apps, but not offered on its own */
+	hidden?: boolean
+	/** The apps it is installed along with */
+	required?: string[]
+}
+
+const recommended: Record<string, Recommendation> = {
 	calendar: {
 		description: t('core', 'Schedule work & meetings, synced with all your devices.'),
 		icon: imagePath('core', 'places/calendar.svg'),
@@ -80,111 +46,213 @@ const recommended = {
 		icon: imagePath('core', 'actions/mail.svg'),
 	},
 	spreed: {
-		description: t('core', 'Chatting, video calls, screensharing, online meetings and web conferencing – in your browser and with mobile apps.'),
-		icon: imagePath('core', 'apps/spreed.svg')
+		description: t('core', 'Chatting, video calls, screen sharing, online meetings and web conferencing – in your browser and with mobile apps.'),
+		icon: imagePath('core', 'apps/spreed.svg'),
 	},
 	richdocuments: {
-		description: t('core', 'Collaboratively edit office documents.'),
-		icon: imagePath('core', 'apps/richdocuments.svg')
+		name: 'Nextcloud Office',
+		description: t('core', 'Collaborative documents, spreadsheets and presentations, built on Collabora Online.'),
+		icon: imagePath('core', 'apps/richdocuments.svg'),
+	},
+	notes: {
+		description: t('core', 'Distraction free note taking app.'),
+		icon: imagePath('core', 'apps/notes.svg'),
 	},
 	richdocumentscode: {
-		description: t('core', 'Local document editing back-end used by the Collabora Online app.'),
-		icon: imagePath('core', 'apps/richdocumentscode.svg')
+		hidden: true,
+		required: ['richdocuments'],
 	},
 }
-const recommendedIds = Object.keys(recommended)
-const defaultPageUrl = loadState('core', 'defaultPageUrl')
 
-export default {
-	name: 'RecommendedApps',
-	data() {
-		return {
-			loadingApps: true,
-			loadingAppsError: false,
-			apps: [],
-			defaultPageUrl,
+const defaultPageUrl = loadState<string>('core', 'defaultPageUrl')
+
+const showInstallButton = ref(false)
+const installingApps = ref(false)
+const loadingApps = ref(true)
+const loadingAppsError = ref(false)
+const recommendedApps = ref<RecommendedApp[]>([])
+
+const isAnyAppSelected = computed(() => recommendedApps.value.some((app) => app.isSelected && !app.active))
+
+onMounted(async () => {
+	try {
+		const apps = await appstoreApi.getApps()
+		logger.info(`${apps.length} apps fetched`)
+
+		recommendedApps.value = apps
+			.filter((app) => app.id in recommended)
+			.map((app) => ({
+				...app,
+				loading: false,
+				isSelected: app.isCompatible && !isHidden(app.id),
+			}))
+		logger.debug(`${recommendedApps.value.length} recommended apps found`, { apps: recommendedApps.value })
+
+		showInstallButton.value = true
+	} catch (error) {
+		logger.error('could not fetch app list', { error })
+		loadingAppsError.value = true
+	} finally {
+		loadingApps.value = false
+	}
+})
+
+/**
+ * Install the selected apps and the hidden apps they require.
+ */
+async function installApps() {
+	const availableApps = recommendedApps.value.filter((app) => app.active || (app.isSelected && canInstall(app)))
+	const appsToInstall = [
+		...availableApps.filter((app) => !app.active && app.isSelected),
+		...recommendedApps.value.filter((app) => isHidden(app.id)
+			&& (recommended[app.id]!.required ?? []).every((requiredAppId) => availableApps.some((requiredApp) => requiredApp.id === requiredAppId))),
+	]
+
+	logger.debug(`Installing ${appsToInstall.length} recommended apps`, { appIds: appsToInstall.map((app) => app.id) })
+	installingApps.value = true
+	for (const app of appsToInstall) {
+		app.loading = true
+	}
+
+	const results = await Promise.allSettled(await appstoreApi.enableApps(appsToInstall))
+	results.forEach((result, index) => {
+		const app = appsToInstall[index]!
+		app.loading = false
+		if (result.status === 'fulfilled') {
+			app.active = true
+			return
 		}
-	},
-	computed: {
-		recommendedApps() {
-			return this.apps.filter(app => recommendedIds.includes(app.id))
-		},
-	},
-	mounted() {
-		return axios.get(generateUrl('settings/apps/list'))
-			.then(resp => resp.data)
-			.then(data => {
-				logger.info(`${data.apps.length} apps fetched`)
 
-				this.apps = data.apps.map(app => Object.assign(app, { loading: false, installationError: false }))
-				logger.debug(`${this.recommendedApps.length} recommended apps found`, { apps: this.recommendedApps })
+		if (result.reason instanceof Error && result.reason.message === 'Dialog closed') {
+			logger.info(`User cancelled the password confirmation for recommended app ${app.id}`)
+			app.error = t('core', 'Password confirmation was aborted')
+		} else {
+			logger.error(`could not install recommended app ${app.id}`, { error: result.reason })
+			app.error = t('core', 'App download or installation failed')
+		}
+		app.isSelected = false
+	})
+	installingApps.value = false
+}
 
-				this.installApps()
-			})
-			.catch(error => {
-				logger.error('could not fetch app list', { error })
+/**
+ * @param appId - The app id
+ */
+function customIcon(appId: string): string {
+	const icon = recommended[appId]?.icon
+	if (!icon) {
+		logger.warn(`no app icon for recommended app ${appId}`)
+		return imagePath('core', 'places/default-app-icon.svg')
+	}
+	return icon
+}
 
-				this.loadingAppsError = true
-			})
-			.then(() => {
-				this.loadingApps = false
-			})
-	},
-	methods: {
-		installApps() {
-			const limit = pLimit(1)
-			const installing = this.recommendedApps
-				.filter(app => !app.active && app.isCompatible && app.canInstall)
-				.map(app => limit(() => {
-					logger.info(`installing ${app.id}`)
-					app.loading = true
-					return axios.post(generateUrl('settings/apps/enable'), { appIds: [app.id], groups: [] })
-						.catch(error => {
-							logger.error(`could not install ${app.id}`, { error })
-							app.installationError = true
-						})
-						.then(() => {
-							logger.info(`installed ${app.id}`)
-							app.loading = false
-						})
-				}))
-			logger.debug(`installing ${installing.length} recommended apps`)
-			Promise.all(installing)
-				.then(() => {
-					logger.info('all recommended apps installed, redirecting …')
+/**
+ * @param app - The app
+ */
+function customName(app: RecommendedApp): string {
+	return recommended[app.id]?.name || app.name
+}
 
-					window.location = defaultPageUrl
-				})
-				.catch(error => logger.error('could not install recommended apps', { error }))
-		},
-		customIcon(appId) {
-			if (!(appId in recommended) || !recommended[appId].icon) {
-				logger.warn(`no app icon for recommended app ${appId}`)
-				return imagePath('core', 'places/default-app-icon.svg')
-			}
-			return recommended[appId].icon
-		},
-		customDescription(appId) {
-			if (!(appId in recommended)) {
-				logger.warn(`no app description for recommended app ${appId}`)
-				return ''
-			}
-			return recommended[appId].description
-		},
-	},
+/**
+ * @param appId - The app id
+ */
+function customDescription(appId: string): string {
+	const description = recommended[appId]?.description
+	if (description === undefined) {
+		logger.warn(`no app description for recommended app ${appId}`)
+		return ''
+	}
+	return description
+}
+
+/**
+ * @param appId - The app id
+ */
+function isHidden(appId: string): boolean {
+	return !!recommended[appId]?.hidden
+}
+
+/**
+ * @param app - The app to (de)select for installation
+ */
+function toggleSelect(app: RecommendedApp) {
+	// nothing can be selected while the apps are loading or installing
+	if (!showInstallButton.value) {
+		return
+	}
+	app.isSelected = !app.isSelected
 }
 </script>
 
-<style lang="scss" scoped>
-.body-login-container {
+<template>
+	<div class="guest-box" data-cy-setup-recommended-apps>
+		<h2>{{ t('core', 'Recommended apps') }}</h2>
+		<p v-if="loadingApps" class="loading" :class="[$style.status]">
+			{{ t('core', 'Loading apps …') }}
+		</p>
+		<p v-else-if="loadingAppsError" :class="$style.status">
+			{{ t('core', 'Could not fetch list of apps from the App Store.') }}
+		</p>
 
+		<template v-for="app in recommendedApps" :key="app.id">
+			<div v-if="!isHidden(app.id)" :class="$style.app">
+				<img :class="$style.app__icon" :src="customIcon(app.id)" alt="">
+				<div :class="$style.app__info">
+					<h3>{{ customName(app) }}</h3>
+					<p v-text="customDescription(app.id)" />
+					<p v-if="app.error">
+						<strong>{{ app.error }}</strong>
+					</p>
+					<p v-else-if="app.active">
+						<strong>{{ t('core', 'App already installed') }}</strong>
+					</p>
+					<p v-else-if="!app.isCompatible">
+						<strong>{{ t('core', 'Cannot install this app because it is not compatible') }}</strong>
+					</p>
+					<p v-else-if="!canInstall(app)">
+						<strong>{{ t('core', 'Cannot install this app') }}</strong>
+					</p>
+				</div>
+				<NcCheckboxRadioSwitch
+					:class="$style.app__switch"
+					:modelValue="app.isSelected || app.active"
+					:disabled="!app.isCompatible || app.active"
+					:loading="app.loading"
+					@update:modelValue="toggleSelect(app)" />
+			</div>
+		</template>
+
+		<div :class="$style.actions">
+			<NcButton
+				v-if="showInstallButton && !installingApps"
+				data-cy-setup-recommended-apps-skip
+				:href="defaultPageUrl"
+				variant="tertiary">
+				{{ t('core', 'Skip') }}
+			</NcButton>
+
+			<NcButton
+				v-if="showInstallButton"
+				data-cy-setup-recommended-apps-install
+				:disabled="installingApps || !isAnyAppSelected"
+				variant="primary"
+				@click="installApps">
+				{{ installingApps ? t('core', 'Installing apps …') : t('core', 'Install recommended apps') }}
+			</NcButton>
+		</div>
+	</div>
+</template>
+
+<style module lang="scss">
+.actions {
+	display: flex;
+	justify-content: end;
+	margin-top: 8px;
 }
 
-p.loading, p.loading-error {
+.status {
 	height: 100px;
-}
-
-.text-center {
 	text-align: center;
 }
 
@@ -192,29 +260,32 @@ p.loading, p.loading-error {
 	display: flex;
 	flex-direction: row;
 
-	img {
+	&__icon {
 		height: 50px;
 		width: 50px;
-		filter: invert(1);
-	}
-
-	img, .info {
 		padding: 12px;
+		filter: var(--background-invert-if-dark);
 	}
 
-	.info {
+	&__info {
+		padding: 12px;
+
 		h3, p {
-			text-align: left;
+			text-align: start;
 		}
 
 		h3 {
-			color: #fff;
 			margin-top: 0;
 		}
 
-		h3 > span.icon {
-			display: inline-block;
+		p:last-child {
+			margin-top: 10px;
 		}
+	}
+
+	&__switch {
+		margin-inline-start: auto;
+		padding: 0 2px;
 	}
 }
 </style>

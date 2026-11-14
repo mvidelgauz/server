@@ -3,30 +3,16 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2018, Michael Weimann <mail@michael-weimann.eu>
- *
- * @author Michael Weimann <mail@michael-weimann.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Test\Avatar;
 
 use OC\Avatar\GuestAvatar;
 use OCP\Files\SimpleFS\InMemoryFile;
-use PHPUnit\Framework\MockObject\MockObject;
+use OCP\IConfig;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Log\LoggerInterface;
 use Test\TestCase;
 
@@ -43,31 +29,52 @@ class GuestAvatarTest extends TestCase {
 
 	/**
 	 * Setups a guest avatar instance for tests.
-	 *
-	 * @before
-	 * @return void
 	 */
-	public function setupGuestAvatar() {
+	#[\PHPUnit\Framework\Attributes\Before()]
+	public function setupGuestAvatar(): void {
 		/* @var MockObject|LoggerInterface $logger */
-		$logger = $this->getMockBuilder(LoggerInterface::class)->getMock();
-		$this->guestAvatar = new GuestAvatar('einstein', $logger);
+		$logger = $this->createMock(LoggerInterface::class);
+		$config = $this->createMock(IConfig::class);
+		$this->guestAvatar = new GuestAvatar('einstein', $config, $logger);
+	}
+
+	public static function themeProvider(): array {
+		return [
+			'light theme' => ['darkTheme' => false, 'backgroundColor' => 0xe9f3f7],
+			'dark theme' => ['darkTheme' => true, 'backgroundColor' => 0x030e12],
+		];
 	}
 
 	/**
-	 * Asserts that testGet() returns the expected avatar.
+	 * Asserts that GuestAvatar::getFile() returns the expected avatar.
 	 *
-	 * For the test a static name "einstein" is used and
-	 * the generated image is compared with an expected one.
-	 *
-	 * @return void
+	 * For the test a static name "einstein" is used.
 	 */
-	public function testGet() {
-		$avatar = $this->guestAvatar->getFile(32);
+	#[DataProvider('themeProvider')]
+	public function testGet(bool $darkTheme, int $backgroundColor): void {
+		$size = 32;
+		$avatar = $this->guestAvatar->getFile($size, $darkTheme);
 		self::assertInstanceOf(InMemoryFile::class, $avatar);
-		$expectedFile = file_get_contents(
-			__DIR__ . '/../../data/guest_avatar_einstein_32.png'
-		);
-		self::assertEquals(trim($expectedFile), trim($avatar->getContent()));
+		$content = $avatar->getContent();
+		self::assertStringStartsWith("\x89PNG\r\n\x1a\n", $content, 'The avatar is not a PNG');
+
+		$image = imagecreatefromstring($content);
+		self::assertInstanceOf(\GdImage::class, $image);
+		self::assertSame($size, imagesx($image));
+		self::assertSame($size, imagesy($image));
+		self::assertSame($backgroundColor, imagecolorat($image, 0, 0), 'The background is not the guest color');
+
+		// The anti-aliased edges depend on the GD and FreeType versions, the strokes of the letter don't
+		$letterPixels = 0;
+		for ($y = 0; $y < $size; $y++) {
+			for ($x = 0; $x < $size; $x++) {
+				if (imagecolorat($image, $x, $y) === 0x248eb5) {
+					$letterPixels++;
+				}
+			}
+		}
+		// A Noto Sans "E" at 32 px has 27 fully covered pixels
+		self::assertSame(27, $letterPixels, 'The avatar does not show a Noto Sans "E" in the guest color');
 	}
 
 	/**
@@ -75,7 +82,7 @@ class GuestAvatarTest extends TestCase {
 	 *
 	 * @return void
 	 */
-	public function testIsCustomAvatar() {
+	public function testIsCustomAvatar(): void {
 		self::assertFalse($this->guestAvatar->isCustomAvatar());
 	}
 }

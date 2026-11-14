@@ -1,106 +1,74 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Bart Visscher <bartv@thisnet.nl>
- * @author Christopher Schäpers <kondou@ts.unde.re>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Roger Szabo <roger.szabo@web.de>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\User_LDAP;
 
-use OCA\User_LDAP\Mapping\GroupMapping;
-use OCA\User_LDAP\Mapping\UserMapping;
-use OCA\User_LDAP\User\Manager;
-use OCP\Share\IManager;
+use OCP\ICache;
+use OCP\ICacheFactory;
+use OCP\Server;
 
+/**
+ * @template T
+ */
 abstract class Proxy {
-	private static $accesses = [];
-	private $ldap = null;
-	/** @var bool */
-	private $isSingleBackend;
+	private ?bool $isSingleBackend = null;
+	private ?ICache $cache = null;
 
-	/** @var \OCP\ICache|null */
-	private $cache;
+	/** @var T[] */
+	protected array $backends = [];
+	/** @var ?T */
+	protected $refBackend = null;
 
-	/**
-	 * @param ILDAPWrapper $ldap
-	 */
-	public function __construct(ILDAPWrapper $ldap) {
-		$this->ldap = $ldap;
-		$memcache = \OC::$server->getMemCacheFactory();
+	protected bool $isSetUp = false;
+
+	public function __construct(
+		private Helper $helper,
+		private ILDAPWrapper $ldap,
+		private AccessFactory $accessFactory,
+	) {
+		$memcache = Server::get(ICacheFactory::class);
 		if ($memcache->isAvailable()) {
 			$this->cache = $memcache->createDistributed();
 		}
 	}
 
-	/**
-	 * @param string $configPrefix
-	 */
-	private function addAccess($configPrefix) {
-		static $ocConfig;
-		static $fs;
-		static $log;
-		static $avatarM;
-		static $userMap;
-		static $groupMap;
-		static $shareManager;
-		static $coreUserManager;
-		static $coreNotificationManager;
-		if ($fs === null) {
-			$ocConfig = \OC::$server->getConfig();
-			$fs = new FilesystemHelper();
-			$log = new LogWrapper();
-			$avatarM = \OC::$server->getAvatarManager();
-			$db = \OC::$server->getDatabaseConnection();
-			$userMap = new UserMapping($db);
-			$groupMap = new GroupMapping($db);
-			$coreUserManager = \OC::$server->getUserManager();
-			$coreNotificationManager = \OC::$server->getNotificationManager();
-			$shareManager = \OC::$server->get(IManager::class);
+	protected function setup(): void {
+		if ($this->isSetUp) {
+			return;
 		}
-		$userManager =
-			new Manager($ocConfig, $fs, $log, $avatarM, new \OCP\Image(),
-				$coreUserManager, $coreNotificationManager, $shareManager);
-		$connector = new Connection($this->ldap, $configPrefix);
-		$access = new Access($connector, $this->ldap, $userManager, new Helper($ocConfig, \OC::$server->getDatabaseConnection()), $ocConfig, $coreUserManager);
-		$access->setUserMapper($userMap);
-		$access->setGroupMapper($groupMap);
-		self::$accesses[$configPrefix] = $access;
+
+		$serverConfigPrefixes = $this->helper->getServerConfigurationPrefixes(true);
+		foreach ($serverConfigPrefixes as $configPrefix) {
+			$this->backends[$configPrefix] = $this->newInstance($configPrefix);
+
+			if (is_null($this->refBackend)) {
+				$this->refBackend = $this->backends[$configPrefix];
+			}
+		}
+
+		$this->isSetUp = true;
 	}
 
 	/**
-	 * @param string $configPrefix
-	 * @return mixed
+	 * @return T
 	 */
-	protected function getAccess($configPrefix) {
-		if (!isset(self::$accesses[$configPrefix])) {
-			$this->addAccess($configPrefix);
-		}
-		return self::$accesses[$configPrefix];
+	abstract protected function newInstance(string $configPrefix): object;
+
+	/**
+	 * @return T
+	 */
+	public function getBackend(string $configPrefix): object {
+		$this->setup();
+		return $this->backends[$configPrefix];
+	}
+
+	protected function getAccess(string $configPrefix): Access {
+		return $this->accessFactory->getAccessForPrefix($configPrefix);
 	}
 
 	/**
@@ -158,7 +126,7 @@ abstract class Proxy {
 	 * @param string $method string, the method of the user backend that shall be called
 	 * @param array $parameters an array of parameters to be passed
 	 * @param bool $passOnWhen
-	 * @return mixed, the result of the specified method
+	 * @return mixed the result of the specified method
 	 */
 	protected function handleRequest($id, $method, $parameters, $passOnWhen = false) {
 		if (!$this->isSingleBackend()) {

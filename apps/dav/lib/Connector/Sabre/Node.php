@@ -1,144 +1,154 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bart Visscher <bartv@thisnet.nl>
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Calviño Sánchez <danxuliu@gmail.com>
- * @author Jakob Sack <mail@jakobsack.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Klaas Freitag <freitag@owncloud.com>
- * @author Markus Goetz <markus@woboq.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Tobias Kaminsky <tobias@kaminsky.me>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Connector\Sabre;
 
-use OC\Files\Mount\MoveableMount;
+use OC\Files\Node\File;
+use OC\Files\Node\Folder;
 use OC\Files\View;
 use OCA\DAV\Connector\Sabre\Exception\InvalidPath;
+use OCP\Constants;
+use OCP\Files\DavUtil;
 use OCP\Files\FileInfo;
+use OCP\Files\InvalidPathException;
+use OCP\Files\IRootFolder;
+use OCP\Files\Mount\IMovableMount;
+use OCP\Files\NotFoundException;
+use OCP\Files\Storage\ISharedStorage;
 use OCP\Files\StorageNotAvailableException;
-use OCP\Share\IShare;
+use OCP\IUser;
+use OCP\Lock\ILockingProvider;
+use OCP\Lock\LockedException;
+use OCP\PreConditionNotMetException;
+use OCP\Server;
 use OCP\Share\Exceptions\ShareNotFound;
+use OCP\Share\IAttributes;
 use OCP\Share\IManager;
+use RuntimeException;
+use Sabre\DAV\Exception;
+use Sabre\DAV\Exception\Forbidden;
+use Sabre\DAV\INode;
 
-abstract class Node implements \Sabre\DAV\INode {
-
-	/**
-	 * @var \OC\Files\View
-	 */
-	protected $fileView;
-
+abstract class Node implements INode {
 	/**
 	 * The path to the current node
-	 *
-	 * @var string
 	 */
-	protected $path;
+	protected string $path;
 
-	/**
-	 * node properties cache
-	 *
-	 * @var array
-	 */
-	protected $property_cache = null;
+	protected FileInfo $info;
 
-	/**
-	 * @var \OCP\Files\FileInfo
-	 */
-	protected $info;
+	protected IManager $shareManager;
 
-	/**
-	 * @var IManager
-	 */
-	protected $shareManager;
+	protected \OCP\Files\Node $node;
 
 	/**
 	 * Sets up the node, expects a full path name
-	 *
-	 * @param \OC\Files\View $view
-	 * @param \OCP\Files\FileInfo $info
-	 * @param IManager $shareManager
+	 * @throws PreConditionNotMetException
 	 */
-	public function __construct(View $view, FileInfo $info, IManager $shareManager = null) {
-		$this->fileView = $view;
-		$this->path = $this->fileView->getRelativePath($info->getPath());
+	public function __construct(
+		protected View $fileView,
+		FileInfo $info,
+		?IManager $shareManager = null,
+	) {
+		$relativePath = $this->fileView->getRelativePath($info->getPath());
+		if ($relativePath === null) {
+			throw new RuntimeException('Failed to get relative path for ' . $info->getPath());
+		}
+
+		$this->path = $relativePath;
 		$this->info = $info;
-		if ($shareManager) {
-			$this->shareManager = $shareManager;
+		$this->shareManager = $shareManager instanceof IManager ? $shareManager : Server::get(IManager::class);
+
+		if ($info instanceof Folder || $info instanceof File) {
+			$this->node = $info;
 		} else {
-			$this->shareManager = \OC::$server->getShareManager();
+			// The Node API assumes that the view passed doesn't have a fake root
+			$rootView = Server::get(View::class);
+			$root = Server::get(IRootFolder::class);
+			if ($info->getType() === FileInfo::TYPE_FOLDER) {
+				$this->node = new Folder($root, $rootView, $this->fileView->getAbsolutePath($this->path), $info);
+			} else {
+				$this->node = new File($root, $rootView, $this->fileView->getAbsolutePath($this->path), $info);
+			}
 		}
 	}
 
-	protected function refreshInfo() {
-		$this->info = $this->fileView->getFileInfo($this->path);
+	/**
+	 * @throws Exception
+	 * @throws PreConditionNotMetException
+	 */
+	protected function refreshInfo(): void {
+		$info = $this->fileView->getFileInfo($this->path);
+		if ($info === false) {
+			throw new Exception('Failed to get fileinfo for ' . $this->path);
+		}
+
+		$this->info = $info;
+		$root = Server::get(IRootFolder::class);
+		$rootView = Server::get(View::class);
+		if ($this->info->getType() === FileInfo::TYPE_FOLDER) {
+			$this->node = new Folder($root, $rootView, $this->path, $this->info);
+		} else {
+			$this->node = new File($root, $rootView, $this->path, $this->info);
+		}
 	}
 
 	/**
 	 *  Returns the name of the node
-	 *
-	 * @return string
 	 */
-	public function getName() {
+	#[\Override]
+	public function getName(): string {
 		return $this->info->getName();
 	}
 
 	/**
 	 * Returns the full path
-	 *
-	 * @return string
 	 */
-	public function getPath() {
+	public function getPath(): string {
 		return $this->path;
+	}
+
+	/**
+	 * Check if this node can be renamed
+	 */
+	public function canRename(): bool {
+		return DavUtil::canRename($this->node, $this->node->getParent());
 	}
 
 	/**
 	 * Renames the node
 	 *
 	 * @param string $name The new name
-	 * @throws \Sabre\DAV\Exception\BadRequest
-	 * @throws \Sabre\DAV\Exception\Forbidden
+	 * @throws Exception
+	 * @throws Forbidden
+	 * @throws InvalidPath
+	 * @throws PreConditionNotMetException
+	 * @throws LockedException
 	 */
-	public function setName($name) {
-
-		// rename is only allowed if the update privilege is granted
-		if (!($this->info->isUpdateable() || ($this->info->getMountPoint() instanceof MoveableMount && $this->info->getInternalPath() === ''))) {
-			throw new \Sabre\DAV\Exception\Forbidden();
+	#[\Override]
+	public function setName($name): void {
+		if (!$this->canRename()) {
+			throw new Forbidden('');
 		}
 
+		/** @var string $parentPath */
 		[$parentPath,] = \Sabre\Uri\split($this->path);
+		/** @var string $newName */
 		[, $newName] = \Sabre\Uri\split($name);
-
-		// verify path of the target
-		$this->verifyPath();
-
 		$newPath = $parentPath . '/' . $newName;
 
-		if (!$this->fileView->rename($this->path, $newPath)) {
-			throw new \Sabre\DAV\Exception('Failed to rename '. $this->path . ' to ' . $newPath);
+		// verify path of the target
+		$this->verifyPath($newPath);
+
+		if ($this->fileView->rename($this->path, $newPath) === false) {
+			throw new Exception('Failed to rename ' . $this->path . ' to ' . $newPath);
 		}
 
 		$this->path = $newPath;
@@ -146,21 +156,14 @@ abstract class Node implements \Sabre\DAV\INode {
 		$this->refreshInfo();
 	}
 
-	public function setPropertyCache($property_cache) {
-		$this->property_cache = $property_cache;
-	}
-
 	/**
 	 * Returns the last modification time, as a unix timestamp
 	 *
 	 * @return int timestamp as integer
 	 */
-	public function getLastModified() {
-		$timestamp = $this->info->getMtime();
-		if (!empty($timestamp)) {
-			return (int)$timestamp;
-		}
-		return $timestamp;
+	#[\Override]
+	public function getLastModified(): int {
+		return $this->info->getMtime();
 	}
 
 	/**
@@ -168,7 +171,7 @@ abstract class Node implements \Sabre\DAV\INode {
 	 *  in the second parameter or to now if the second param is empty.
 	 *  Even if the modification time is set to a custom value the access time is set to now.
 	 */
-	public function touch($mtime) {
+	public function touch(string $mtime): void {
 		$mtime = $this->sanitizeMtime($mtime);
 		$this->fileView->touch($this->path, $mtime);
 		$this->refreshInfo();
@@ -182,95 +185,76 @@ abstract class Node implements \Sabre\DAV\INode {
 	 * arbitrary string, but MUST be surrounded by double-quotes.
 	 *
 	 * Return null if the ETag can not effectively be determined
-	 *
-	 * @return string
 	 */
-	public function getETag() {
+	public function getETag(): string {
 		return '"' . $this->info->getEtag() . '"';
 	}
 
 	/**
 	 * Sets the ETag
 	 *
-	 * @param string $etag
-	 *
 	 * @return int file id of updated file or -1 on failure
 	 */
-	public function setETag($etag) {
+	public function setETag(string $etag): int {
 		return $this->fileView->putFileInfo($this->path, ['etag' => $etag]);
 	}
 
-	public function setCreationTime(int $time) {
+	public function setCreationTime(int $time): int {
 		return $this->fileView->putFileInfo($this->path, ['creation_time' => $time]);
-	}
-
-	public function setUploadTime(int $time) {
-		return $this->fileView->putFileInfo($this->path, ['upload_time' => $time]);
 	}
 
 	/**
 	 * Returns the size of the node, in bytes
 	 *
-	 * @return integer
+	 * @psalm-suppress UnusedPsalmSuppress psalm:strict actually thinks there is no mismatch, idk lol
+	 * @psalm-suppress ImplementedReturnTypeMismatch \Sabre\DAV\IFile::getSize signature does not support 32bit
 	 */
-	public function getSize() {
+	public function getSize(): int|float {
 		return $this->info->getSize();
 	}
 
 	/**
 	 * Returns the cache's file id
-	 *
-	 * @return int
 	 */
-	public function getId() {
+	public function getId(): ?int {
 		return $this->info->getId();
 	}
 
-	/**
-	 * @return string|null
-	 */
-	public function getFileId() {
-		if ($this->info->getId()) {
-			$instanceId = \OC_Util::getInstanceId();
-			$id = sprintf('%08d', $this->info->getId());
-			return $id . $instanceId;
+	public function getFileId(): ?string {
+		$id = $this->info->getId();
+		if ($id !== null) {
+			return DavUtil::getDavFileId($id);
 		}
 
 		return null;
 	}
 
-	/**
-	 * @return integer
-	 */
-	public function getInternalFileId() {
+	public function getInternalFileId(): ?int {
 		return $this->info->getId();
 	}
 
-	/**
-	 * @param string $user
-	 * @return int
-	 */
-	public function getSharePermissions($user) {
+	public function getInternalPath(): string {
+		return $this->info->getInternalPath();
+	}
 
+	public function getSharePermissions(?string $user): int {
 		// check of we access a federated share
 		if ($user !== null) {
 			try {
-				$share = $this->shareManager->getShareByToken($user);
-				return $share->getPermissions();
-			} catch (ShareNotFound $e) {
+				return $this->shareManager->getShareByToken($user)->getPermissions();
+			} catch (ShareNotFound) {
 				// ignore
 			}
 		}
 
 		try {
 			$storage = $this->info->getStorage();
-		} catch (StorageNotAvailableException $e) {
+		} catch (StorageNotAvailableException) {
 			$storage = null;
 		}
 
-		if ($storage && $storage->instanceOfStorage('\OCA\Files_Sharing\SharedStorage')) {
-			/** @var \OCA\Files_Sharing\SharedStorage $storage */
-			$permissions = (int)$storage->getShare()->getPermissions();
+		if ($storage && $storage->instanceOfStorage(ISharedStorage::class)) {
+			$permissions = $storage->getShare()->getPermissions();
 		} else {
 			$permissions = $this->info->getPermissions();
 		}
@@ -280,138 +264,134 @@ abstract class Node implements \Sabre\DAV\INode {
 		 * Eventually we need to do this properly
 		 */
 		$mountpoint = $this->info->getMountPoint();
-		if (!($mountpoint instanceof MoveableMount)) {
+		if (!($mountpoint instanceof IMovableMount)) {
+			/**
+			 * @psalm-suppress UnnecessaryVarAnnotation Rector doesn't trust the return type annotation
+			 * @var string $mountpointpath
+			 */
 			$mountpointpath = $mountpoint->getMountPoint();
-			if (substr($mountpointpath, -1) === '/') {
+			if (str_ends_with($mountpointpath, '/')) {
 				$mountpointpath = substr($mountpointpath, 0, -1);
 			}
 
 			if (!$mountpoint->getOption('readonly', false) && $mountpointpath === $this->info->getPath()) {
-				$permissions |= \OCP\Constants::PERMISSION_DELETE | \OCP\Constants::PERMISSION_UPDATE;
+				$permissions |= Constants::PERMISSION_DELETE | Constants::PERMISSION_UPDATE;
 			}
 		}
 
 		/*
 		 * Files can't have create or delete permissions
 		 */
-		if ($this->info->getType() === \OCP\Files\FileInfo::TYPE_FILE) {
-			$permissions &= ~(\OCP\Constants::PERMISSION_CREATE | \OCP\Constants::PERMISSION_DELETE);
+		if ($this->info->getType() === FileInfo::TYPE_FILE) {
+			$permissions &= ~(Constants::PERMISSION_CREATE | Constants::PERMISSION_DELETE);
 		}
 
 		return $permissions;
 	}
 
-	/**
-	 * @param string $user
-	 * @return string
-	 */
-	public function getNoteFromShare($user) {
-		if ($user === null) {
-			return '';
+	public function getShareAttributes(): array {
+		try {
+			$storage = $this->node->getStorage();
+		} catch (NotFoundException) {
+			return [];
 		}
 
-		$types = [
-			IShare::TYPE_USER,
-			IShare::TYPE_GROUP,
-			IShare::TYPE_CIRCLE,
-			IShare::TYPE_ROOM
-		];
-
-		foreach ($types as $shareType) {
-			$shares = $this->shareManager->getSharedWith($user, $shareType, $this, -1);
-			foreach ($shares as $share) {
-				$note = $share->getNote();
-				if ($share->getShareOwner() !== $user && !empty($note)) {
-					return $note;
-				}
+		$attributes = [];
+		if ($storage->instanceOfStorage(ISharedStorage::class)) {
+			$attributes = $storage->getShare()->getAttributes();
+			if (!$attributes instanceof IAttributes) {
+				return [];
 			}
+
+			return $attributes->toArray();
 		}
 
-		return '';
+		return $attributes;
+	}
+
+	public function getNoteFromShare(?string $user): ?string {
+		try {
+			$storage = $this->node->getStorage();
+		} catch (NotFoundException) {
+			return null;
+		}
+
+		if ($storage->instanceOfStorage(ISharedStorage::class)) {
+			$share = $storage->getShare();
+			if ($user === $share->getShareOwner()) {
+				// Note is only for recipient not the owner
+				return null;
+			}
+
+			return $share->getNote();
+		}
+
+		return null;
+	}
+
+	public function getDavPermissions(): string {
+		return DavUtil::getDavPermissions($this->info, $this->node->getParent());
 	}
 
 	/**
-	 * @return string
+	 * Returns the DAV Permissions with share and mount infromation stripped.
 	 */
-	public function getDavPermissions() {
-		$p = '';
-		if ($this->info->isShared()) {
-			$p .= 'S';
-		}
-		if ($this->info->isShareable()) {
-			$p .= 'R';
-		}
-		if ($this->info->isMounted()) {
-			$p .= 'M';
-		}
-		if ($this->info->isReadable()) {
-			$p .= 'G';
-		}
-		if ($this->info->isDeletable()) {
-			$p .= 'D';
-		}
-		if ($this->info->isUpdateable()) {
-			$p .= 'NV'; // Renameable, Moveable
-		}
-		if ($this->info->getType() === \OCP\Files\FileInfo::TYPE_FILE) {
-			if ($this->info->isUpdateable()) {
-				$p .= 'W';
-			}
-		} else {
-			if ($this->info->isCreatable()) {
-				$p .= 'CK';
-			}
-		}
-		return $p;
+	public function getPublicDavPermissions(): string {
+		return str_replace(['S', 'M'], '', $this->getDavPermissions());
 	}
 
-	public function getOwner() {
+	public function getOwner(): ?IUser {
 		return $this->info->getOwner();
 	}
 
-	protected function verifyPath() {
+	/**
+	 * @throws InvalidPath
+	 */
+	protected function verifyPath(?string $path = null): void {
 		try {
-			$fileName = basename($this->info->getPath());
-			$this->fileView->verifyPath($this->path, $fileName);
-		} catch (\OCP\Files\InvalidPathException $ex) {
-			throw new InvalidPath($ex->getMessage());
+			$path ??= $this->info->getPath();
+			$this->fileView->verifyPath(
+				dirname($path),
+				basename($path),
+			);
+		} catch (InvalidPathException $invalidPathException) {
+			throw new InvalidPath($invalidPathException->getMessage(), false, $invalidPathException);
 		}
 	}
 
 	/**
-	 * @param int $type \OCP\Lock\ILockingProvider::LOCK_SHARED or \OCP\Lock\ILockingProvider::LOCK_EXCLUSIVE
+	 * @param ILockingProvider::LOCK_* $type
+	 * @throws LockedException
 	 */
-	public function acquireLock($type) {
+	public function acquireLock($type): void {
 		$this->fileView->lockFile($this->path, $type);
 	}
 
 	/**
-	 * @param int $type \OCP\Lock\ILockingProvider::LOCK_SHARED or \OCP\Lock\ILockingProvider::LOCK_EXCLUSIVE
+	 * @param ILockingProvider::LOCK_* $type
+	 * @throws LockedException
 	 */
-	public function releaseLock($type) {
+	public function releaseLock($type): void {
 		$this->fileView->unlockFile($this->path, $type);
 	}
 
 	/**
-	 * @param int $type \OCP\Lock\ILockingProvider::LOCK_SHARED or \OCP\Lock\ILockingProvider::LOCK_EXCLUSIVE
+	 * @param ILockingProvider::LOCK_* $type
+	 * @throws LockedException
 	 */
-	public function changeLock($type) {
+	public function changeLock($type): void {
 		$this->fileView->changeLock($this->path, $type);
 	}
 
-	public function getFileInfo() {
+	public function getFileInfo(): FileInfo {
 		return $this->info;
 	}
 
-	protected function sanitizeMtime($mtimeFromRequest) {
-		// In PHP 5.X "is_numeric" returns true for strings in hexadecimal
-		// notation. This is no longer the case in PHP 7.X, so this check
-		// ensures that strings with hexadecimal notations fail too in PHP 5.X.
-		$isHexadecimal = is_string($mtimeFromRequest) && preg_match('/^\s*0[xX]/', $mtimeFromRequest);
-		if ($isHexadecimal || !is_numeric($mtimeFromRequest)) {
-			throw new \InvalidArgumentException('X-OC-MTime header must be an integer (unix timestamp).');
-		}
+	public function getNode(): \OCP\Files\Node {
+		return $this->node;
+	}
 
-		return (int)$mtimeFromRequest;
+	protected function sanitizeMtime(string $mtimeFromRequest): int {
+		return MtimeSanitizer::sanitizeMtime($mtimeFromRequest);
 	}
 }

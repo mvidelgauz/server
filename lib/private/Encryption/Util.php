@@ -1,30 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Jan-Christoph Borchardt <hey@jancborchardt.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Encryption;
 
 use OC\Encryption\Exceptions\EncryptionHeaderKeyExistsException;
@@ -32,11 +13,13 @@ use OC\Encryption\Exceptions\EncryptionHeaderToLargeException;
 use OC\Encryption\Exceptions\ModuleDoesNotExistsException;
 use OC\Files\Filesystem;
 use OC\Files\View;
-use OCA\Files_External\Lib\StorageConfig;
-use OCA\Files_External\Service\GlobalStoragesService;
+use OCA\Encryption\Crypto\Encryption;
 use OCP\Encryption\IEncryptionModule;
+use OCP\Files\Mount\ISystemMountPoint;
 use OCP\IConfig;
+use OCP\IGroupManager;
 use OCP\IUser;
+use OCP\IUserManager;
 
 class Util {
 	public const HEADER_START = 'HBEGIN';
@@ -46,60 +29,32 @@ class Util {
 	public const HEADER_ENCRYPTION_MODULE_KEY = 'oc_encryption_module';
 
 	/**
-	 * block size will always be 8192 for a PHP stream
+	 * Block size will always be 8192 for a PHP stream
 	 * @see https://bugs.php.net/bug.php?id=21641
-	 * @var integer
 	 */
-	protected $headerSize = 8192;
+	protected int $headerSize = 8192;
 
 	/**
-	 * block size will always be 8192 for a PHP stream
+	 * Block size will always be 8192 for a PHP stream
 	 * @see https://bugs.php.net/bug.php?id=21641
-	 * @var integer
 	 */
-	protected $blockSize = 8192;
+	protected int $blockSize = 8192;
 
-	/** @var View */
-	protected $rootView;
+	protected array $ocHeaderKeys;
+	protected array $excludedPaths = [];
 
-	/** @var array */
-	protected $ocHeaderKeys;
-
-	/** @var \OC\User\Manager */
-	protected $userManager;
-
-	/** @var IConfig */
-	protected $config;
-
-	/** @var array paths excluded from encryption */
-	protected $excludedPaths;
-
-	/** @var \OC\Group\Manager $manager */
-	protected $groupManager;
-
-	/**
-	 *
-	 * @param View $rootView
-	 * @param \OC\User\Manager $userManager
-	 * @param \OC\Group\Manager $groupManager
-	 * @param IConfig $config
-	 */
 	public function __construct(
-		View $rootView,
-		\OC\User\Manager $userManager,
-		\OC\Group\Manager $groupManager,
-		IConfig $config) {
+		protected View $rootView,
+		protected IUserManager $userManager,
+		protected IGroupManager $groupManager,
+		protected IConfig $config,
+	) {
 		$this->ocHeaderKeys = [
 			self::HEADER_ENCRYPTION_MODULE_KEY
 		];
 
-		$this->rootView = $rootView;
-		$this->userManager = $userManager;
-		$this->groupManager = $groupManager;
-		$this->config = $config;
-
 		$this->excludedPaths[] = 'files_encryption';
-		$this->excludedPaths[] = 'appdata_' . $config->getSystemValue('instanceid', null);
+		$this->excludedPaths[] = 'appdata_' . $this->config->getSystemValueString('instanceid');
 		$this->excludedPaths[] = 'files_external';
 	}
 
@@ -110,7 +65,7 @@ class Util {
 	 * @return string
 	 * @throws ModuleDoesNotExistsException
 	 */
-	public function getEncryptionModuleId(array $header = null) {
+	public function getEncryptionModuleId(?array $header = null) {
 		$id = '';
 		$encryptionModuleKey = self::HEADER_ENCRYPTION_MODULE_KEY;
 
@@ -120,7 +75,7 @@ class Util {
 			if (class_exists('\OCA\Encryption\Crypto\Encryption')) {
 				// fall back to default encryption if the user migrated from
 				// ownCloud <= 8.0 with the old encryption
-				$id = \OCA\Encryption\Crypto\Encryption::ID;
+				$id = Encryption::ID;
 			} else {
 				throw new ModuleDoesNotExistsException('Default encryption module missing');
 			}
@@ -141,6 +96,8 @@ class Util {
 	public function createHeader(array $headerData, IEncryptionModule $encryptionModule) {
 		$header = self::HEADER_START . ':' . self::HEADER_ENCRYPTION_MODULE_KEY . ':' . $encryptionModule->getId() . ':';
 		foreach ($headerData as $key => $value) {
+			// $headerData comes from the pluggable IEncryptionModule::begin() contract with untyped array keys
+			/** @psalm-suppress UnrecognizedExpression */
 			if (in_array($key, $this->ocHeaderKeys)) {
 				throw new EncryptionHeaderKeyExistsException($key);
 			}
@@ -220,7 +177,7 @@ class Util {
 	 * get the owner and the path for the file relative to the owners files folder
 	 *
 	 * @param string $path
-	 * @return array
+	 * @return array{0: string, 1: string}
 	 * @throws \BadMethodCallException
 	 */
 	public function getUidAndFilename($path) {
@@ -275,7 +232,7 @@ class Util {
 		} else {
 			$result = array_merge($result, $users);
 
-			$groupManager = \OC::$server->getGroupManager();
+			$groupManager = $this->groupManager;
 			foreach ($groups as $group) {
 				$groupObject = $groupManager->get($group);
 				if ($groupObject) {
@@ -298,45 +255,9 @@ class Util {
 	 * @param string $uid
 	 * @return boolean
 	 */
-	public function isSystemWideMountPoint($path, $uid) {
-		if (\OCP\App::isEnabled("files_external")) {
-			/** @var GlobalStoragesService $storageService */
-			$storageService = \OC::$server->get(GlobalStoragesService::class);
-			$storages = $storageService->getAllStorages();
-			foreach ($storages as $storage) {
-				if (strpos($path, '/files/' . $storage->getMountPoint()) === 0) {
-					if ($this->isMountPointApplicableToUser($storage, $uid)) {
-						return true;
-					}
-				}
-			}
-		}
-		return false;
-	}
-
-	/**
-	 * check if mount point is applicable to user
-	 *
-	 * @param StorageConfig $mount
-	 * @param string $uid
-	 * @return boolean
-	 */
-	private function isMountPointApplicableToUser(StorageConfig $mount, string $uid) {
-		if ($mount->getApplicableUsers() === [] && $mount->getApplicableGroups() === []) {
-			// applicable for everyone
-			return true;
-		}
-		// check if mount point is applicable for the user
-		if (array_search($uid, $mount->getApplicableUsers()) !== false) {
-			return true;
-		}
-		// check if mount point is applicable for group where the user is a member
-		foreach ($mount->getApplicableGroups() as $gid) {
-			if ($this->groupManager->isInGroup($uid, $gid)) {
-				return true;
-			}
-		}
-		return false;
+	public function isSystemWideMountPoint(string $path, string $uid) {
+		$mount = Filesystem::getMountManager()->find('/' . $uid . $path);
+		return $mount instanceof ISystemMountPoint;
 	}
 
 	/**
@@ -349,27 +270,22 @@ class Util {
 		$normalizedPath = Filesystem::normalizePath($path);
 		$root = explode('/', $normalizedPath, 4);
 		if (count($root) > 1) {
-
 			// detect alternative key storage root
 			$rootDir = $this->getKeyStorageRoot();
-			if ($rootDir !== '' &&
-				0 === strpos(
-					Filesystem::normalizePath($path),
-					Filesystem::normalizePath($rootDir)
-				)
+			if ($rootDir !== ''
+				&& str_starts_with(Filesystem::normalizePath($path), Filesystem::normalizePath($rootDir))
 			) {
 				return true;
 			}
 
-
 			//detect system wide folders
-			if (in_array($root[1], $this->excludedPaths)) {
+			if (in_array($root[1], $this->excludedPaths, true)) {
 				return true;
 			}
 
 			// detect user specific folders
 			if ($this->userManager->userExists($root[1])
-				&& in_array($root[2], $this->excludedPaths)) {
+				&& in_array($root[2] ?? '', $this->excludedPaths, true)) {
 				return true;
 			}
 		}
@@ -377,32 +293,78 @@ class Util {
 	}
 
 	/**
-	 * check if recovery key is enabled for user
-	 *
-	 * @param string $uid
-	 * @return boolean
+	 * Check if recovery key is enabled for user
 	 */
-	public function recoveryEnabled($uid) {
+	public function recoveryEnabled(string $uid): bool {
 		$enabled = $this->config->getUserValue($uid, 'encryption', 'recovery_enabled', '0');
 
 		return $enabled === '1';
 	}
 
 	/**
-	 * set new key storage root
+	 * Set new key storage root
 	 *
 	 * @param string $root new key store root relative to the data folder
 	 */
-	public function setKeyStorageRoot($root) {
+	public function setKeyStorageRoot(string $root): void {
 		$this->config->setAppValue('core', 'encryption_key_storage_root', $root);
 	}
 
 	/**
-	 * get key storage root
+	 * Get key storage root
 	 *
 	 * @return string key storage root
 	 */
-	public function getKeyStorageRoot() {
+	public function getKeyStorageRoot(): string {
 		return $this->config->getAppValue('core', 'encryption_key_storage_root', '');
+	}
+
+	/**
+	 * parse raw header to array
+	 *
+	 * @param string $rawHeader
+	 * @return array
+	 */
+	public function parseRawHeader(string $rawHeader) {
+		$result = [];
+		if (str_starts_with($rawHeader, Util::HEADER_START)) {
+			$header = $rawHeader;
+			$endAt = strpos($header, Util::HEADER_END);
+			if ($endAt !== false) {
+				$header = substr($header, 0, $endAt + strlen(Util::HEADER_END));
+
+				// +1 to not start with an ':' which would result in empty element at the beginning
+				$exploded = explode(':', substr($header, strlen(Util::HEADER_START) + 1));
+
+				$element = array_shift($exploded);
+				while ($element !== Util::HEADER_END && $element !== null) {
+					$result[$element] = array_shift($exploded);
+					$element = array_shift($exploded);
+				}
+			}
+		}
+
+		return $result;
+	}
+
+	/**
+	 * get path to key folder for a given file
+	 *
+	 * @param string $encryptionModuleId
+	 * @param string $path path to the file, relative to data/
+	 * @return string
+	 */
+	public function getFileKeyDir(string $encryptionModuleId, string $path): string {
+		[$owner, $filename] = $this->getUidAndFilename($path);
+		$root = $this->getKeyStorageRoot();
+
+		// in case of system-wide mount points the keys are stored directly in the data directory
+		if ($this->isSystemWideMountPoint($filename, $owner)) {
+			$keyPath = $root . '/' . '/files_encryption/keys' . $filename . '/';
+		} else {
+			$keyPath = $root . '/' . $owner . '/files_encryption/keys' . $filename . '/';
+		}
+
+		return Filesystem::normalizePath($keyPath . $encryptionModuleId . '/', false);
 	}
 }

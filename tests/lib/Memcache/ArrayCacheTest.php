@@ -1,17 +1,22 @@
 <?php
 
+declare(strict_types=1);
+
 /**
- * Copyright (c) 2015 Joas Schilling <nickvergessen@owncloud.com>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Memcache;
 
+use OC\Memcache\ArrayCache;
+
+#[\PHPUnit\Framework\Attributes\Group('Memcache')]
 class ArrayCacheTest extends Cache {
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
-		$this->instance = new \OC\Memcache\ArrayCache('');
+		$this->instance = new ArrayCache('');
 	}
 }

@@ -1,33 +1,14 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bernhard Posselt <dev@bernhard-posselt.com>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Donquixote <marjunebatac@gmail.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Thomas Tanghus <thomas@tanghus.net>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCP\AppFramework;
 
+use Closure;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\Http\Response;
@@ -38,7 +19,6 @@ use OCP\IRequest;
  * @since 6.0.0
  */
 abstract class Controller {
-
 	/**
 	 * app name
 	 * @var string
@@ -54,7 +34,7 @@ abstract class Controller {
 	protected $request;
 
 	/**
-	 * @var array
+	 * @var array<string, Closure>
 	 * @since 7.0.0
 	 */
 	private $responders;
@@ -66,7 +46,7 @@ abstract class Controller {
 	 * @since 6.0.0 - parameter $appName was added in 7.0.0 - parameter $app was removed in 7.0.0
 	 */
 	public function __construct($appName,
-								IRequest $request) {
+		IRequest $request) {
 		$this->appName = $appName;
 		$this->request = $request;
 
@@ -92,6 +72,9 @@ abstract class Controller {
 					if ($data->getLastModified() !== null) {
 						$response->setLastModified($data->getLastModified());
 					}
+					if ($data->isThrottled()) {
+						$response->throttle($data->getThrottleMetadata());
+					}
 
 					return $response;
 				}
@@ -100,7 +83,6 @@ abstract class Controller {
 		];
 	}
 
-
 	/**
 	 * Parses an HTTP accept header and returns the supported responder type
 	 * @param string $acceptHeader
@@ -108,6 +90,7 @@ abstract class Controller {
 	 * @return string the responder type
 	 * @since 7.0.0
 	 * @since 9.1.0 Added default parameter
+	 * @deprecated 33.0.0 Use {@see \OCP\IRequest::getFormat} instead
 	 */
 	public function getResponderByHTTPHeader($acceptHeader, $default = 'json') {
 		$headers = explode(',', $acceptHeader);
@@ -127,22 +110,20 @@ abstract class Controller {
 		return $default;
 	}
 
-
 	/**
 	 * Registers a formatter for a type
 	 * @param string $format
-	 * @param \Closure $responder
+	 * @param Closure $responder
 	 * @since 7.0.0
 	 */
-	protected function registerResponder($format, \Closure $responder) {
+	protected function registerResponder($format, Closure $responder) {
 		$this->responders[$format] = $responder;
 	}
-
 
 	/**
 	 * Serializes and formats a response
 	 * @param mixed $response the value that was returned from a controller and
-	 * is not a Response instance
+	 *                        is not a Response instance
 	 * @param string $format the format for which a formatter has been registered
 	 * @throws \DomainException if format does not match a registered formatter
 	 * @return Response
@@ -154,7 +135,14 @@ abstract class Controller {
 
 			return $responder($response);
 		}
-		throw new \DomainException('No responder registered for format '.
-			$format . '!');
+		throw new \DomainException('No responder registered for format '
+			. $format . '!');
+	}
+
+	/**
+	 * @since 33.0.0
+	 */
+	public function isResponderRegistered(string $responder): bool {
+		return isset($this->responders[$responder]);
 	}
 }

@@ -3,79 +3,63 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020, Georg Ehrke
- *
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\UserStatus\Tests\Listener;
 
+use OCA\DAV\CalDAV\Status\StatusService as CalendarStatusService;
 use OCA\UserStatus\Db\UserStatus;
 use OCA\UserStatus\Db\UserStatusMapper;
-use OCA\UserStatus\Listener\UserDeletedListener;
 use OCA\UserStatus\Listener\UserLiveStatusListener;
+use OCA\UserStatus\Service\StatusService;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
-use OCP\EventDispatcher\GenericEvent;
 use OCP\IUser;
 use OCP\User\Events\UserLiveStatusEvent;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 use Test\TestCase;
 
 class UserLiveStatusListenerTest extends TestCase {
+	private UserStatusMapper&MockObject $mapper;
+	private StatusService&MockObject $statusService;
+	private ITimeFactory&MockObject $timeFactory;
+	private CalendarStatusService&MockObject $calendarStatusService;
 
-	/** @var UserStatusMapper|\PHPUnit\Framework\MockObject\MockObject */
-	private $mapper;
-
-	/** @var ITimeFactory|\PHPUnit\Framework\MockObject\MockObject */
-	private $timeFactory;
-
-	/** @var UserDeletedListener */
-	private $listener;
+	private LoggerInterface&MockObject $logger;
+	private UserLiveStatusListener $listener;
 
 	protected function setUp(): void {
 		parent::setUp();
 
 		$this->mapper = $this->createMock(UserStatusMapper::class);
+		$this->statusService = $this->createMock(StatusService::class);
 		$this->timeFactory = $this->createMock(ITimeFactory::class);
-		$this->listener = new UserLiveStatusListener($this->mapper, $this->timeFactory);
+		$this->calendarStatusService = $this->createMock(CalendarStatusService::class);
+		$this->logger = $this->createMock(LoggerInterface::class);
+
+		$this->listener = new UserLiveStatusListener(
+			$this->mapper,
+			$this->statusService,
+			$this->timeFactory,
+			$this->calendarStatusService,
+			$this->logger,
+		);
 	}
 
-	/**
-	 * @param string $userId
-	 * @param string $previousStatus
-	 * @param int $previousTimestamp
-	 * @param bool $previousIsUserDefined
-	 * @param string $eventStatus
-	 * @param int $eventTimestamp
-	 * @param bool $expectExisting
-	 * @param bool $expectUpdate
-	 *
-	 * @dataProvider handleEventWithCorrectEventDataProvider
-	 */
-	public function testHandleWithCorrectEvent(string $userId,
-											   string $previousStatus,
-											   int $previousTimestamp,
-											   bool $previousIsUserDefined,
-											   string $eventStatus,
-											   int $eventTimestamp,
-											   bool $expectExisting,
-											   bool $expectUpdate): void {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'handleEventWithCorrectEventDataProvider')]
+	public function testHandleWithCorrectEvent(
+		string $userId,
+		string $previousStatus,
+		int $previousTimestamp,
+		bool $previousIsUserDefined,
+		string $eventStatus,
+		int $eventTimestamp,
+		bool $expectExisting,
+		bool $expectUpdate,
+	): void {
 		$userStatus = new UserStatus();
 
 		if ($expectExisting) {
@@ -85,12 +69,12 @@ class UserLiveStatusListenerTest extends TestCase {
 			$userStatus->setStatusTimestamp($previousTimestamp);
 			$userStatus->setIsUserDefined($previousIsUserDefined);
 
-			$this->mapper->expects($this->once())
+			$this->statusService->expects($this->once())
 				->method('findByUserId')
 				->with($userId)
 				->willReturn($userStatus);
 		} else {
-			$this->mapper->expects($this->once())
+			$this->statusService->expects($this->once())
 				->method('findByUserId')
 				->with($userId)
 				->willThrowException(new DoesNotExistException(''));
@@ -142,7 +126,7 @@ class UserLiveStatusListenerTest extends TestCase {
 		}
 	}
 
-	public function handleEventWithCorrectEventDataProvider(): array {
+	public static function handleEventWithCorrectEventDataProvider(): array {
 		return [
 			['john.doe', 'offline', 0, false, 'online', 5000, true, true],
 			['john.doe', 'offline', 0, false, 'online', 5000, false, true],
@@ -152,14 +136,9 @@ class UserLiveStatusListenerTest extends TestCase {
 			['john.doe', 'online', 5000, false, 'away', 5000, true, false],
 			['john.doe', 'away', 5000, true, 'online', 5000, true, false],
 			['john.doe', 'online', 5000, true, 'away', 5000, true, false],
+			// a status older than REFRESH_STATUS_THRESHOLD is refreshed, a younger one is not
+			['john.doe', 'online', 4500, false, 'online', 5000, true, true],
+			['john.doe', 'online', 4700, false, 'online', 5000, true, false],
 		];
-	}
-
-	public function testHandleWithWrongEvent(): void {
-		$this->mapper->expects($this->never())
-			->method('insertOrUpdate');
-
-		$event = new GenericEvent();
-		$this->listener->handle($event);
 	}
 }

@@ -1,25 +1,10 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2018 Robin Appelman <robin@icewind.nl>
- *
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Trashbin\Trash;
 
 use OC\Files\Filesystem;
@@ -27,63 +12,77 @@ use OC\Files\View;
 use OCA\Files_Trashbin\Helper;
 use OCA\Files_Trashbin\Storage;
 use OCA\Files_Trashbin\Trashbin;
+use OCP\Federation\ICloudIdManager;
 use OCP\Files\FileInfo;
+use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
+use OCP\Files\Node;
 use OCP\Files\NotFoundException;
 use OCP\Files\Storage\IStorage;
 use OCP\IUser;
+use OCP\IUserManager;
 
 class LegacyTrashBackend implements ITrashBackend {
-	/** @var array */
-	private $deletedFiles = [];
+	/** @var array<string, string> */
+	private array $deletedFiles = [];
 
-	/** @var IRootFolder */
-	private $rootFolder;
-
-	public function __construct(IRootFolder $rootFolder) {
-		$this->rootFolder = $rootFolder;
+	public function __construct(
+		private readonly IRootFolder $rootFolder,
+		private readonly IUserManager $userManager,
+		private readonly ICloudIdManager $cloudIdManager,
+	) {
 	}
 
-	/**
-	 * @param array $items
-	 * @param IUser $user
-	 * @param ITrashItem $parent
-	 * @return ITrashItem[]
-	 */
-	private function mapTrashItems(array $items, IUser $user, ITrashItem $parent = null): array {
+	private function mapTrashItem(FileInfo $file, IUser $user, ?ITrashItem $parent = null): ITrashItem {
 		$parentTrashPath = ($parent instanceof ITrashItem) ? $parent->getTrashPath() : '';
 		$isRoot = $parent === null;
-		return array_map(function (FileInfo $file) use ($parent, $parentTrashPath, $isRoot, $user) {
-			$originalLocation = $isRoot ? $file['extraData'] : $parent->getOriginalLocation() . '/' . $file->getName();
-			if (!$originalLocation) {
-				$originalLocation = $file->getName();
-			}
-			return new TrashItem(
-				$this,
-				$originalLocation,
-				$file->getMTime(),
-				$parentTrashPath . '/' . $file->getName() . ($isRoot ? '.d' . $file->getMtime() : ''),
-				$file,
-				$user
-			);
-		}, $items);
+
+		$originalLocation = $isRoot ? $file['extraData'] : $parent->getOriginalLocation() . '/' . $file->getName();
+		if (!$originalLocation) {
+			$originalLocation = $file->getName();
+		}
+		/** @psalm-suppress UndefinedInterfaceMethod */
+		$deletedBy = $this->resolveDeletedBy($file['deletedBy']) ?? $parent?->getDeletedBy();
+		$trashFilename = Trashbin::getTrashFilename($file->getName(), $file->getMtime());
+		return new TrashItem(
+			$this,
+			$originalLocation,
+			$file->getMTime(),
+			$parentTrashPath . '/' . ($isRoot ? $trashFilename : $file->getName()),
+			$file,
+			$user,
+			$deletedBy,
+		);
 	}
 
+	#[\Override]
 	public function listTrashRoot(IUser $user): array {
 		$entries = Helper::getTrashFiles('/', $user->getUID());
-		return $this->mapTrashItems($entries, $user);
+		return array_map(fn (FileInfo $fileInfo): ITrashItem => $this->mapTrashItem($fileInfo, $user), $entries);
 	}
 
+	#[\Override]
+	public function getTrashRootItem(IUser $user, string $name): ?ITrashItem {
+		$entry = Helper::getTrashFile('/', $user->getUID(), $name);
+		if ($entry === null) {
+			return null;
+		}
+		return $this->mapTrashItem($entry, $user);
+	}
+
+	#[\Override]
 	public function listTrashFolder(ITrashItem $folder): array {
 		$user = $folder->getUser();
 		$entries = Helper::getTrashFiles($folder->getTrashPath(), $user->getUID());
-		return $this->mapTrashItems($entries, $user ,$folder);
+		return array_map(fn (FileInfo $fileInfo): ITrashItem => $this->mapTrashItem($fileInfo, $user, $folder), $entries);
 	}
 
+	#[\Override]
 	public function restoreItem(ITrashItem $item) {
 		Trashbin::restore($item->getTrashPath(), $item->getName(), $item->isRootItem() ? $item->getDeletedTime() : null);
 	}
 
+	#[\Override]
 	public function removeItem(ITrashItem $item) {
 		$user = $item->getUser();
 		if ($item->isRootItem()) {
@@ -94,6 +93,7 @@ class LegacyTrashBackend implements ITrashBackend {
 		}
 	}
 
+	#[\Override]
 	public function moveToTrash(IStorage $storage, string $internalPath): bool {
 		if (!$storage instanceof Storage) {
 			return false;
@@ -104,7 +104,7 @@ class LegacyTrashBackend implements ITrashBackend {
 			$this->deletedFiles[$normalized] = $normalized;
 			if ($filesPath = $view->getRelativePath($normalized)) {
 				$filesPath = trim($filesPath, '/');
-				$result = \OCA\Files_Trashbin\Trashbin::move2trash($filesPath);
+				$result = Trashbin::move2trash($filesPath);
 			} else {
 				$result = false;
 			}
@@ -116,17 +116,43 @@ class LegacyTrashBackend implements ITrashBackend {
 		return $result;
 	}
 
-	public function getTrashNodeById(IUser $user, int $fileId) {
+	#[\Override]
+	public function getTrashNodeById(IUser $user, int $fileId): ?Node {
 		try {
 			$userFolder = $this->rootFolder->getUserFolder($user->getUID());
 			$trash = $userFolder->getParent()->get('files_trashbin/files');
-			$trashFiles = $trash->getById($fileId);
-			if (!$trashFiles) {
+			if ($trash instanceof Folder) {
+				return $trash->getFirstNodeById($fileId);
+			} else {
 				return null;
 			}
-			return $trashFiles ? array_pop($trashFiles) : null;
 		} catch (NotFoundException $e) {
 			return null;
 		}
+	}
+
+	/**
+	 * Resolve the user that deleted a trash item. Files deleted by a federated share
+	 * recipient only carry the recipient's remote cloud ID, which no local IUserManager
+	 * backend can resolve, so fall back to a display-only user for the cloud ID in that
+	 * case instead of leaving the item without an "Unknown" deleted by user.
+	 */
+	private function resolveDeletedBy(?string $uid): ?IUser {
+		if (!$uid) {
+			return null;
+		}
+
+		$user = $this->userManager->get($uid);
+		if ($user !== null) {
+			return $user;
+		}
+
+		try {
+			$cloudId = $this->cloudIdManager->resolveCloudId($uid);
+		} catch (\InvalidArgumentException $e) {
+			return null;
+		}
+
+		return $this->userManager->getFederatedUser($cloudId);
 	}
 }

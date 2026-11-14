@@ -1,16 +1,15 @@
-<?php /** @var \OCP\IL10N $l */ ?>
 <?php
-script('core', 'dist/login');
+
+/**
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2011-2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ *
+ * @var \OCP\IL10N $l
+ */
+\OCP\Util::addScript('core', 'login', 'core');
+\OCP\Util::addStyle('core', 'login');
 ?>
-
-<div id="login"></div>
-
-<?php if (!empty($_['alt_login'])) { ?>
-    <div id="alternative-logins" class="alternative-logins">
-        <?php foreach ($_['alt_login'] as $login): ?>
-            <a class="button <?php p($login['style'] ?? ''); ?>" href="<?php print_unescaped($login['href']); ?>" >
-                <?php p($login['name']); ?>
-            </a>
-        <?php endforeach; ?>
-    </div>
-<?php } ?>
+<div>
+	<div id="login"></div>
+</div>

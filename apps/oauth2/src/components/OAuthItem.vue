@@ -1,103 +1,72 @@
 <!--
-  - @copyright Copyright (c) 2018 Roeland Jago Douma <roeland@famdouma.nl>
-  -
-  - @author Roeland Jago Douma <roeland@famdouma.nl>
-  -
-  - @license GNU AGPL version 3 or any later version
-  -
-  - This program is free software: you can redistribute it and/or modify
-  - it under the terms of the GNU Affero General Public License as
-  - published by the Free Software Foundation, either version 3 of the
-  - License, or (at your option) any later version.
-  -
-  - This program is distributed in the hope that it will be useful,
-  - but WITHOUT ANY WARRANTY; without even the implied warranty of
-  - MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  - GNU Affero General Public License for more details.
-  -
-  - You should have received a copy of the GNU Affero General Public License
-  - along with this program. If not, see <http://www.gnu.org/licenses/>.
-  -
-  -->
+  - SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
+<script setup lang="ts">
+import type { IOauthClient } from '../views/AdminSettings.vue'
+
+import { t } from '@nextcloud/l10n'
+import NcButton from '@nextcloud/vue/components/NcButton'
+import NcPasswordField from '@nextcloud/vue/components/NcPasswordField'
+import IconTrashCanOutline from 'vue-material-design-icons/TrashCanOutline.vue'
+
+defineProps<{
+	/**
+	 * The OAuth client to display
+	 */
+	client: IOauthClient
+}>()
+
+defineEmits<{
+	delete: []
+}>()
+</script>
+
 <template>
 	<tr>
+		<td>{{ client.name }}</td>
 		<td>
-			<table class="inline">
-				<tr>
-					<td>{{ t('oauth2', 'Name') }}</td>
-					<td>{{ name }}</td>
-				</tr>
-				<tr>
-					<td>{{ t('oauth2', 'Redirection URI') }}</td>
-					<td>{{ redirectUri }}</td>
-				</tr>
-				<tr>
-					<td>{{ t('oauth2', 'Client Identifier') }}</td>
-					<td><code>{{ clientId }}</code></td>
-				</tr>
-				<tr>
-					<td>{{ t('oauth2', 'Secret') }}</td>
-					<td><code>{{ renderedSecret }}</code><a class="icon-toggle has-tooltip" :title="t('oauth2', 'Show client secret')" @click="toggleSecret" /></td>
-				</tr>
-			</table>
+			<code :class="$style.oAuthItem__code">{{ client.redirectUri }}</code>
 		</td>
-		<td class="action-column">
-			<span><a class="icon-delete has-tooltip" :title="t('oauth2', 'Delete')" @click="$emit('delete', id)" /></span>
+		<td>
+			<code :class="$style.oAuthItem__code">{{ client.clientId }}</code>
+		</td>
+		<td>
+			<NcPasswordField
+				v-if="client.clientSecret"
+				:class="$style.oAuthItem__clientSecret"
+				:aria-label="t('oauth2', 'Secret key')"
+				asText
+				:modelValue="client.clientSecret"
+				showTrailingButton />
+			<span v-else>*****</span>
+		</td>
+		<td>
+			<NcButton
+				:aria-label="t('oauth2', 'Delete')"
+				:title="t('oauth2', 'Delete')"
+				variant="error"
+				@click="$emit('delete')">
+				<template #icon>
+					<IconTrashCanOutline :size="20" />
+				</template>
+			</NcButton>
 		</td>
 	</tr>
 </template>
 
-<script>
-export default {
-	name: 'OAuthItem',
-	props: {
-		client: {
-			type: Object,
-			required: true,
-		},
-	},
-	data() {
-		return {
-			id: this.client.id,
-			name: this.client.name,
-			redirectUri: this.client.redirectUri,
-			clientId: this.client.clientId,
-			clientSecret: this.client.clientSecret,
-			renderSecret: false,
-		}
-	},
-	computed: {
-		renderedSecret() {
-			if (this.renderSecret) {
-				return this.clientSecret
-			} else {
-				return '****'
-			}
-		},
-	},
-	methods: {
-		toggleSecret() {
-			this.renderSecret = !this.renderSecret
-		},
-	},
+<style module>
+.oAuthItem__code {
+	display: inline-block;
+	overflow-x: scroll;
+	padding-block: var(--default-grid-baseline);
+	text-wrap: nowrap;
+	vertical-align: middle;
+	width: 100%;
 }
-</script>
 
-<style scoped>
-	.icon-toggle,
-	.icon-delete {
-		display: inline-block;
-		width: 16px;
-		height: 16px;
-		padding: 10px;
-		vertical-align: middle;
-	}
-	td code {
-		display: inline-block;
-		vertical-align: middle;
-	}
-	table.inline td {
-		border: none;
-		padding: 5px;
-	}
+.oAuthItem__clientSecret {
+	min-width: 200px;
+}
 </style>

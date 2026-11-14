@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2021 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV\Trashbin;
 
 use OCA\DAV\CalDAV\CalDavBackend;
@@ -31,43 +15,42 @@ use Sabre\DAV\Exception\BadRequest;
 use Sabre\DAV\Exception\Forbidden;
 use Sabre\DAV\Exception\NotFound;
 use Sabre\DAV\Exception\NotImplemented;
-use function array_map;
+use Sabre\DAVACL\ACLTrait;
+use Sabre\DAVACL\IACL;
 use function implode;
 use function preg_match;
 
-class DeletedCalendarObjectsCollection implements ICalendarObjectContainer {
+class DeletedCalendarObjectsCollection implements ICalendarObjectContainer, IACL {
+	use ACLTrait;
+
 	public const NAME = 'objects';
 
-	/** @var CalDavBackend */
-	protected $caldavBackend;
-
-	/** @var mixed[] */
-	private $principalInfo;
-
-	public function __construct(CalDavBackend $caldavBackend,
-								array $principalInfo) {
-		$this->caldavBackend = $caldavBackend;
-		$this->principalInfo = $principalInfo;
+	public function __construct(
+		protected CalDavBackend $caldavBackend,
+		/** @var mixed[] */
+		private array $principalInfo,
+	) {
 	}
 
 	/**
 	 * @see \OCA\DAV\CalDAV\Trashbin\DeletedCalendarObjectsCollection::calendarQuery
 	 */
+	#[\Override]
 	public function getChildren() {
 		throw new NotImplemented();
 	}
 
+	#[\Override]
 	public function getChild($name) {
 		if (!preg_match("/(\d+)\\.ics/", $name, $matches)) {
 			throw new NotFound();
 		}
 
-		$data = $this->caldavBackend->getCalendarObjectById(
+		$data = $this->caldavBackend->getDeletedCalendarObjectByIdForPrincipal(
+			(int)$matches[1],
 			$this->principalInfo['uri'],
-			(int) $matches[1],
 		);
 
-		// If the object hasn't been deleted yet then we don't want to find it here
 		if ($data === null) {
 			throw new NotFound();
 		}
@@ -83,14 +66,17 @@ class DeletedCalendarObjectsCollection implements ICalendarObjectContainer {
 		);
 	}
 
+	#[\Override]
 	public function createFile($name, $data = null) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function createDirectory($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function childExists($name) {
 		try {
 			$this->getChild($name);
@@ -101,26 +87,32 @@ class DeletedCalendarObjectsCollection implements ICalendarObjectContainer {
 		return true;
 	}
 
+	#[\Override]
 	public function delete() {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getName(): string {
 		return self::NAME;
 	}
 
+	#[\Override]
 	public function setName($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getLastModified(): int {
 		return 0;
 	}
 
+	#[\Override]
 	public function calendarQuery(array $filters) {
-		return array_map(function (array $calendarObjectInfo) {
-			return $this->getRelativeObjectPath($calendarObjectInfo);
-		}, $this->caldavBackend->getDeletedCalendarObjectsByPrincipal($this->principalInfo['uri']));
+		return array_map(
+			fn (array $obj) => $this->getRelativeObjectPath($obj),
+			$this->caldavBackend->getDeletedCalendarObjectsByPrincipal($this->principalInfo['uri']),
+		);
 	}
 
 	private function getRelativeObjectPath(array $calendarInfo): string {
@@ -128,5 +120,41 @@ class DeletedCalendarObjectsCollection implements ICalendarObjectContainer {
 			'.',
 			[$calendarInfo['id'], 'ics'],
 		);
+	}
+
+	#[\Override]
+	public function getOwner() {
+		return $this->principalInfo['uri'];
+	}
+
+	#[\Override]
+	public function getACL(): array {
+		return [
+			[
+				'privilege' => '{DAV:}read',
+				'principal' => $this->getOwner(),
+				'protected' => true,
+			],
+			[
+				'privilege' => '{DAV:}unbind',
+				'principal' => $this->getOwner(),
+				'protected' => true,
+			],
+			[
+				'privilege' => '{DAV:}read',
+				'principal' => $this->getOwner() . '/calendar-proxy-write',
+				'protected' => true,
+			],
+			[
+				'privilege' => '{DAV:}unbind',
+				'principal' => $this->getOwner() . '/calendar-proxy-write',
+				'protected' => true,
+			],
+			[
+				'privilege' => '{DAV:}read',
+				'principal' => $this->getOwner() . '/calendar-proxy-read',
+				'protected' => true,
+			],
+		];
 	}
 }

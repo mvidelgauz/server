@@ -1,85 +1,64 @@
 <?php
+
 /**
- * @copyright 2018, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Versions\Sabre;
 
-use OC\User\NoUserException;
 use OCA\Files_Versions\Versions\IVersionManager;
 use OCP\Files\IRootFolder;
 use OCP\IUserManager;
+use OCP\User\Exceptions\UserNotFoundException;
 use Sabre\DAV\Exception\Forbidden;
 use Sabre\DAV\ICollection;
 
 class VersionHome implements ICollection {
 
-	/** @var array */
-	private $principalInfo;
-
-	/** @var IRootFolder */
-	private $rootFolder;
-
-	/** @var IUserManager */
-	private $userManager;
-
-	/** @var IVersionManager */
-	private $versionManager;
-
-	public function __construct(array $principalInfo, IRootFolder $rootFolder, IUserManager $userManager, IVersionManager $versionManager) {
-		$this->principalInfo = $principalInfo;
-		$this->rootFolder = $rootFolder;
-		$this->userManager = $userManager;
-		$this->versionManager = $versionManager;
+	public function __construct(
+		private array $principalInfo,
+		private IRootFolder $rootFolder,
+		private IUserManager $userManager,
+		private IVersionManager $versionManager,
+	) {
 	}
 
 	private function getUser() {
 		[, $name] = \Sabre\Uri\split($this->principalInfo['uri']);
 		$user = $this->userManager->get($name);
-		if (!$user) {
-			throw new NoUserException();
+		if ($user === null) {
+			throw UserNotFoundException::createForUser($name);
 		}
 		return $user;
 	}
 
+	#[\Override]
 	public function delete() {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getName(): string {
 		return $this->getUser()->getUID();
 	}
 
+	#[\Override]
 	public function setName($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function createFile($name, $data = null) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function createDirectory($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getChild($name) {
 		$user = $this->getUser();
 
@@ -91,6 +70,7 @@ class VersionHome implements ICollection {
 		}
 	}
 
+	#[\Override]
 	public function getChildren() {
 		$user = $this->getUser();
 
@@ -100,10 +80,12 @@ class VersionHome implements ICollection {
 		];
 	}
 
+	#[\Override]
 	public function childExists($name) {
 		return $name === 'versions' || $name === 'restore';
 	}
 
+	#[\Override]
 	public function getLastModified() {
 		return 0;
 	}

@@ -1,74 +1,57 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Encryption;
 
-use OC\Cache\CappedMemoryCache;
 use OCA\Files_External\Service\GlobalStoragesService;
+use OCP\App\IAppManager;
+use OCP\Cache\CappedMemoryCache;
+use OCP\Encryption\IFile;
 use OCP\Files\IRootFolder;
+use OCP\Files\IUserFolder;
+use OCP\Files\Node;
 use OCP\Files\NotFoundException;
+use OCP\Server;
 use OCP\Share\IManager;
 
-class File implements \OCP\Encryption\IFile {
-
-	/** @var Util */
-	protected $util;
-
-	/** @var IRootFolder */
-	private $rootFolder;
-
-	/** @var IManager */
-	private $shareManager;
-
+class File implements IFile {
 	/**
-	 * cache results of already checked folders
-	 *
-	 * @var array
+	 * Cache results of already checked folders
+	 * @var CappedMemoryCache<array>
 	 */
-	protected $cache;
+	protected CappedMemoryCache $cache;
+	private ?IAppManager $appManager = null;
 
-	public function __construct(Util $util,
-								IRootFolder $rootFolder,
-								IManager $shareManager) {
-		$this->util = $util;
+	public function __construct(
+		protected Util $util,
+		private IRootFolder $rootFolder,
+		private IManager $shareManager,
+	) {
 		$this->cache = new CappedMemoryCache();
-		$this->rootFolder = $rootFolder;
-		$this->shareManager = $shareManager;
 	}
 
+	public function getAppManager(): IAppManager {
+		// Lazy evaluate app manager as it initialize the db too early otherwise
+		if ($this->appManager) {
+			return $this->appManager;
+		}
+		$this->appManager = Server::get(IAppManager::class);
+		return $this->appManager;
+	}
 
 	/**
-	 * get list of users with access to the file
+	 * Get list of users with access to the file
 	 *
 	 * @param string $path to the file
-	 * @return array  ['users' => $uniqueUserIds, 'public' => $public]
+	 * @return array{users: string[], public: bool}
 	 */
+	#[\Override]
 	public function getAccessList($path) {
-
 		// Make sure that a share key is generated for the owner too
 		[$owner, $ownerPath] = $this->util->getUidAndFilename($path);
 
@@ -91,16 +74,18 @@ class File implements \OCP\Encryption\IFile {
 		// first get the shares for the parent and cache the result so that we don't
 		// need to check all parents for every file
 		$parent = dirname($ownerPath);
-		$parentNode = $userFolder->get($parent);
 		if (isset($this->cache[$parent])) {
 			$resultForParents = $this->cache[$parent];
 		} else {
-			$resultForParents = $this->shareManager->getAccessList($parentNode);
+			$resultForParents = ['users' => [], 'public' => false, 'remote' => false];
+			$parentNode = $this->getClosestExistingNode($userFolder, $parent);
+			if ($parentNode !== null) {
+				$resultForParents = $this->shareManager->getAccessList($parentNode) + $resultForParents;
+			}
 			$this->cache[$parent] = $resultForParents;
 		}
 		$userIds = array_merge($userIds, $resultForParents['users']);
 		$public = $resultForParents['public'] || $resultForParents['remote'];
-
 
 		// Find out who, if anyone, is sharing the file
 		if ($file !== null) {
@@ -110,12 +95,12 @@ class File implements \OCP\Encryption\IFile {
 		}
 
 		// check if it is a group mount
-		if (\OCP\App::isEnabled("files_external")) {
+		if ($this->getAppManager()->isEnabledForUser('files_external')) {
 			/** @var GlobalStoragesService $storageService */
-			$storageService = \OC::$server->get(GlobalStoragesService::class);
+			$storageService = Server::get(GlobalStoragesService::class);
 			$storages = $storageService->getAllStorages();
 			foreach ($storages as $storage) {
-				if ($storage->getMountPoint() == substr($ownerPath, 0, strlen($storage->getMountPoint()))) {
+				if ($storage->getMountPoint() === substr($ownerPath, 0, strlen($storage->getMountPoint()))) {
 					$mountedFor = $this->util->getUserWithAccessToMountPoint($storage->getApplicableUsers(), $storage->getApplicableGroups());
 					$userIds = array_merge($userIds, $mountedFor);
 				}
@@ -126,5 +111,24 @@ class File implements \OCP\Encryption\IFile {
 		$uniqueUserIds = array_unique($userIds);
 
 		return ['users' => $uniqueUserIds, 'public' => $public];
+	}
+
+	/**
+	 * Get the node for $path, or for its closest ancestor that is known to the cache.
+	 *
+	 * @return ?Node null if not even the user folder itself could be resolved
+	 */
+	private function getClosestExistingNode(IUserFolder $userFolder, string $path): ?Node {
+		while (true) {
+			try {
+				return $userFolder->get($path);
+			} catch (NotFoundException) {
+				$parent = dirname($path);
+				if ($parent === $path) {
+					return null;
+				}
+				$path = $parent;
+			}
+		}
 	}
 }

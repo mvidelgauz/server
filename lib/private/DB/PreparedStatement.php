@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2021 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\DB;
 
 use Doctrine\DBAL\Exception;
@@ -42,7 +26,6 @@ use PDO;
  * methods without much magic.
  */
 class PreparedStatement implements IPreparedStatement {
-
 	/** @var Statement */
 	private $statement;
 
@@ -53,40 +36,59 @@ class PreparedStatement implements IPreparedStatement {
 		$this->statement = $statement;
 	}
 
+	#[\Override]
 	public function closeCursor(): bool {
 		$this->getResult()->closeCursor();
 
 		return true;
 	}
 
+	#[\Override]
 	public function fetch(int $fetchMode = PDO::FETCH_ASSOC) {
-		return $this->getResult()->fetch($fetchMode);
+		return match ($fetchMode) {
+			PDO::FETCH_ASSOC => $this->getResult()->fetchAssociative(),
+			PDO::FETCH_NUM => $this->getResult()->fetchNumeric(),
+			PDO::FETCH_COLUMN => $this->getResult()->fetchOne(),
+			default => $this->getResult()->fetch($fetchMode),
+		};
 	}
 
+	#[\Override]
 	public function fetchAll(int $fetchMode = PDO::FETCH_ASSOC): array {
-		return $this->getResult()->fetchAll($fetchMode);
+		return match ($fetchMode) {
+			PDO::FETCH_ASSOC => $this->getResult()->fetchAllAssociative(),
+			PDO::FETCH_NUM => $this->getResult()->fetchAllNumeric(),
+			PDO::FETCH_COLUMN => $this->getResult()->fetchFirstColumn(),
+			default => $this->getResult()->fetchAll($fetchMode),
+		};
 	}
 
+	#[\Override]
 	public function fetchColumn() {
 		return $this->getResult()->fetchOne();
 	}
 
+	#[\Override]
 	public function fetchOne() {
 		return $this->getResult()->fetchOne();
 	}
 
+	#[\Override]
 	public function bindValue($param, $value, $type = ParameterType::STRING): bool {
 		return $this->statement->bindValue($param, $value, $type);
 	}
 
+	#[\Override]
 	public function bindParam($param, &$variable, $type = ParameterType::STRING, $length = null): bool {
 		return $this->statement->bindParam($param, $variable, $type, $length);
 	}
 
+	#[\Override]
 	public function execute($params = null): IResult {
 		return ($this->result = new ResultAdapter($this->statement->execute($params)));
 	}
 
+	#[\Override]
 	public function rowCount(): int {
 		return $this->getResult()->rowCount();
 	}
@@ -96,6 +98,6 @@ class PreparedStatement implements IPreparedStatement {
 			return $this->result;
 		}
 
-		throw new Exception("You have to execute the prepared statement before accessing the results");
+		throw new Exception('You have to execute the prepared statement before accessing the results');
 	}
 }

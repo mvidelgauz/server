@@ -1,26 +1,12 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016 Joas Schilling <coding@schilljs.com>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Sharing\Activity;
 
 use OCP\Activity\IFilter;
@@ -31,21 +17,17 @@ class Filter implements IFilter {
 	public const TYPE_REMOTE_SHARE = 'remote_share';
 	public const TYPE_SHARED = 'shared';
 
-	/** @var IL10N */
-	protected $l;
-
-	/** @var IURLGenerator */
-	protected $url;
-
-	public function __construct(IL10N $l, IURLGenerator $url) {
-		$this->l = $l;
-		$this->url = $url;
+	public function __construct(
+		protected IL10N $l,
+		protected IURLGenerator $url,
+	) {
 	}
 
 	/**
 	 * @return string Lowercase a-z only identifier
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function getIdentifier() {
 		return 'files_sharing';
 	}
@@ -54,6 +36,7 @@ class Filter implements IFilter {
 	 * @return string A translated string
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function getName() {
 		return $this->l->t('File shares');
 	}
@@ -62,6 +45,7 @@ class Filter implements IFilter {
 	 * @return int
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function getPriority() {
 		return 31;
 	}
@@ -70,6 +54,7 @@ class Filter implements IFilter {
 	 * @return string Full URL to an icon, empty string when none is given
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function getIcon() {
 		return $this->url->getAbsoluteURL($this->url->imagePath('core', 'actions/share.svg'));
 	}
@@ -79,6 +64,7 @@ class Filter implements IFilter {
 	 * @return string[] An array of allowed apps from which activities should be displayed
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function filterTypes(array $types) {
 		return array_intersect([
 			self::TYPE_SHARED,
@@ -91,6 +77,7 @@ class Filter implements IFilter {
 	 * @return string[] An array of allowed apps from which activities should be displayed
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function allowedApps() {
 		return [
 			'files_sharing',

@@ -1,25 +1,10 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Bjoern Schiessle <bjoern@schiessle.org>
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Encryption\Migration;
 
 use OCP\IConfig;
@@ -33,13 +18,9 @@ use OCP\Migration\IRepairStep;
  */
 class SetMasterKeyStatus implements IRepairStep {
 
-
-	/** @var  IConfig */
-	private $config;
-
-
-	public function __construct(IConfig $config) {
-		$this->config = $config;
+	public function __construct(
+		private IConfig $config,
+	) {
 	}
 
 	/**
@@ -48,6 +29,7 @@ class SetMasterKeyStatus implements IRepairStep {
 	 * @return string
 	 * @since 9.1.0
 	 */
+	#[\Override]
 	public function getName() {
 		return 'Write default encryption module configuration to the database';
 	}
@@ -55,6 +37,7 @@ class SetMasterKeyStatus implements IRepairStep {
 	/**
 	 * @param IOutput $output
 	 */
+	#[\Override]
 	public function run(IOutput $output) {
 		if (!$this->shouldRun()) {
 			return;
@@ -62,8 +45,8 @@ class SetMasterKeyStatus implements IRepairStep {
 
 		// if no config for the master key is set we set it explicitly to '0' in
 		// order not to break old installations because the default changed to '1'.
-		$configAlreadySet = $this->config->getAppValue('encryption', 'useMasterKey', false);
-		if ($configAlreadySet === false) {
+		$configAlreadySet = $this->config->getAppValue('encryption', 'useMasterKey', 'not-set');
+		if ($configAlreadySet === 'not-set') {
 			$this->config->setAppValue('encryption', 'useMasterKey', '0');
 		}
 	}

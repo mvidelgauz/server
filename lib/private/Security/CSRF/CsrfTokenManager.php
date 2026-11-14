@@ -1,29 +1,12 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Security\CSRF;
 
 use OC\Security\CSRF\TokenStorage\SessionStorage;
@@ -34,27 +17,16 @@ use OC\Security\CSRF\TokenStorage\SessionStorage;
  * @package OC\Security\CSRF
  */
 class CsrfTokenManager {
-	/** @var CsrfTokenGenerator */
-	private $tokenGenerator;
-	/** @var SessionStorage */
-	private $sessionStorage;
-	/** @var CsrfToken|null */
-	private $csrfToken = null;
+	private ?CsrfToken $csrfToken = null;
 
-	/**
-	 * @param CsrfTokenGenerator $tokenGenerator
-	 * @param SessionStorage $storageInterface
-	 */
-	public function __construct(CsrfTokenGenerator $tokenGenerator,
-								SessionStorage $storageInterface) {
-		$this->tokenGenerator = $tokenGenerator;
-		$this->sessionStorage = $storageInterface;
+	public function __construct(
+		private CsrfTokenGenerator $tokenGenerator,
+		private SessionStorage $sessionStorage,
+	) {
 	}
 
 	/**
 	 * Returns the current CSRF token, if none set it will create a new one.
-	 *
-	 * @return CsrfToken
 	 */
 	public function getToken(): CsrfToken {
 		if (!\is_null($this->csrfToken)) {
@@ -74,8 +46,6 @@ class CsrfTokenManager {
 
 	/**
 	 * Invalidates any current token and sets a new one.
-	 *
-	 * @return CsrfToken
 	 */
 	public function refreshToken(): CsrfToken {
 		$value = $this->tokenGenerator->generateToken();
@@ -87,16 +57,13 @@ class CsrfTokenManager {
 	/**
 	 * Remove the current token from the storage.
 	 */
-	public function removeToken() {
+	public function removeToken(): void {
 		$this->csrfToken = null;
 		$this->sessionStorage->removeToken();
 	}
 
 	/**
 	 * Verifies whether the provided token is valid.
-	 *
-	 * @param CsrfToken $token
-	 * @return bool
 	 */
 	public function isTokenValid(CsrfToken $token): bool {
 		if (!$this->sessionStorage->hasToken()) {
@@ -107,5 +74,9 @@ class CsrfTokenManager {
 			$this->sessionStorage->getToken(),
 			$token->getDecryptedValue()
 		);
+	}
+
+	public function generateSessionToken(): void {
+		$this->getToken();
 	}
 }

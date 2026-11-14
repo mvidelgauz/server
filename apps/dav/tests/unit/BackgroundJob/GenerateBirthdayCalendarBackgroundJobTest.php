@@ -1,57 +1,42 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2017, Georg Ehrke
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Tests\unit\BackgroundJob;
 
 use OCA\DAV\BackgroundJob\GenerateBirthdayCalendarBackgroundJob;
 use OCA\DAV\CalDAV\BirthdayService;
+use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IConfig;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class GenerateBirthdayCalendarBackgroundJobTest extends TestCase {
-
-	/** @var BirthdayService | \PHPUnit\Framework\MockObject\MockObject */
-	private $birthdayService;
-
-	/** @var IConfig | \PHPUnit\Framework\MockObject\MockObject */
-	private $config;
-
-	/** @var \OCA\DAV\BackgroundJob\GenerateBirthdayCalendarBackgroundJob */
-	private $backgroundJob;
+	private ITimeFactory&MockObject $time;
+	private BirthdayService&MockObject $birthdayService;
+	private IConfig&MockObject $config;
+	private GenerateBirthdayCalendarBackgroundJob $backgroundJob;
 
 	protected function setUp(): void {
 		parent::setUp();
 
+		$this->time = $this->createMock(ITimeFactory::class);
 		$this->birthdayService = $this->createMock(BirthdayService::class);
 		$this->config = $this->createMock(IConfig::class);
 
 		$this->backgroundJob = new GenerateBirthdayCalendarBackgroundJob(
-			$this->birthdayService, $this->config);
+			$this->time,
+			$this->birthdayService,
+			$this->config,
+		);
 	}
 
-	public function testRun() {
+	public function testRun(): void {
 		$this->config->expects($this->once())
 			->method('getAppValue')
 			->with('dav', 'generateBirthdayCalendar', 'yes')
@@ -73,7 +58,7 @@ class GenerateBirthdayCalendarBackgroundJobTest extends TestCase {
 		$this->backgroundJob->run(['userId' => 'user123']);
 	}
 
-	public function testRunAndReset() {
+	public function testRunAndReset(): void {
 		$this->config->expects($this->once())
 			->method('getAppValue')
 			->with('dav', 'generateBirthdayCalendar', 'yes')
@@ -95,7 +80,7 @@ class GenerateBirthdayCalendarBackgroundJobTest extends TestCase {
 		$this->backgroundJob->run(['userId' => 'user123', 'purgeBeforeGenerating' => true]);
 	}
 
-	public function testRunGloballyDisabled() {
+	public function testRunGloballyDisabled(): void {
 		$this->config->expects($this->once())
 			->method('getAppValue')
 			->with('dav', 'generateBirthdayCalendar', 'yes')
@@ -110,7 +95,7 @@ class GenerateBirthdayCalendarBackgroundJobTest extends TestCase {
 		$this->backgroundJob->run(['userId' => 'user123']);
 	}
 
-	public function testRunUserDisabled() {
+	public function testRunUserDisabled(): void {
 		$this->config->expects($this->once())
 			->method('getAppValue')
 			->with('dav', 'generateBirthdayCalendar', 'yes')

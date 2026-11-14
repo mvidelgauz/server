@@ -1,4 +1,6 @@
 { "translations": {
-    "Settings" : "सेटिङ्हरू"
+    "Files" : "फाइलहरू",
+    "Settings" : "सेटिङ्हरू",
+    "Accounts" : "Accounts"
 },"pluralForm" :"nplurals=2; plural=(n != 1);"
 }

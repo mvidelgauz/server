@@ -1,25 +1,8 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2018 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Johannes Ernst <jernst@indiecomputing.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Log;
@@ -30,7 +13,8 @@ use OC\Log\LogFactory;
 use OC\Log\Syslog;
 use OC\Log\Systemdlog;
 use OC\SystemConfig;
-use OCP\IServerContainer;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Container\ContainerInterface;
 use Test\TestCase;
 
 /**
@@ -39,25 +23,21 @@ use Test\TestCase;
  * @package Test\Log
  */
 class LogFactoryTest extends TestCase {
-	/** @var IServerContainer|\PHPUnit\Framework\MockObject\MockObject */
-	protected $c;
+	protected ContainerInterface&MockObject $c;
+	protected LogFactory $factory;
+	protected SystemConfig&MockObject $systemConfig;
 
-	/** @var LogFactory */
-	protected $factory;
-
-	/** @var SystemConfig|\PHPUnit\Framework\MockObject\MockObject */
-	protected $systemConfig;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->c = $this->createMock(IServerContainer::class);
+		$this->c = $this->createMock(ContainerInterface::class);
 		$this->systemConfig = $this->createMock(SystemConfig::class);
 
-		$this->factory = new LogFactory($this->c, $this->systemConfig);
+		$this->factory = new LogFactory($this->c, $this->systemConfig, \OC::$SERVERROOT);
 	}
 
-	public function fileTypeProvider(): array {
+	public static function fileTypeProvider(): array {
 		return [
 			[
 				'file'
@@ -76,23 +56,25 @@ class LogFactoryTest extends TestCase {
 
 	/**
 	 * @param string $type
-	 * @dataProvider fileTypeProvider
-	 * @throws \OCP\AppFramework\QueryException
 	 */
-	public function testFile(string $type) {
-		$datadir = \OC::$SERVERROOT.'/data';
+	#[\PHPUnit\Framework\Attributes\DataProvider('fileTypeProvider')]
+	public function testFile(string $type): void {
+		$datadir = \OC::$SERVERROOT . '/data';
 		$defaultLog = $datadir . '/nextcloud.log';
 
 		$this->systemConfig->expects($this->exactly(3))
 			->method('getValue')
-			->withConsecutive(['datadirectory', $datadir], ['logfile', $defaultLog], ['logfilemode', 0640])
-			->willReturnOnConsecutiveCalls($datadir, $defaultLog, 0640);
+			->willReturnMap([
+				['datadirectory', $datadir, $datadir],
+				['logfile', $defaultLog, $defaultLog],
+				['logfilemode', 0640, 0640],
+			]);
 
 		$log = $this->factory->get($type);
 		$this->assertInstanceOf(File::class, $log);
 	}
 
-	public function logFilePathProvider():array {
+	public static function logFilePathProvider():array {
 		return [
 			[
 				'/dev/null',
@@ -100,43 +82,37 @@ class LogFactoryTest extends TestCase {
 			],
 			[
 				'/xdev/youshallfallback',
-				\OC::$SERVERROOT.'/data/nextcloud.log'
+				\OC::$SERVERROOT . '/data/nextcloud.log'
 			]
 		];
 	}
 
-	/**
-	 * @dataProvider logFilePathProvider
-	 * @throws \OCP\AppFramework\QueryException
-	 */
-	public function testFileCustomPath($path, $expected) {
-		$datadir = \OC::$SERVERROOT.'/data';
+	#[\PHPUnit\Framework\Attributes\DataProvider('logFilePathProvider')]
+	public function testFileCustomPath($path, $expected): void {
+		$datadir = \OC::$SERVERROOT . '/data';
 		$defaultLog = $datadir . '/nextcloud.log';
 
 		$this->systemConfig->expects($this->exactly(3))
 			->method('getValue')
-			->withConsecutive(['datadirectory', $datadir], ['logfile', $defaultLog], ['logfilemode', 0640])
-			->willReturnOnConsecutiveCalls($datadir, $path, 0640);
+			->willReturnMap([
+				['datadirectory', $datadir, $datadir],
+				['logfile', $defaultLog, $path],
+				['logfilemode', 0640, 0640],
+			]);
 
 		$log = $this->factory->get('file');
 		$this->assertInstanceOf(File::class, $log);
 		$this->assertSame($expected, $log->getLogFilePath());
 	}
 
-	/**
-	 * @throws \OCP\AppFramework\QueryException
-	 */
-	public function testErrorLog() {
+	public function testErrorLog(): void {
 		$log = $this->factory->get('errorlog');
 		$this->assertInstanceOf(Errorlog::class, $log);
 	}
 
-	/**
-	 * @throws \OCP\AppFramework\QueryException
-	 */
-	public function testSystemLog() {
+	public function testSystemLog(): void {
 		$this->c->expects($this->once())
-			->method('resolve')
+			->method('get')
 			->with(Syslog::class)
 			->willReturn($this->createMock(Syslog::class));
 
@@ -144,12 +120,9 @@ class LogFactoryTest extends TestCase {
 		$this->assertInstanceOf(Syslog::class, $log);
 	}
 
-	/**
-	 * @throws \OCP\AppFramework\QueryException
-	 */
-	public function testSystemdLog() {
+	public function testSystemdLog(): void {
 		$this->c->expects($this->once())
-			->method('resolve')
+			->method('get')
 			->with(Systemdlog::class)
 			->willReturn($this->createMock(Systemdlog::class));
 

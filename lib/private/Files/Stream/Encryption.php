@@ -1,114 +1,53 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author jknockaert <jasper@knockaert.nl>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author martink-p <47943787+martink-p@users.noreply.github.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files\Stream;
 
 use Icewind\Streams\Wrapper;
 use OC\Encryption\Exceptions\EncryptionHeaderKeyExistsException;
+use OC\Encryption\File;
+use OC\Encryption\Util;
+use OC\Files\Storage\Storage;
+use OCP\Encryption\IEncryptionModule;
 use function is_array;
 use function stream_context_create;
 
 class Encryption extends Wrapper {
-
-	/** @var \OC\Encryption\Util */
-	protected $util;
-
-	/** @var \OC\Encryption\File */
-	protected $file;
-
-	/** @var \OCP\Encryption\IEncryptionModule */
-	protected $encryptionModule;
-
-	/** @var \OC\Files\Storage\Storage */
-	protected $storage;
-
-	/** @var \OC\Files\Storage\Wrapper\Encryption */
-	protected $encryptionStorage;
-
-	/** @var string */
-	protected $internalPath;
-
-	/** @var string */
-	protected $cache;
-
-	/** @var integer */
-	protected $size;
-
-	/** @var integer */
-	protected $position;
-
-	/** @var integer */
-	protected $unencryptedSize;
-
-	/** @var integer */
-	protected $headerSize;
-
-	/** @var integer */
-	protected $unencryptedBlockSize;
-
-	/** @var array */
-	protected $header;
-
-	/** @var string */
-	protected $fullPath;
-
-	/** @var  bool */
-	protected $signed;
-
+	protected Util $util;
+	protected File $file;
+	protected IEncryptionModule $encryptionModule;
+	protected Storage $storage;
+	protected \OC\Files\Storage\Wrapper\Encryption $encryptionStorage;
+	protected string $internalPath;
+	protected string $cache;
+	protected ?int $size = null;
+	protected int $position;
+	protected int|float|null $unencryptedSize = null;
+	protected int $headerSize;
+	protected int $unencryptedBlockSize;
+	protected array $header;
+	protected string $fullPath;
+	protected bool $signed;
 	/**
 	 * header data returned by the encryption module, will be written to the file
 	 * in case of a write operation
-	 *
-	 * @var array
 	 */
-	protected $newHeader;
-
+	protected array $newHeader;
 	/**
 	 * user who perform the read/write operation null for public access
-	 *
-	 * @var string
 	 */
-	protected $uid;
-
-	/** @var bool */
-	protected $readOnly;
-
-	/** @var bool */
-	protected $writeFlag;
-
-	/** @var array */
-	protected $expectedContextProperties;
-
-	/** @var bool */
-	protected $fileUpdated;
+	protected ?string $uid;
+	protected bool $readOnly;
+	protected bool $writeFlag;
+	protected array $expectedContextProperties;
+	protected bool $fileUpdated;
 
 	public function __construct() {
 		$this->expectedContextProperties = [
@@ -129,7 +68,6 @@ class Encryption extends Wrapper {
 		];
 	}
 
-
 	/**
 	 * Wraps a stream with the provided callbacks
 	 *
@@ -138,14 +76,14 @@ class Encryption extends Wrapper {
 	 * @param string $fullPath relative to data/
 	 * @param array $header
 	 * @param string $uid
-	 * @param \OCP\Encryption\IEncryptionModule $encryptionModule
-	 * @param \OC\Files\Storage\Storage $storage
+	 * @param IEncryptionModule $encryptionModule
+	 * @param Storage $storage
 	 * @param \OC\Files\Storage\Wrapper\Encryption $encStorage
-	 * @param \OC\Encryption\Util $util
-	 * @param \OC\Encryption\File $file
+	 * @param Util $util
+	 * @param File $file
 	 * @param string $mode
-	 * @param int $size
-	 * @param int $unencryptedSize
+	 * @param int|float $size
+	 * @param int|float $unencryptedSize
 	 * @param int $headerSize
 	 * @param bool $signed
 	 * @param string $wrapper stream wrapper class
@@ -153,19 +91,24 @@ class Encryption extends Wrapper {
 	 *
 	 * @throws \BadMethodCallException
 	 */
-	public static function wrap($source, $internalPath, $fullPath, array $header,
-								$uid,
-								\OCP\Encryption\IEncryptionModule $encryptionModule,
-								\OC\Files\Storage\Storage $storage,
-								\OC\Files\Storage\Wrapper\Encryption $encStorage,
-								\OC\Encryption\Util $util,
-								 \OC\Encryption\File $file,
-								$mode,
-								$size,
-								$unencryptedSize,
-								$headerSize,
-								$signed,
-								$wrapper = Encryption::class) {
+	public static function wrap(
+		$source,
+		$internalPath,
+		$fullPath,
+		array $header,
+		$uid,
+		IEncryptionModule $encryptionModule,
+		Storage $storage,
+		\OC\Files\Storage\Wrapper\Encryption $encStorage,
+		Util $util,
+		File $file,
+		$mode,
+		$size,
+		$unencryptedSize,
+		$headerSize,
+		$signed,
+		$wrapper = Encryption::class,
+	) {
 		$context = stream_context_create([
 			'ocencryption' => [
 				'source' => $source,
@@ -199,6 +142,7 @@ class Encryption extends Wrapper {
 	 * @return resource
 	 * @throws \BadMethodCallException
 	 */
+	#[\Override]
 	protected static function wrapSource($source, $context = [], $protocol = null, $class = null, $mode = 'r+') {
 		try {
 			if ($protocol === null) {
@@ -239,6 +183,7 @@ class Encryption extends Wrapper {
 	 * @return array
 	 * @throws \BadMethodCallException
 	 */
+	#[\Override]
 	protected function loadContext($name = null) {
 		$context = parent::loadContext($name);
 
@@ -252,6 +197,7 @@ class Encryption extends Wrapper {
 		return $context;
 	}
 
+	#[\Override]
 	public function stream_open($path, $mode, $options, &$opened_path) {
 		$this->loadContext('ocencryption');
 
@@ -259,7 +205,6 @@ class Encryption extends Wrapper {
 		$this->cache = '';
 		$this->writeFlag = false;
 		$this->fileUpdated = false;
-		$this->unencryptedBlockSize = $this->encryptionModule->getUnencryptedBlockSize($this->signed);
 
 		if (
 			$mode === 'w'
@@ -284,6 +229,7 @@ class Encryption extends Wrapper {
 			$accessList = $this->file->getAccessList($sharePath);
 		}
 		$this->newHeader = $this->encryptionModule->begin($this->fullPath, $this->uid, $mode, $this->header, $accessList);
+		$this->unencryptedBlockSize = $this->encryptionModule->getUnencryptedBlockSize($this->signed);
 
 		if (
 			$mode === 'w'
@@ -303,10 +249,12 @@ class Encryption extends Wrapper {
 		return true;
 	}
 
+	#[\Override]
 	public function stream_eof() {
 		return $this->position >= $this->unencryptedSize;
 	}
 
+	#[\Override]
 	public function stream_read($count) {
 		$result = '';
 
@@ -322,7 +270,7 @@ class Encryption extends Wrapper {
 				$result .= substr($this->cache, $blockPosition, $remainingLength);
 				$this->position += $remainingLength;
 				$count = 0;
-			// otherwise remainder of current block is fetched, the block is flushed and the position updated
+				// otherwise remainder of current block is fetched, the block is flushed and the position updated
 			} else {
 				$result .= substr($this->cache, $blockPosition);
 				$this->flush();
@@ -358,6 +306,7 @@ class Encryption extends Wrapper {
 		return $data;
 	}
 
+	#[\Override]
 	public function stream_write($data) {
 		$length = 0;
 		// loop over $data to fit it in 6126 sized unencrypted blocks
@@ -369,13 +318,12 @@ class Encryption extends Wrapper {
 
 			// for seekable streams the pointer is moved back to the beginning of the encrypted block
 			// flush will start writing there when the position moves to another block
-			$positionInFile = (int)floor($this->position / $this->unencryptedBlockSize) *
-				$this->util->getBlockSize() + $this->headerSize;
+			$positionInFile = (int)floor($this->position / $this->unencryptedBlockSize)
+				* $this->util->getBlockSize() + $this->headerSize;
 			$resultFseek = $this->parentStreamSeek($positionInFile);
 
 			// only allow writes on seekable streams, or at the end of the encrypted stream
 			if (!$this->readOnly && ($resultFseek || $positionInFile === $this->size)) {
-
 				// switch the writeFlag so flush() will write the block
 				$this->writeFlag = true;
 				$this->fileUpdated = true;
@@ -391,11 +339,11 @@ class Encryption extends Wrapper {
 					$this->position += $remainingLength;
 					$length += $remainingLength;
 					$data = '';
-				// if $data doesn't fit the current block, the fill the current block and reiterate
+					// if $data doesn't fit the current block, the fill the current block and reiterate
 					// after the block is filled, it is flushed and $data is updatedxxx
 				} else {
-					$this->cache = substr($this->cache, 0, $blockPosition) .
-						substr($data, 0, $this->unencryptedBlockSize - $blockPosition);
+					$this->cache = substr($this->cache, 0, $blockPosition)
+						. substr($data, 0, $this->unencryptedBlockSize - $blockPosition);
 					$this->flush();
 					$this->position += ($this->unencryptedBlockSize - $blockPosition);
 					$length += ($this->unencryptedBlockSize - $blockPosition);
@@ -409,10 +357,12 @@ class Encryption extends Wrapper {
 		return $length;
 	}
 
+	#[\Override]
 	public function stream_tell() {
 		return $this->position;
 	}
 
+	#[\Override]
 	public function stream_seek($offset, $whence = SEEK_SET) {
 		$return = false;
 
@@ -448,6 +398,7 @@ class Encryption extends Wrapper {
 		return $return;
 	}
 
+	#[\Override]
 	public function stream_close() {
 		$this->flush('end');
 		$position = (int)floor($this->position / $this->unencryptedBlockSize);
@@ -465,7 +416,7 @@ class Encryption extends Wrapper {
 			$cacheEntry = $cache->get($this->internalPath);
 			if ($cacheEntry) {
 				$version = $cacheEntry['encryptedVersion'] + 1;
-				$cache->update($cacheEntry->getId(), ['encrypted' => $version, 'encryptedVersion' => $version]);
+				$cache->update($cacheEntry->getId(), ['encrypted' => $version, 'encryptedVersion' => $version, 'unencrypted_size' => $this->unencryptedSize]);
 			}
 		}
 
@@ -528,6 +479,7 @@ class Encryption extends Wrapper {
 	 */
 	protected function writeHeader() {
 		$header = $this->util->createHeader($this->newHeader, $this->encryptionModule);
+		$this->fileUpdated = true;
 		return parent::stream_write($header);
 	}
 
@@ -553,6 +505,7 @@ class Encryption extends Wrapper {
 	 * @param array $options
 	 * @return bool
 	 */
+	#[\Override]
 	public function dir_opendir($path, $options) {
 		return false;
 	}

@@ -1,36 +1,22 @@
 <?php
-/**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Phil Davis <phil.davis@inf.org>
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
- */
-require __DIR__ . '/../../vendor/autoload.php';
 
+/**
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+require __DIR__ . '/autoload.php';
+
+use Behat\Hook\AfterScenario;
+use Behat\Hook\BeforeScenario;
+use Behat\Step\Given;
+use Behat\Step\Then;
+use Behat\Step\When;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Message\ResponseInterface;
 
 class CardDavContext implements \Behat\Behat\Context\Context {
-	/** @var string  */
-	private $baseUrl;
 	/** @var Client */
 	private $client;
 	/** @var ResponseInterface */
@@ -38,12 +24,9 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 	/** @var string */
 	private $responseXml = '';
 
-	/**
-	 * @param string $baseUrl
-	 */
-	public function __construct($baseUrl) {
-		$this->baseUrl = $baseUrl;
-
+	public function __construct(
+		private string $baseUrl,
+	) {
 		// in case of ci deployment we take the server url from the environment
 		$testServerUrl = getenv('TEST_SERVER_URL');
 		if ($testServerUrl !== false) {
@@ -51,14 +34,13 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 		}
 	}
 
-	/** @BeforeScenario */
+	#[BeforeScenario]
 	public function setUpScenario() {
 		$this->client = new Client();
 		$this->responseXml = '';
 	}
 
-
-	/** @AfterScenario */
+	#[AfterScenario]
 	public function afterScenario() {
 		$davUrl = $this->baseUrl . '/remote.php/dav/addressbooks/users/admin/MyAddressbook';
 		try {
@@ -76,13 +58,13 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @When :user requests addressbook :addressBook with statuscode :statusCode on the endpoint :endpoint
 	 * @param string $user
 	 * @param string $addressBook
 	 * @param int $statusCode
 	 * @param string $endpoint
 	 * @throws \Exception
 	 */
+	#[When(':user requests addressbook :addressBook with statuscode :statusCode on the endpoint :endpoint')]
 	public function requestsAddressbookWithStatuscodeOnTheEndpoint($user, $addressBook, $statusCode, $endpoint) {
 		$davUrl = $this->baseUrl . $endpoint . $addressBook;
 
@@ -121,14 +103,14 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @Given :user creates an addressbook named :addressBook with statuscode :statusCode
 	 * @param string $user
 	 * @param string $addressBook
 	 * @param int $statusCode
 	 * @throws \Exception
 	 */
+	#[Given(':user creates an addressbook named :addressBook with statuscode :statusCode')]
 	public function createsAnAddressbookNamedWithStatuscode($user, $addressBook, $statusCode) {
-		$davUrl = $this->baseUrl . '/remote.php/dav/addressbooks/users/'.$user.'/'.$addressBook;
+		$davUrl = $this->baseUrl . '/remote.php/dav/addressbooks/users/' . $user . '/' . $addressBook;
 		$password = ($user === 'admin') ? 'admin' : '123456';
 
 		$this->response = $this->client->request(
@@ -141,7 +123,7 @@ class CardDavContext implements \Behat\Behat\Context\Context {
       <d:prop>
         <d:resourcetype>
             <d:collection />,<card:addressbook />
-          </d:resourcetype>,<d:displayname>'.$addressBook.'</d:displayname>
+          </d:resourcetype>,<d:displayname>' . $addressBook . '</d:displayname>
       </d:prop>
     </d:set>
   </d:mkcol>',
@@ -167,10 +149,10 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @When The CardDAV exception is :message
 	 * @param string $message
 	 * @throws \Exception
 	 */
+	#[When('The CardDAV exception is :message')]
 	public function theCarddavExceptionIs($message) {
 		$result = $this->responseXml['value'][0]['value'];
 
@@ -186,10 +168,10 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @When The CardDAV error message is :arg1
 	 * @param string $message
 	 * @throws \Exception
 	 */
+	#[When('The CardDAV error message is :arg1')]
 	public function theCarddavErrorMessageIs($message) {
 		$result = $this->responseXml['value'][1]['value'];
 
@@ -204,11 +186,9 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 		}
 	}
 
-	/**
-	 * @Given :user uploads the contact :fileName to the addressbook :addressbook
-	 */
+	#[Given(':user uploads the contact :fileName to the addressbook :addressbook')]
 	public function uploadsTheContactToTheAddressbook($user, $fileName, $addressBook) {
-		$davUrl = $this->baseUrl . '/remote.php/dav/addressbooks/users/'.$user.'/'.$addressBook . '/' . $fileName;
+		$davUrl = $this->baseUrl . '/remote.php/dav/addressbooks/users/' . $user . '/' . $addressBook . '/' . $fileName;
 		$password = ($user === 'admin') ? 'admin' : '123456';
 
 		$this->response = $this->client->request(
@@ -237,11 +217,9 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 		}
 	}
 
-	/**
-	 * @When Exporting the picture of contact :fileName from addressbook :addressBook as user :user
-	 */
+	#[When('Exporting the picture of contact :fileName from addressbook :addressBook as user :user')]
 	public function whenExportingThePictureOfContactFromAddressbookAsUser($fileName, $addressBook, $user) {
-		$davUrl = $this->baseUrl . '/remote.php/dav/addressbooks/users/'.$user.'/'.$addressBook . '/' . $fileName . '?photo=true';
+		$davUrl = $this->baseUrl . '/remote.php/dav/addressbooks/users/' . $user . '/' . $addressBook . '/' . $fileName . '?photo=true';
 		$password = ($user === 'admin') ? 'admin' : '123456';
 
 		try {
@@ -263,11 +241,9 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 		}
 	}
 
-	/**
-	 * @When Downloading the contact :fileName from addressbook :addressBook as user :user
-	 */
+	#[When('Downloading the contact :fileName from addressbook :addressBook as user :user')]
 	public function whenDownloadingTheContactFromAddressbookAsUser($fileName, $addressBook, $user) {
-		$davUrl = $this->baseUrl . '/remote.php/dav/addressbooks/users/'.$user.'/'.$addressBook . '/' . $fileName;
+		$davUrl = $this->baseUrl . '/remote.php/dav/addressbooks/users/' . $user . '/' . $addressBook . '/' . $fileName;
 		$password = ($user === 'admin') ? 'admin' : '123456';
 
 		try {
@@ -290,10 +266,10 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @Then The following HTTP headers should be set
 	 * @param \Behat\Gherkin\Node\TableNode $table
 	 * @throws \Exception
 	 */
+	#[Then('The following HTTP headers should be set')]
 	public function theFollowingHttpHeadersShouldBeSet(\Behat\Gherkin\Node\TableNode $table) {
 		foreach ($table->getTable() as $header) {
 			$headerName = $header[0];
@@ -309,6 +285,64 @@ class CardDavContext implements \Behat\Behat\Context\Context {
 					)
 				);
 			}
+		}
+	}
+
+	#[When(':user sends a create addressbook request to :addressbook on the endpoint :endpoint')]
+	public function sendsCreateAddressbookRequest(string $user, string $addressbook, string $endpoint) {
+		$davUrl = $this->baseUrl . $endpoint . $addressbook;
+		$password = ($user === 'admin') ? 'admin' : '123456';
+
+		try {
+			$this->response = $this->client->request(
+				'MKCOL',
+				$davUrl,
+				[
+					'body' => '<d:mkcol xmlns:card="urn:ietf:params:xml:ns:carddav"
+				  xmlns:d="DAV:">
+		<d:set>
+		  <d:prop>
+			<d:resourcetype>
+				<d:collection />,<card:addressbook />
+			  </d:resourcetype>,<d:displayname>' . $addressbook . '</d:displayname>
+		  </d:prop>
+		</d:set>
+	  </d:mkcol>',
+					'auth' => [
+						$user,
+						$password,
+					],
+					'headers' => [
+						'Content-Type' => 'application/xml;charset=UTF-8',
+					],
+				]
+			);
+		} catch (GuzzleException $e) {
+			$this->response = $e->getResponse();
+		}
+	}
+
+	/**
+	 * @param int $code
+	 * @throws \Exception
+	 */
+	#[Then('The CardDAV HTTP status code should be :code')]
+	public function theCarddavHttpStatusCodeShouldBe($code) {
+		if ((int)$code !== $this->response->getStatusCode()) {
+			throw new \Exception(
+				sprintf(
+					'Expected %s got %s',
+					(int)$code,
+					$this->response->getStatusCode()
+				)
+			);
+		}
+
+		$body = $this->response->getBody()->getContents();
+		if ($body && substr($body, 0, 1) === '<') {
+			$reader = new Sabre\Xml\Reader();
+			$reader->xml($body);
+			$this->responseXml = $reader->parse();
 		}
 	}
 }

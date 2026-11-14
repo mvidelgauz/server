@@ -1,31 +1,19 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_External\Lib\Auth;
 
 use OCA\Files_External\Lib\FrontendDefinitionTrait;
 use OCA\Files_External\Lib\IdentifierTrait;
+use OCA\Files_External\Lib\IFrontendDefinition;
+use OCA\Files_External\Lib\IIdentifier;
 use OCA\Files_External\Lib\StorageConfig;
 use OCA\Files_External\Lib\StorageModifierTrait;
 use OCA\Files_External\Lib\VisibilityTrait;
@@ -37,7 +25,7 @@ use OCA\Files_External\Lib\VisibilityTrait;
  * such as \OCP\IDB for database operations. This allows an authentication
  * mechanism to perform advanced operations based on provided information.
  *
- * An authenication scheme defines the parameter interface, common to the
+ * An authentication scheme defines the parameter interface, common to the
  * storage implementation, the backend and the authentication mechanism.
  * A storage implementation expects parameters according to the authentication
  * scheme, which are provided from the authentication mechanism.
@@ -50,12 +38,11 @@ use OCA\Files_External\Lib\VisibilityTrait;
  *  - StorageModifierTrait
  *      Object can affect storage mounting
  */
-class AuthMechanism implements \JsonSerializable {
+class AuthMechanism implements \JsonSerializable, IIdentifier, IFrontendDefinition {
 	/** Standard authentication schemes */
 	public const SCHEME_NULL = 'null';
 	public const SCHEME_BUILTIN = 'builtin';
 	public const SCHEME_PASSWORD = 'password';
-	public const SCHEME_OAUTH1 = 'oauth1';
 	public const SCHEME_OAUTH2 = 'oauth2';
 	public const SCHEME_PUBLICKEY = 'publickey';
 	public const SCHEME_OPENSTACK = 'openstack';
@@ -90,10 +77,9 @@ class AuthMechanism implements \JsonSerializable {
 
 	/**
 	 * Serialize into JSON for client-side JS
-	 *
-	 * @return array
 	 */
-	public function jsonSerialize() {
+	#[\Override]
+	public function jsonSerialize(): array {
 		$data = $this->jsonSerializeDefinition();
 		$data += $this->jsonSerializeIdentifier();
 

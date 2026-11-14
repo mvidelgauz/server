@@ -1,53 +1,36 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2018, Georg Ehrke
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Tests\unit\CalDAV;
 
+use OCA\DAV\AppInfo\Application;
 use OCA\DAV\CalDAV\Outbox;
-use OCP\IConfig;
+use OCA\DAV\ConfigLexicon;
+use OCP\IAppConfig;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class OutboxTest extends TestCase {
-
-	/** @var IConfig */
-	private $config;
-
-	/** @var Outbox */
-	private $outbox;
+	private IAppConfig&MockObject $appConfig;
+	private Outbox $outbox;
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->config = $this->createMock(IConfig::class);
-		$this->outbox = new Outbox($this->config, 'user-principal-123');
+		$this->appConfig = $this->createMock(IAppConfig::class);
+		$this->outbox = new Outbox($this->appConfig, 'user-principal-123');
 	}
 
-	public function testGetACLFreeBusyEnabled() {
-		$this->config->expects($this->once())
-			->method('getAppValue')
-			->with('dav', 'disableFreeBusy', 'no')
-			->willReturn('no');
+	public function testGetACLFreeBusyEnabled(): void {
+		$this->appConfig->expects($this->once())
+			->method('getValueBool')
+			->with(Application::APP_ID, ConfigLexicon::DISABLE_FREE_BUSY)
+			->willReturn(false);
 
 		$this->assertEquals([
 			[
@@ -78,11 +61,11 @@ class OutboxTest extends TestCase {
 		], $this->outbox->getACL());
 	}
 
-	public function testGetACLFreeBusyDisabled() {
-		$this->config->expects($this->once())
-			->method('getAppValue')
-			->with('dav', 'disableFreeBusy', 'no')
-			->willReturn('yes');
+	public function testGetACLFreeBusyDisabled(): void {
+		$this->appConfig->expects($this->once())
+			->method('getValueBool')
+			->with(Application::APP_ID, ConfigLexicon::DISABLE_FREE_BUSY)
+			->willReturn(true);
 
 		$this->assertEquals([
 			[

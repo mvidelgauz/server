@@ -1,37 +1,19 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bart Visscher <bartv@thisnet.nl>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Tobia De Koninck <tobia@ledfan.be>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC;
 
 use OCP\Constants;
 use OCP\Contacts\IManager;
 use OCP\IAddressBook;
+use OCP\IAddressBookEnabled;
 
 class ContactsManager implements IManager {
-
 	/**
 	 * This function is used to search and find contacts within the users address books.
 	 * In case $pattern is empty all contacts will be returned.
@@ -39,16 +21,47 @@ class ContactsManager implements IManager {
 	 * @param string $pattern which should match within the $searchProperties
 	 * @param array $searchProperties defines the properties within the query pattern should match
 	 * @param array $options = array() to define the search behavior
-	 * 	- 'escape_like_param' - If set to false wildcards _ and % are not escaped
-	 * 	- 'limit' - Set a numeric limit for the search results
-	 * 	- 'offset' - Set the offset for the limited search results
+	 *                       - 'types' boolean (since 15.0.0) If set to true, fields that come with a TYPE property will be an array
+	 *                       example: ['id' => 5, 'FN' => 'Thomas Tanghus', 'EMAIL' => ['type => 'HOME', 'value' => 'g@h.i']]
+	 *                       - 'escape_like_param' - If set to false wildcards _ and % are not escaped
+	 *                       - 'limit' - Set a numeric limit for the search results
+	 *                       - 'offset' - Set the offset for the limited search results
+	 *                       - 'enumeration' - (since 23.0.0) Whether user enumeration on system address book is allowed
+	 *                       - 'fullmatch' - (since 23.0.0) Whether matching on full detail in system address book is allowed
+	 *                       - 'strict_search' - (since 23.0.0) Whether the search pattern is full string or partial search
+	 * @psalm-param array{types?: bool, escape_like_param?: bool, limit?: int, offset?: int, enumeration?: bool, fullmatch?: bool, strict_search?: bool} $options
 	 * @return array an array of contacts which are arrays of key-value-pairs
 	 */
+	#[\Override]
 	public function search($pattern, $searchProperties = [], $options = []) {
 		$this->loadAddressBooks();
 		$result = [];
 		foreach ($this->addressBooks as $addressBook) {
-			$r = $addressBook->search($pattern, $searchProperties, $options);
+			if ($addressBook instanceof IAddressBookEnabled && !$addressBook->isEnabled()) {
+				continue;
+			}
+			$searchOptions = $options;
+			$strictSearch = array_key_exists('strict_search', $options) && $options['strict_search'] === true;
+
+			if ($addressBook->isSystemAddressBook()) {
+				$enumeration = !\array_key_exists('enumeration', $options) || $options['enumeration'] !== false;
+				$fullMatch = !\array_key_exists('fullmatch', $options) || $options['fullmatch'] !== false;
+
+				if (!$enumeration && !$fullMatch) {
+					// No access to system address book AND no full match allowed
+					continue;
+				}
+
+				if ($strictSearch) {
+					$searchOptions['wildcard'] = false;
+				} else {
+					$searchOptions['wildcard'] = $enumeration;
+				}
+			} else {
+				$searchOptions['wildcard'] = !$strictSearch;
+			}
+
+			$r = $addressBook->search($pattern, $searchProperties, $searchOptions);
 			$contacts = [];
 			foreach ($r as $c) {
 				$c['addressbook-key'] = $addressBook->getKey();
@@ -63,21 +76,22 @@ class ContactsManager implements IManager {
 	/**
 	 * This function can be used to delete the contact identified by the given id
 	 *
-	 * @param object $id the unique identifier to a contact
-	 * @param string $address_book_key identifier of the address book in which the contact shall be deleted
+	 * @param int $id the unique identifier to a contact
+	 * @param string $addressBookKey identifier of the address book in which the contact shall be deleted
 	 * @return bool successful or not
 	 */
-	public function delete($id, $address_book_key) {
-		$addressBook = $this->getAddressBook($address_book_key);
+	#[\Override]
+	public function delete($id, $addressBookKey) {
+		$addressBook = $this->getAddressBook($addressBookKey);
 		if (!$addressBook) {
-			return null;
+			return false;
 		}
 
 		if ($addressBook->getPermissions() & Constants::PERMISSION_DELETE) {
 			return $addressBook->delete($id);
 		}
 
-		return null;
+		return false;
 	}
 
 	/**
@@ -85,11 +99,12 @@ class ContactsManager implements IManager {
 	 * Otherwise the contact will be updated by replacing the entire data set.
 	 *
 	 * @param array $properties this array if key-value-pairs defines a contact
-	 * @param string $address_book_key identifier of the address book in which the contact shall be created or updated
-	 * @return array representing the contact just created or updated
+	 * @param string $addressBookKey identifier of the address book in which the contact shall be created or updated
+	 * @return ?array representing the contact just created or updated
 	 */
-	public function createOrUpdate($properties, $address_book_key) {
-		$addressBook = $this->getAddressBook($address_book_key);
+	#[\Override]
+	public function createOrUpdate($properties, $addressBookKey) {
+		$addressBook = $this->getAddressBook($addressBookKey);
 		if (!$addressBook) {
 			return null;
 		}
@@ -106,13 +121,15 @@ class ContactsManager implements IManager {
 	 *
 	 * @return bool true if enabled, false if not
 	 */
-	public function isEnabled() {
+	#[\Override]
+	public function isEnabled(): bool {
 		return !empty($this->addressBooks) || !empty($this->addressBookLoaders);
 	}
 
 	/**
 	 * @param IAddressBook $addressBook
 	 */
+	#[\Override]
 	public function registerAddressBook(IAddressBook $addressBook) {
 		$this->addressBooks[$addressBook->getKey()] = $addressBook;
 	}
@@ -120,26 +137,9 @@ class ContactsManager implements IManager {
 	/**
 	 * @param IAddressBook $addressBook
 	 */
+	#[\Override]
 	public function unregisterAddressBook(IAddressBook $addressBook) {
 		unset($this->addressBooks[$addressBook->getKey()]);
-	}
-
-	/**
-	 * Return a list of the user's addressbooks display names
-	 * ! The addressBook displayName are not unique, please use getUserAddressBooks
-	 *
-	 * @return IAddressBook[]
-	 * @since 6.0.0
-	 * @deprecated 16.0.0 - Use `$this->getUserAddressBooks()` instead
-	 */
-	public function getAddressBooks() {
-		$this->loadAddressBooks();
-		$result = [];
-		foreach ($this->addressBooks as $addressBook) {
-			$result[$addressBook->getKey()] = $addressBook->getDisplayName();
-		}
-
-		return $result;
 	}
 
 	/**
@@ -148,14 +148,32 @@ class ContactsManager implements IManager {
 	 * @return IAddressBook[]
 	 * @since 16.0.0
 	 */
+	#[\Override]
 	public function getUserAddressBooks(): array {
 		$this->loadAddressBooks();
 		return $this->addressBooks;
 	}
 
+	#[\Override]
+	public function getAddressBooksForPrincipal(string $principalUri, array $addressBookUris = []): array {
+		$this->loadAddressBooks();
+		$result = [];
+		foreach ($this->addressBooks as $addressBook) {
+			if (!method_exists($addressBook, 'getPrincipalUri')) {
+				continue;
+			}
+
+			if ($addressBook->getPrincipalUri() === $principalUri && in_array($addressBook->getUri(), $addressBookUris, true)) {
+				$result[] = $addressBook;
+			}
+		}
+		return $result;
+	}
+
 	/**
 	 * removes all registered address book instances
 	 */
+	#[\Override]
 	public function clear() {
 		$this->addressBooks = [];
 		$this->addressBookLoaders = [];
@@ -177,17 +195,15 @@ class ContactsManager implements IManager {
 	 *
 	 * @param \Closure $callable
 	 */
+	#[\Override]
 	public function register(\Closure $callable) {
 		$this->addressBookLoaders[] = $callable;
 	}
 
 	/**
 	 * Get (and load when needed) the address book for $key
-	 *
-	 * @param string $addressBookKey
-	 * @return IAddressBook
 	 */
-	protected function getAddressBook($addressBookKey) {
+	protected function getAddressBook(string $addressBookKey): ?IAddressBook {
 		$this->loadAddressBooks();
 		if (!array_key_exists($addressBookKey, $this->addressBooks)) {
 			return null;

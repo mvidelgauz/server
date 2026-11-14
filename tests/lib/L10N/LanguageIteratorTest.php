@@ -1,51 +1,28 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2018 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\L10N;
 
 use OC\L10N\LanguageIterator;
 use OCP\IConfig;
-use OCP\IUser;
 use Test\TestCase;
 
 class LanguageIteratorTest extends TestCase {
-	/** @var IUser|\PHPUnit\Framework\MockObject\MockObject */
-	protected $user;
-	/** @var IConfig|\PHPUnit\Framework\MockObject\MockObject */
-	protected $config;
 	/** @var LanguageIterator */
 	protected $iterator;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->user = $this->createMock(IUser::class);
-		$this->config = $this->createMock(IConfig::class);
-
-		$this->iterator = new LanguageIterator($this->user, $this->config);
+		$this->iterator = $this->createInstanceWithMocks(LanguageIterator::class);
 	}
 
-	public function languageSettingsProvider() {
+	public static function languageSettingsProvider(): array {
 		return [
 			// all language settings set
 			[ 'de_DE', 'es_CU', 'zh_TW', ['de_DE', 'de', 'es_CU', 'es', 'zh_TW', 'zh', 'en']],
@@ -70,21 +47,22 @@ class LanguageIteratorTest extends TestCase {
 			[ 'de', null, 'en', ['de', 'en', 'en']],
 			// nothing is set
 			[ false, null, 'en', ['en', 'en']],
-
 		];
 	}
 
-	/**
-	 * @dataProvider languageSettingsProvider
-	 */
-	public function testIterator($forcedLang, $userLang, $sysLang, $expectedValues) {
-		$this->config->expects($this->any())
+	#[\PHPUnit\Framework\Attributes\DataProvider('languageSettingsProvider')]
+	public function testIterator($forcedLang, $userLang, $sysLang, $expectedValues): void {
+		$this->getAutoMock(IConfig::class)->expects($this->any())
 			->method('getSystemValue')
 			->willReturnMap([
 				['force_language', false, $forcedLang],
+			]);
+		$this->getAutoMock(IConfig::class)->expects($this->any())
+			->method('getSystemValueString')
+			->willReturnMap([
 				['default_language', 'en', $sysLang],
 			]);
-		$this->config->expects($this->any())
+		$this->getAutoMock(IConfig::class)->expects($this->any())
 			->method('getUserValue')
 			->willReturn($userLang);
 

@@ -1,83 +1,56 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Bernhard Posselt <dev@bernhard-posselt.com>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files\Node;
 
 use OC\Files\Filesystem;
-use OC\Files\Mount\MoveableMount;
+use OC\Files\Utils\PathHelper;
+use OC\Files\View;
+use OCP\Constants;
+use OCP\EventDispatcher\GenericEvent;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Files\Cache\ICacheEntry;
+use OCP\Files\DavUtil;
 use OCP\Files\FileInfo;
 use OCP\Files\InvalidPathException;
+use OCP\Files\IRootFolder;
+use OCP\Files\Mount\IMovableMount;
+use OCP\Files\Node as INode;
 use OCP\Files\NotFoundException;
 use OCP\Files\NotPermittedException;
 use OCP\Lock\LockedException;
-use Symfony\Component\EventDispatcher\GenericEvent;
+use OCP\PreConditionNotMetException;
+use OCP\Server;
 
-// FIXME: this class really should be abstract
-class Node implements \OCP\Files\Node {
+// FIXME: this class really should be abstract (+1)
+class Node implements INode {
 	/**
-	 * @var \OC\Files\View $view
-	 */
-	protected $view;
-
-	/**
-	 * @var \OC\Files\Node\Root $root
-	 */
-	protected $root;
-
-	/**
-	 * @var string $path
-	 */
-	protected $path;
-
-	/**
-	 * @var \OCP\Files\FileInfo
-	 */
-	protected $fileInfo;
-
-	/**
-	 * @param \OC\Files\View $view
-	 * @param \OCP\Files\IRootFolder $root
 	 * @param string $path
 	 * @param FileInfo $fileInfo
 	 */
-	public function __construct($root, $view, $path, $fileInfo = null) {
-		$this->view = $view;
-		$this->root = $root;
-		$this->path = $path;
-		$this->fileInfo = $fileInfo;
+	public function __construct(
+		protected IRootFolder $root,
+		protected View $view,
+		protected $path,
+		protected ?FileInfo $fileInfo = null,
+		protected ?INode $parent = null,
+		private bool $infoHasSubMountsIncluded = true,
+	) {
+		if (Filesystem::normalizePath($view->getRoot()) !== '/') {
+			throw new PreConditionNotMetException('The view passed to the node should not have any fake root set');
+		}
 	}
 
 	/**
 	 * Creates a Node of the same type that represents a non-existing path
 	 *
 	 * @param string $path path
-	 * @return string non-existing node class
+	 * @return Node non-existing node
 	 * @throws \Exception
 	 */
 	protected function createNonExistingNode($path) {
@@ -91,17 +64,23 @@ class Node implements \OCP\Files\Node {
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
-	public function getFileInfo() {
-		if (!Filesystem::isValidPath($this->path)) {
-			throw new InvalidPathException();
-		}
+	public function getFileInfo(bool $includeMountPoint = true) {
 		if (!$this->fileInfo) {
-			$fileInfo = $this->view->getFileInfo($this->path);
+			if (!Filesystem::isValidPath($this->path)) {
+				throw new InvalidPathException();
+			}
+			$fileInfo = $this->view->getFileInfo($this->path, $includeMountPoint);
+			$this->infoHasSubMountsIncluded = $includeMountPoint;
 			if ($fileInfo instanceof FileInfo) {
 				$this->fileInfo = $fileInfo;
 			} else {
 				throw new NotFoundException();
 			}
+		} elseif ($includeMountPoint && !$this->infoHasSubMountsIncluded && $this instanceof Folder) {
+			if ($this->fileInfo instanceof \OC\Files\FileInfo) {
+				$this->view->addSubMounts($this->fileInfo);
+			}
+			$this->infoHasSubMountsIncluded = true;
 		}
 		return $this->fileInfo;
 	}
@@ -109,12 +88,22 @@ class Node implements \OCP\Files\Node {
 	/**
 	 * @param string[] $hooks
 	 */
-	protected function sendHooks($hooks, array $args = null) {
+	protected function sendHooks($hooks, ?array $args = null) {
 		$args = !empty($args) ? $args : [$this];
-		$dispatcher = \OC::$server->getEventDispatcher();
+		/** @var IEventDispatcher $dispatcher */
+		$dispatcher = Server::get(IEventDispatcher::class);
 		foreach ($hooks as $hook) {
-			$this->root->emit('\OC\Files', $hook, $args);
-			$dispatcher->dispatch('\OCP\Files::' . $hook, new GenericEvent($args));
+			if ($hook === 'postWrite' && method_exists($this->root, 'emit')) {
+				$this->root->emit('\OC\Files', $hook, $args);
+			}
+
+			if (in_array($hook, ['preWrite', 'postWrite', 'preCreate', 'postCreate', 'preTouch', 'postTouch', 'preDelete', 'postDelete'], true)) {
+				$event = new GenericEvent($args[0]);
+			} else {
+				$event = new GenericEvent($args);
+			}
+
+			$dispatcher->dispatch('\OCP\Files::' . $hook, $event);
 		}
 	}
 
@@ -128,6 +117,7 @@ class Node implements \OCP\Files\Node {
 		return ($this->getPermissions() & $permissions) === $permissions;
 	}
 
+	#[\Override]
 	public function delete() {
 	}
 
@@ -137,8 +127,9 @@ class Node implements \OCP\Files\Node {
 	 * @throws NotFoundException
 	 * @throws NotPermittedException
 	 */
+	#[\Override]
 	public function touch($mtime = null) {
-		if ($this->checkPermissions(\OCP\Constants::PERMISSION_UPDATE)) {
+		if ($this->checkPermissions(Constants::PERMISSION_UPDATE)) {
 			$this->sendHooks(['preTouch']);
 			$this->view->touch($this->path, $mtime);
 			$this->sendHooks(['postTouch']);
@@ -153,18 +144,19 @@ class Node implements \OCP\Files\Node {
 		}
 	}
 
-	/**
-	 * @return \OC\Files\Storage\Storage
-	 * @throws \OCP\Files\NotFoundException
-	 */
+	#[\Override]
 	public function getStorage() {
-		[$storage,] = $this->view->resolvePath($this->path);
+		$storage = $this->getMountPoint()->getStorage();
+		if (!$storage) {
+			throw new \Exception('No storage for node');
+		}
 		return $storage;
 	}
 
 	/**
 	 * @return string
 	 */
+	#[\Override]
 	public function getPath() {
 		return $this->path;
 	}
@@ -172,9 +164,9 @@ class Node implements \OCP\Files\Node {
 	/**
 	 * @return string
 	 */
+	#[\Override]
 	public function getInternalPath() {
-		[, $internalPath] = $this->view->resolvePath($this->path);
-		return $internalPath;
+		return $this->getFileInfo(false)->getInternalPath();
 	}
 
 	/**
@@ -182,13 +174,15 @@ class Node implements \OCP\Files\Node {
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
+	#[\Override]
 	public function getId() {
-		return $this->getFileInfo()->getId();
+		return $this->getFileInfo(false)->getId() ?? -1;
 	}
 
 	/**
 	 * @return array
 	 */
+	#[\Override]
 	public function stat() {
 		return $this->view->stat($this->path);
 	}
@@ -198,17 +192,19 @@ class Node implements \OCP\Files\Node {
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
+	#[\Override]
 	public function getMTime() {
 		return $this->getFileInfo()->getMTime();
 	}
 
 	/**
 	 * @param bool $includeMounts
-	 * @return int
+	 * @return int|float
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
-	public function getSize($includeMounts = true) {
+	#[\Override]
+	public function getSize($includeMounts = true): int|float {
 		return $this->getFileInfo()->getSize($includeMounts);
 	}
 
@@ -217,6 +213,7 @@ class Node implements \OCP\Files\Node {
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
+	#[\Override]
 	public function getEtag() {
 		return $this->getFileInfo()->getEtag();
 	}
@@ -226,8 +223,9 @@ class Node implements \OCP\Files\Node {
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
+	#[\Override]
 	public function getPermissions() {
-		return $this->getFileInfo()->getPermissions();
+		return $this->getFileInfo(false)->getPermissions();
 	}
 
 	/**
@@ -235,8 +233,9 @@ class Node implements \OCP\Files\Node {
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
+	#[\Override]
 	public function isReadable() {
-		return $this->getFileInfo()->isReadable();
+		return $this->getFileInfo(false)->isReadable();
 	}
 
 	/**
@@ -244,8 +243,9 @@ class Node implements \OCP\Files\Node {
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
+	#[\Override]
 	public function isUpdateable() {
-		return $this->getFileInfo()->isUpdateable();
+		return $this->getFileInfo(false)->isUpdateable();
 	}
 
 	/**
@@ -253,8 +253,9 @@ class Node implements \OCP\Files\Node {
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
+	#[\Override]
 	public function isDeletable() {
-		return $this->getFileInfo()->isDeletable();
+		return $this->getFileInfo(false)->isDeletable();
 	}
 
 	/**
@@ -262,8 +263,9 @@ class Node implements \OCP\Files\Node {
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
+	#[\Override]
 	public function isShareable() {
-		return $this->getFileInfo()->isShareable();
+		return $this->getFileInfo(false)->isShareable();
 	}
 
 	/**
@@ -271,24 +273,47 @@ class Node implements \OCP\Files\Node {
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 */
+	#[\Override]
 	public function isCreatable() {
-		return $this->getFileInfo()->isCreatable();
+		return $this->getFileInfo(false)->isCreatable();
 	}
 
-	/**
-	 * @return Node
-	 */
-	public function getParent() {
-		$newPath = dirname($this->path);
-		if ($newPath === '' || $newPath === '.' || $newPath === '/') {
-			return $this->root;
+	#[\Override]
+	public function getParent(): INode|IRootFolder {
+		if ($this->parent === null) {
+			$newPath = dirname($this->path);
+			if ($newPath === '' || $newPath === '.' || $newPath === '/') {
+				return $this->root;
+			}
+
+			// Manually fetch the parent if the current node doesn't have a file info yet
+			try {
+				$fileInfo = $this->getFileInfo(false);
+			} catch (NotFoundException) {
+				$this->parent = $this->root->get($newPath);
+				/** @var \OCP\Files\Folder $this->parent */
+				return $this->parent;
+			}
+
+			// gather the metadata we already know about our parent
+			$parentData = [
+				'path' => $newPath,
+				'fileid' => $fileInfo->getParentId(),
+			];
+
+			// and create lazy folder with it instead of always querying
+			$this->parent = new LazyFolder($this->root, function () use ($newPath) {
+				return $this->root->get($newPath);
+			}, $parentData);
 		}
-		return $this->root->get($newPath);
+
+		return $this->parent;
 	}
 
 	/**
 	 * @return string
 	 */
+	#[\Override]
 	public function getName() {
 		return basename($this->path);
 	}
@@ -298,23 +323,7 @@ class Node implements \OCP\Files\Node {
 	 * @return string
 	 */
 	protected function normalizePath($path) {
-		if ($path === '' or $path === '/') {
-			return '/';
-		}
-		//no windows style slashes
-		$path = str_replace('\\', '/', $path);
-		//add leading slash
-		if ($path[0] !== '/') {
-			$path = '/' . $path;
-		}
-		//remove duplicate slashes
-		while (strpos($path, '//') !== false) {
-			$path = str_replace('//', '/', $path);
-		}
-		//remove trailing slash
-		$path = rtrim($path, '/');
-
-		return $path;
+		return PathHelper::normalizePath($path);
 	}
 
 	/**
@@ -324,58 +333,63 @@ class Node implements \OCP\Files\Node {
 	 * @return bool
 	 */
 	public function isValidPath($path) {
-		if (!$path || $path[0] !== '/') {
-			$path = '/' . $path;
-		}
-		if (strstr($path, '/../') || strrchr($path, '/') === '/..') {
-			return false;
-		}
-		return true;
+		return Filesystem::isValidPath($path);
 	}
 
+	#[\Override]
 	public function isMounted() {
-		return $this->getFileInfo()->isMounted();
+		return $this->getFileInfo(false)->isMounted();
 	}
 
+	#[\Override]
 	public function isShared() {
-		return $this->getFileInfo()->isShared();
+		return $this->getFileInfo(false)->isShared();
 	}
 
-	public function getMimeType() {
-		return $this->getFileInfo()->getMimetype();
+	#[\Override]
+	public function getMimeType(): string {
+		return $this->getFileInfo(false)->getMimetype();
 	}
 
+	#[\Override]
 	public function getMimePart() {
-		return $this->getFileInfo()->getMimePart();
+		return $this->getFileInfo(false)->getMimePart();
 	}
 
+	#[\Override]
 	public function getType() {
-		return $this->getFileInfo()->getType();
+		return $this->getFileInfo(false)->getType();
 	}
 
+	#[\Override]
 	public function isEncrypted() {
-		return $this->getFileInfo()->isEncrypted();
+		return $this->getFileInfo(false)->isEncrypted();
 	}
 
+	#[\Override]
 	public function getMountPoint() {
-		return $this->getFileInfo()->getMountPoint();
+		return $this->getFileInfo(false)->getMountPoint();
 	}
 
+	#[\Override]
 	public function getOwner() {
-		return $this->getFileInfo()->getOwner();
+		return $this->getFileInfo(false)->getOwner();
 	}
 
+	#[\Override]
 	public function getChecksum() {
 	}
 
+	#[\Override]
 	public function getExtension(): string {
-		return $this->getFileInfo()->getExtension();
+		return $this->getFileInfo(false)->getExtension();
 	}
 
 	/**
 	 * @param int $type \OCP\Lock\ILockingProvider::LOCK_SHARED or \OCP\Lock\ILockingProvider::LOCK_EXCLUSIVE
 	 * @throws LockedException
 	 */
+	#[\Override]
 	public function lock($type) {
 		$this->view->lockFile($this->path, $type);
 	}
@@ -384,6 +398,7 @@ class Node implements \OCP\Files\Node {
 	 * @param int $type \OCP\Lock\ILockingProvider::LOCK_SHARED or \OCP\Lock\ILockingProvider::LOCK_EXCLUSIVE
 	 * @throws LockedException
 	 */
+	#[\Override]
 	public function changeLock($type) {
 		$this->view->changeLock($this->path, $type);
 	}
@@ -392,21 +407,23 @@ class Node implements \OCP\Files\Node {
 	 * @param int $type \OCP\Lock\ILockingProvider::LOCK_SHARED or \OCP\Lock\ILockingProvider::LOCK_EXCLUSIVE
 	 * @throws LockedException
 	 */
+	#[\Override]
 	public function unlock($type) {
 		$this->view->unlockFile($this->path, $type);
 	}
 
 	/**
 	 * @param string $targetPath
-	 * @return \OC\Files\Node\Node
+	 * @return INode
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 * @throws NotPermittedException if copy not allowed or failed
 	 */
+	#[\Override]
 	public function copy($targetPath) {
 		$targetPath = $this->normalizePath($targetPath);
 		$parent = $this->root->get(dirname($targetPath));
-		if ($parent instanceof Folder and $this->isValidPath($targetPath) and $parent->isCreatable()) {
+		if ($parent instanceof Folder && $this->isValidPath($targetPath) && $parent->isCreatable()) {
 			$nonExisting = $this->createNonExistingNode($targetPath);
 			$this->sendHooks(['preCopy'], [$this, $nonExisting]);
 			$this->sendHooks(['preWrite'], [$nonExisting]);
@@ -424,29 +441,53 @@ class Node implements \OCP\Files\Node {
 
 	/**
 	 * @param string $targetPath
-	 * @return \OC\Files\Node\Node
+	 * @return INode
 	 * @throws InvalidPathException
 	 * @throws NotFoundException
 	 * @throws NotPermittedException if move not allowed or failed
 	 * @throws LockedException
 	 */
+	#[\Override]
 	public function move($targetPath) {
 		$targetPath = $this->normalizePath($targetPath);
 		$parent = $this->root->get(dirname($targetPath));
 		if (
-			$parent instanceof Folder and
-			$this->isValidPath($targetPath) and
-			(
-				$parent->isCreatable() ||
-				($parent->getInternalPath() === '' && $parent->getMountPoint() instanceof MoveableMount)
+			($parent instanceof Folder)
+			&& $this->isValidPath($targetPath)
+			&& (
+				$parent->isCreatable()
+				|| (
+					$parent->getInternalPath() === ''
+					&& ($parent->getMountPoint() instanceof IMovableMount)
+				)
 			)
 		) {
+			if (dirname($this->path) === dirname($targetPath)) {
+				$canMove = DavUtil::canRename($this, $parent);
+			} else {
+				// the source is removed from its folder, so it needs to be deletable unless it is a movable mount point
+				$canMove = $this->isDeletable()
+					|| ($this->getInternalPath() === '' && $this->getMountPoint() instanceof IMovableMount);
+			}
+			if (!$canMove) {
+				throw new NotPermittedException('No permission to move ' . $this->path);
+			}
+
 			$nonExisting = $this->createNonExistingNode($targetPath);
 			$this->sendHooks(['preRename'], [$this, $nonExisting]);
 			$this->sendHooks(['preWrite'], [$nonExisting]);
 			if (!$this->view->rename($this->path, $targetPath)) {
 				throw new NotPermittedException('Could not move ' . $this->path . ' to ' . $targetPath);
 			}
+
+			$mountPoint = $this->getMountPoint();
+			if ($mountPoint) {
+				// update the cached fileinfo with the new (internal) path
+				/** @var \OC\Files\FileInfo $oldFileInfo */
+				$oldFileInfo = $this->getFileInfo();
+				$this->fileInfo = new \OC\Files\FileInfo($targetPath, $oldFileInfo->getStorage(), $mountPoint->getInternalPath($targetPath), $oldFileInfo->getData(), $mountPoint, $oldFileInfo->getOwner());
+			}
+
 			$targetNode = $this->root->get($targetPath);
 			$this->sendHooks(['postRename'], [$this, $targetNode]);
 			$this->sendHooks(['postWrite'], [$targetNode]);
@@ -457,11 +498,37 @@ class Node implements \OCP\Files\Node {
 		}
 	}
 
+	#[\Override]
 	public function getCreationTime(): int {
 		return $this->getFileInfo()->getCreationTime();
 	}
 
+	#[\Override]
 	public function getUploadTime(): int {
 		return $this->getFileInfo()->getUploadTime();
+	}
+
+	#[\Override]
+	public function getLastActivity(): int {
+		return $this->getFileInfo()->getLastActivity();
+	}
+
+	#[\Override]
+	public function getParentId(): int {
+		return $this->getFileInfo()->getParentId();
+	}
+
+	/**
+	 * @inheritDoc
+	 * @return array<string, int|string|bool|float|string[]|int[]>
+	 */
+	#[\Override]
+	public function getMetadata(): array {
+		return $this->getFileInfo()->getMetadata();
+	}
+
+	#[\Override]
+	public function getData(): ICacheEntry {
+		return $this->getFileInfo()->getData();
 	}
 }

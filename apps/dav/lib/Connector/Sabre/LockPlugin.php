@@ -1,29 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Jaakko Salo <jaakkos@gmail.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Stefan Weil <sw@weilnetz.de>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Connector\Sabre;
 
 use OCA\DAV\Connector\Sabre\Exception\FileLocked;
@@ -51,6 +33,7 @@ class LockPlugin extends ServerPlugin {
 	/**
 	 * {@inheritdoc}
 	 */
+	#[\Override]
 	public function initialize(\Sabre\DAV\Server $server) {
 		$this->server = $server;
 		$this->server->on('beforeMethod:*', [$this, 'getLock'], 50);
@@ -61,7 +44,7 @@ class LockPlugin extends ServerPlugin {
 	public function getLock(RequestInterface $request) {
 		// we can't listen on 'beforeMethod:PUT' due to order of operations with setting up the tree
 		// so instead we limit ourselves to the PUT method manually
-		if ($request->getMethod() !== 'PUT' || isset($_SERVER['HTTP_OC_CHUNKED'])) {
+		if ($request->getMethod() !== 'PUT') {
 			return;
 		}
 		try {
@@ -84,7 +67,7 @@ class LockPlugin extends ServerPlugin {
 		if ($this->isLocked === false) {
 			return;
 		}
-		if ($request->getMethod() !== 'PUT' || isset($_SERVER['HTTP_OC_CHUNKED'])) {
+		if ($request->getMethod() !== 'PUT') {
 			return;
 		}
 		try {

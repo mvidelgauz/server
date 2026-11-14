@@ -1,75 +1,75 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_External\Tests\Controller;
 
 use OC\User\User;
 use OCA\Files_External\Controller\UserStoragesController;
+use OCA\Files_External\Lib\Storage\SMB;
 use OCA\Files_External\Lib\StorageConfig;
 use OCA\Files_External\Service\BackendService;
+use OCA\Files_External\Service\UserStoragesService;
 use OCP\AppFramework\Http;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\IConfig;
 use OCP\IGroupManager;
 use OCP\IL10N;
-use OCP\ILogger;
 use OCP\IRequest;
 use OCP\IUserSession;
-use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Psr\Log\LoggerInterface;
 
-class UserStoragesControllerTest extends StoragesControllerTest {
+class UserStoragesControllerTest extends StoragesControllerTestCase {
 
 	/**
 	 * @var array
 	 */
-	private $oldAllowedBackends;
+	private array $oldAllowedBackends;
 
 	protected function setUp(): void {
 		parent::setUp();
-		$this->service = $this->getMockBuilder('\OCA\Files_External\Service\UserStoragesService')
-			->disableOriginalConstructor()
-			->getMock();
+		$this->service = $this->createMock(UserStoragesService::class);
 
 		$this->service->method('getVisibilityType')
 			->willReturn(BackendService::VISIBILITY_PERSONAL);
 
+		$this->controller = $this->createController(true);
+	}
+
+	private function createController(bool $allowCreateLocal = true) {
 		$session = $this->createMock(IUserSession::class);
 		$session->method('getUser')
-			->willReturn(new User('test', null, $this->createMock(EventDispatcherInterface::class)));
+			->willReturn(new User('test', null, $this->createMock(IEventDispatcher::class)));
 
-		$this->controller = new UserStoragesController(
+		$config = $this->createMock(IConfig::class);
+		$config->method('getSystemValue')
+			->with('files_external_allow_create_new_local', true)
+			->willReturn($allowCreateLocal);
+
+		return new UserStoragesController(
 			'files_external',
 			$this->createMock(IRequest::class),
 			$this->createMock(IL10N::class),
 			$this->service,
-			$this->createMock(ILogger::class),
+			$this->createMock(LoggerInterface::class),
 			$session,
-			$this->createMock(IGroupManager::class)
+			$this->createMock(IGroupManager::class),
+			$config,
+			$this->backendService,
 		);
 	}
 
-	public function testAddOrUpdateStorageDisallowedBackend() {
+	public function testAddLocalStorageWhenDisabled(): void {
+		$this->controller = $this->createController(false);
+		parent::testAddLocalStorageWhenDisabled();
+	}
+
+	public function testAddOrUpdateStorageDisallowedBackend(): void {
 		$backend = $this->getBackendMock();
 		$backend->method('isVisibleFor')
 			->with(BackendService::VISIBILITY_PERSONAL)
@@ -92,7 +92,7 @@ class UserStoragesControllerTest extends StoragesControllerTest {
 
 		$response = $this->controller->create(
 			'mount',
-			'\OCA\Files_External\Lib\Storage\SMB',
+			SMB::class,
 			'\Auth\Mechanism',
 			[],
 			[],
@@ -106,7 +106,7 @@ class UserStoragesControllerTest extends StoragesControllerTest {
 		$response = $this->controller->update(
 			1,
 			'mount',
-			'\OCA\Files_External\Lib\Storage\SMB',
+			SMB::class,
 			'\Auth\Mechanism',
 			[],
 			[],

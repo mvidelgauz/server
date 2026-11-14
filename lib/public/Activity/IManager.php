@@ -1,32 +1,17 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCP\Activity;
+
+use OCP\Activity\Exceptions\FilterNotFoundException;
+use OCP\Activity\Exceptions\IncompleteActivityException;
+use OCP\Activity\Exceptions\SettingNotFoundException;
 
 /**
  * Interface IManager
@@ -61,10 +46,25 @@ interface IManager {
 	 *  - setObject()
 	 *
 	 * @param IEvent $event
-	 * @throws \BadMethodCallException if required values have not been set
+	 * @throws IncompleteActivityException if required values have not been set
 	 * @since 8.2.0
+	 * @since 30.0.0 throws {@see IncompleteActivityException} instead of \BadMethodCallException
 	 */
 	public function publish(IEvent $event): void;
+
+	/**
+	 * Bulk publish an event for multiple users
+	 * taking into account the app specific activity settings
+	 *
+	 * Make sure to call at least the following methods before sending an Event:
+	 *  - setApp()
+	 *  - setType()
+	 *
+	 * @param IEvent $event
+	 * @throws IncompleteActivityException if required values have not been set
+	 * @since 32.0.0
+	 */
+	public function bulkPublish(IEvent $event, array $affectedUserIds, ISetting $setting): void;
 
 	/**
 	 * In order to improve lazy loading a closure can be registered which will be called in case
@@ -92,8 +92,9 @@ interface IManager {
 	/**
 	 * @param string $id
 	 * @return IFilter
-	 * @throws \InvalidArgumentException when the filter was not found
+	 * @throws FilterNotFoundException when the filter was not found
 	 * @since 11.0.0
+	 * @since 30.0.0 throws {@see FilterNotFoundException} instead of \InvalidArgumentException
 	 */
 	public function getFilterById(string $id): IFilter;
 
@@ -124,17 +125,19 @@ interface IManager {
 	/**
 	 * @param string $id
 	 * @return ActivitySettings
-	 * @throws \InvalidArgumentException when the setting was not found
+	 * @throws SettingNotFoundException when the setting was not found
 	 * @since 11.0.0
+	 * @since 30.0.0 throws {@see SettingNotFoundException} instead of \InvalidArgumentException
 	 */
 	public function getSettingById(string $id): ActivitySettings;
 
 	/**
 	 * @param string $type
-	 * @param int $id
+	 * @param int|numeric-string $id
 	 * @since 8.2.0
+	 * @since 33.0.0 $id can also be a string
 	 */
-	public function setFormattingObject(string $type, int $id): void;
+	public function setFormattingObject(string $type, int|string $id): void;
 
 	/**
 	 * @return bool
@@ -158,10 +161,9 @@ interface IManager {
 	 * Set the user we need to use
 	 *
 	 * @param string|null $currentUserId
-	 * @throws \UnexpectedValueException If the user is invalid
 	 * @since 9.0.1
 	 */
-	public function setCurrentUserId(string $currentUserId = null): void;
+	public function setCurrentUserId(?string $currentUserId = null): void;
 
 	/**
 	 * Get the user we need to use

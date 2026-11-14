@@ -3,60 +3,33 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2018 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author 2018 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-namespace Test\Core\Command\TwoFactorAuth;
+namespace Tests\Core\Command\TwoFactorAuth;
 
 use OC\Authentication\TwoFactorAuth\ProviderManager;
 use OC\Core\Command\TwoFactorAuth\Enable;
 use OCP\IUser;
 use OCP\IUserManager;
-use PHPUnit\Framework\MockObject\MockObject;
 use Symfony\Component\Console\Tester\CommandTester;
 use Test\TestCase;
 
 class EnableTest extends TestCase {
-
-	/** @var ProviderManager|MockObject */
-	private $providerManager;
-
-	/** @var IUserManager|MockObject */
-	private $userManager;
-
 	/** @var CommandTester */
 	private $command;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->providerManager = $this->createMock(ProviderManager::class);
-		$this->userManager = $this->createMock(IUserManager::class);
-
-		$cmd = new Enable($this->providerManager, $this->userManager);
+		$cmd = $this->createInstanceWithMocks(Enable::class);
 		$this->command = new CommandTester($cmd);
 	}
 
-	public function testInvalidUID() {
-		$this->userManager->expects($this->once())
+	public function testInvalidUID(): void {
+		$this->getAutoMock(IUserManager::class)->expects($this->once())
 			->method('get')
 			->with('nope')
 			->willReturn(null);
@@ -67,16 +40,16 @@ class EnableTest extends TestCase {
 		]);
 
 		$this->assertEquals(1, $rc);
-		$this->assertStringContainsString("Invalid UID", $this->command->getDisplay());
+		$this->assertStringContainsString('Invalid UID', $this->command->getDisplay());
 	}
 
-	public function testEnableNotSupported() {
+	public function testEnableNotSupported(): void {
 		$user = $this->createMock(IUser::class);
-		$this->userManager->expects($this->once())
+		$this->getAutoMock(IUserManager::class)->expects($this->once())
 			->method('get')
 			->with('belle')
 			->willReturn($user);
-		$this->providerManager->expects($this->once())
+		$this->getAutoMock(ProviderManager::class)->expects($this->once())
 			->method('tryEnableProviderFor')
 			->with('totp', $user)
 			->willReturn(false);
@@ -87,16 +60,16 @@ class EnableTest extends TestCase {
 		]);
 
 		$this->assertEquals(2, $rc);
-		$this->assertStringContainsString("The provider does not support this operation", $this->command->getDisplay());
+		$this->assertStringContainsString('The provider does not support this operation', $this->command->getDisplay());
 	}
 
-	public function testEnabled() {
+	public function testEnabled(): void {
 		$user = $this->createMock(IUser::class);
-		$this->userManager->expects($this->once())
+		$this->getAutoMock(IUserManager::class)->expects($this->once())
 			->method('get')
 			->with('belle')
 			->willReturn($user);
-		$this->providerManager->expects($this->once())
+		$this->getAutoMock(ProviderManager::class)->expects($this->once())
 			->method('tryEnableProviderFor')
 			->with('totp', $user)
 			->willReturn(true);
@@ -107,6 +80,6 @@ class EnableTest extends TestCase {
 		]);
 
 		$this->assertEquals(0, $rc);
-		$this->assertStringContainsString("Two-factor provider totp enabled for user belle", $this->command->getDisplay());
+		$this->assertStringContainsString('Two-factor provider totp enabled for user belle', $this->command->getDisplay());
 	}
 }

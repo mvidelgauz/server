@@ -1,177 +1,170 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author J0WI <J0WI@users.noreply.github.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Tigran Mkrtchyan <tigran.mkrtchyan@desy.de>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files\Storage\Wrapper;
 
 use OC\Files\Filesystem;
+use OC\Files\View;
+use OC\SystemConfig;
 use OCP\Files\Cache\ICacheEntry;
+use OCP\Files\FileInfo;
+use OCP\Files\GenericFileException;
+use OCP\Files\NotEnoughSpaceException;
 use OCP\Files\Storage\IStorage;
+use OCP\IUser;
 
 class Quota extends Wrapper {
-
-	/**
-	 * @var int $quota
-	 */
-	protected $quota;
-
-	/**
-	 * @var string $sizeRoot
-	 */
-	protected $sizeRoot;
-
-	private $config;
+	/** @var callable|null */
+	protected $quotaCallback;
+	/** @var int|float|null int on 64bits, float on 32bits for bigint */
+	protected int|float|null $quota;
+	protected string $sizeRoot;
+	private SystemConfig $config;
+	private bool $quotaIncludeExternalStorage;
+	private bool $enabled = true;
+	/** The user the wrapped home storage belongs to, if known */
+	private ?IUser $user;
 
 	/**
 	 * @param array $parameters
 	 */
-	public function __construct($parameters) {
+	public function __construct(array $parameters) {
 		parent::__construct($parameters);
-		$this->quota = $parameters['quota'];
-		$this->sizeRoot = isset($parameters['root']) ? $parameters['root'] : '';
-		$this->config = \OC::$server->getSystemConfig();
+		$this->quota = $parameters['quota'] ?? null;
+		$this->quotaCallback = $parameters['quotaCallback'] ?? null;
+		$this->sizeRoot = $parameters['root'] ?? '';
+		$this->quotaIncludeExternalStorage = $parameters['include_external_storage'] ?? false;
+		$this->user = $parameters['user'] ?? null;
 	}
 
-	/**
-	 * @return int quota value
-	 */
-	public function getQuota() {
+	public function getQuota(): int|float {
+		if ($this->quota === null) {
+			$quotaCallback = $this->quotaCallback;
+			if ($quotaCallback === null) {
+				throw new \Exception('No quota or quota callback provider');
+			}
+			$this->quota = $quotaCallback();
+		}
+
 		return $this->quota;
 	}
 
+	private function hasQuota(): bool {
+		if (!$this->enabled) {
+			return false;
+		}
+		return $this->getQuota() !== FileInfo::SPACE_UNLIMITED;
+	}
+
 	/**
-	 * @param string $path
-	 * @param \OC\Files\Storage\Storage $storage
+	 * Usage of the quota user's files including the external storages mounted in them.
+	 * It is read through that user's view, since the session user differs when writing into their shares.
+	 * Storages using the quota user's session credentials count as empty in other sessions.
 	 */
-	protected function getSize($path, $storage = null) {
-		if ($this->config->getValue('quota_include_external_storage', false)) {
+	private function getSizeIncludingExternalStorage(): int|float {
+		if ($this->user === null) {
 			$rootInfo = Filesystem::getFileInfo('', 'ext');
-			if ($rootInfo) {
-				return $rootInfo->getSize(true);
-			}
-			return \OCP\Files\FileInfo::SPACE_NOT_COMPUTED;
 		} else {
-			if (is_null($storage)) {
-				$cache = $this->getCache();
-			} else {
-				$cache = $storage->getCache();
-			}
+			$view = new View('/' . $this->user->getUID() . '/files');
+			$rootInfo = $view->getFileInfo('', 'ext');
+		}
+
+		if ($rootInfo) {
+			return $rootInfo->getSize(true);
+		}
+		return FileInfo::SPACE_NOT_COMPUTED;
+	}
+
+	public function getSize(string $path, ?IStorage $storage = null): int|float {
+		if ($this->quotaIncludeExternalStorage) {
+			return $this->getSizeIncludingExternalStorage();
+		} else {
+			$cache = is_null($storage) ? $this->getCache() : $storage->getCache();
 			$data = $cache->get($path);
-			if ($data instanceof ICacheEntry and isset($data['size'])) {
+			if ($data instanceof ICacheEntry && isset($data['size'])) {
 				return $data['size'];
 			} else {
-				return \OCP\Files\FileInfo::SPACE_NOT_COMPUTED;
+				return FileInfo::SPACE_NOT_COMPUTED;
 			}
 		}
 	}
 
-	/**
-	 * Get free space as limited by the quota
-	 *
-	 * @param string $path
-	 * @return int|bool
-	 */
-	public function free_space($path) {
-		if ($this->quota < 0 || strpos($path, 'cache') === 0 || strpos($path, 'uploads') === 0) {
-			return $this->storage->free_space($path);
+	#[\Override]
+	public function free_space(string $path): int|float|false {
+		if (!$this->hasQuota()) {
+			return $this->getWrapperStorage()->free_space($path);
+		}
+		if ($this->getQuota() < 0 || str_starts_with($path, 'cache') || str_starts_with($path, 'uploads')) {
+			return $this->getWrapperStorage()->free_space($path);
 		} else {
 			$used = $this->getSize($this->sizeRoot);
 			if ($used < 0) {
-				return \OCP\Files\FileInfo::SPACE_NOT_COMPUTED;
+				return FileInfo::SPACE_NOT_COMPUTED;
 			} else {
-				$free = $this->storage->free_space($path);
-				$quotaFree = max($this->quota - $used, 0);
+				$free = $this->getWrapperStorage()->free_space($path);
+				$quotaFree = max($this->getQuota() - $used, 0);
 				// if free space is known
-				if ($free >= 0) {
-					$free = min($free, $quotaFree);
-				} else {
-					$free = $quotaFree;
-				}
+				$free = $free >= 0 ? min($free, $quotaFree) : $quotaFree;
 				return $free;
 			}
 		}
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.file_put_contents.php
-	 *
-	 * @param string $path
-	 * @param mixed $data
-	 * @return int|false
-	 */
-	public function file_put_contents($path, $data) {
+	#[\Override]
+	public function file_put_contents(string $path, mixed $data): int|float|false {
+		if (!$this->hasQuota()) {
+			return $this->getWrapperStorage()->file_put_contents($path, $data);
+		}
 		$free = $this->free_space($path);
-		if ($free < 0 or strlen($data) < $free) {
-			return $this->storage->file_put_contents($path, $data);
+		if ($free < 0 || strlen($data) < $free) {
+			return $this->getWrapperStorage()->file_put_contents($path, $data);
 		} else {
 			return false;
 		}
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.copy.php
-	 *
-	 * @param string $source
-	 * @param string $target
-	 * @return bool
-	 */
-	public function copy($source, $target) {
+	#[\Override]
+	public function copy(string $source, string $target): bool {
+		if (!$this->hasQuota()) {
+			return $this->getWrapperStorage()->copy($source, $target);
+		}
 		$free = $this->free_space($target);
-		if ($free < 0 or $this->getSize($source) < $free) {
-			return $this->storage->copy($source, $target);
+		if ($free < 0 || $this->getSize($source) < $free) {
+			return $this->getWrapperStorage()->copy($source, $target);
 		} else {
 			return false;
 		}
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.fopen.php
-	 *
-	 * @param string $path
-	 * @param string $mode
-	 * @return resource|bool
-	 */
-	public function fopen($path, $mode) {
-		$source = $this->storage->fopen($path, $mode);
+	#[\Override]
+	public function fopen(string $path, string $mode) {
+		// reading doesn't consume quota, so it should not be restricted by it
+		$isReadMode = $mode === 'r' || $mode === 'rb';
+		if ($isReadMode || !$this->hasQuota() || $this->isPartFile($path)) {
+			return $this->getWrapperStorage()->fopen($path, $mode);
+		}
 
-		// don't apply quota for part files
-		if (!$this->isPartFile($path)) {
-			$free = $this->free_space($path);
-			if ($source && is_int($free) && $free >= 0 && $mode !== 'r' && $mode !== 'rb') {
-				// only apply quota for files, not metadata, trash or others
-				if ($this->shouldApplyQuota($path)) {
-					return \OC\Files\Stream\Quota::wrap($source, $free);
-				}
+		$free = $this->free_space($path);
+		// treat a failed free_space() the same as no free space
+		if ($this->shouldApplyQuota($path) && ($free === 0 || $free === 0.0 || $free === false)) {
+			return false;
+		}
+
+		$source = $this->getWrapperStorage()->fopen($path, $mode);
+		// writing past the remaining free space fails. Negative values mean the free
+		// space is unknown or unlimited (FileInfo::SPACE_*), so no limit is applied
+		if ($source && (is_int($free) || is_float($free)) && $free >= 0) {
+			// only apply quota for files, not metadata, trash or others
+			if ($this->shouldApplyQuota($path)) {
+				return \OC\Files\Stream\Quota::wrap($source, $free);
 			}
 		}
+
 		return $source;
 	}
 
@@ -179,10 +172,9 @@ class Quota extends Wrapper {
 	 * Checks whether the given path is a part file
 	 *
 	 * @param string $path Path that may identify a .part file
-	 * @return string File path without .part extension
 	 * @note this is needed for reusing keys
 	 */
-	private function isPartFile($path) {
+	private function isPartFile(string $path): bool {
 		$extension = pathinfo($path, PATHINFO_EXTENSION);
 
 		return ($extension === 'part');
@@ -191,55 +183,93 @@ class Quota extends Wrapper {
 	/**
 	 * Only apply quota for files, not metadata, trash or others
 	 */
-	private function shouldApplyQuota(string $path): bool {
-		return strpos(ltrim($path, '/'), 'files/') === 0;
+	protected function shouldApplyQuota(string $path): bool {
+		return str_starts_with(ltrim($path, '/'), 'files/');
 	}
 
-	/**
-	 * @param IStorage $sourceStorage
-	 * @param string $sourceInternalPath
-	 * @param string $targetInternalPath
-	 * @return bool
-	 */
-	public function copyFromStorage(IStorage $sourceStorage, $sourceInternalPath, $targetInternalPath) {
+	#[\Override]
+	public function copyFromStorage(IStorage $sourceStorage, string $sourceInternalPath, string $targetInternalPath): bool {
+		if (!$this->hasQuota()) {
+			return $this->getWrapperStorage()->copyFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
+		}
 		$free = $this->free_space($targetInternalPath);
-		if ($free < 0 or $this->getSize($sourceInternalPath, $sourceStorage) < $free) {
-			return $this->storage->copyFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
+		if ($free < 0 || $this->getSize($sourceInternalPath, $sourceStorage) < $free) {
+			return $this->getWrapperStorage()->copyFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
 		} else {
 			return false;
 		}
 	}
 
-	/**
-	 * @param IStorage $sourceStorage
-	 * @param string $sourceInternalPath
-	 * @param string $targetInternalPath
-	 * @return bool
-	 */
-	public function moveFromStorage(IStorage $sourceStorage, $sourceInternalPath, $targetInternalPath) {
+	#[\Override]
+	public function moveFromStorage(IStorage $sourceStorage, string $sourceInternalPath, string $targetInternalPath): bool {
+		if (!$this->hasQuota()) {
+			return $this->getWrapperStorage()->moveFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
+		}
 		$free = $this->free_space($targetInternalPath);
-		if ($free < 0 or $this->getSize($sourceInternalPath, $sourceStorage) < $free) {
-			return $this->storage->moveFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
+		if ($free < 0 || $this->getSize($sourceInternalPath, $sourceStorage) < $free) {
+			return $this->getWrapperStorage()->moveFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
 		} else {
 			return false;
 		}
 	}
 
-	public function mkdir($path) {
+	#[\Override]
+	public function mkdir(string $path): bool {
+		if (!$this->hasQuota()) {
+			return $this->getWrapperStorage()->mkdir($path);
+		}
 		$free = $this->free_space($path);
-		if ($this->shouldApplyQuota($path) && $free === 0.0) {
+		// treat a failed free_space() the same as no free space
+		if ($this->shouldApplyQuota($path) && ($free === 0 || $free === 0.0 || $free === false)) {
 			return false;
 		}
 
 		return parent::mkdir($path);
 	}
 
-	public function touch($path, $mtime = null) {
+	#[\Override]
+	public function touch(string $path, ?int $mtime = null): bool {
+		if (!$this->hasQuota()) {
+			return $this->getWrapperStorage()->touch($path, $mtime);
+		}
 		$free = $this->free_space($path);
-		if ($free === 0.0) {
+		// treat a failed free_space() the same as no free space
+		if ($free === 0 || $free === 0.0 || $free === false) {
 			return false;
 		}
 
 		return parent::touch($path, $mtime);
+	}
+
+	public function enableQuota(bool $enabled): void {
+		$this->enabled = $enabled;
+	}
+
+	#[\Override]
+	public function writeStream(string $path, $stream, ?int $size = null): int {
+		if (!$this->hasQuota()) {
+			return parent::writeStream($path, $stream, $size);
+		}
+
+		$free = $this->free_space($path);
+		// treat a failed free_space() the same as no free space
+		if ($this->shouldApplyQuota($path) && ($free === 0 || $free === 0.0 || $free === false)) {
+			throw new NotEnoughSpaceException();
+		}
+
+		if ($size !== null) {
+			if ($free < 0 || $size < $free) {
+				return parent::writeStream($path, $stream, $size);
+			} else {
+				throw new NotEnoughSpaceException();
+			}
+		} else {
+			// force fallback through `fopen` to handle the quota
+			try {
+				return parent::writeStreamFallback($path, $stream);
+			} catch (GenericFileException) {
+				throw new NotEnoughSpaceException();
+			}
+		}
 	}
 }

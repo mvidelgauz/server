@@ -1,24 +1,13 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Command;
 
 use OCP\Command\IBus;
@@ -33,14 +22,13 @@ abstract class AsyncBus implements IBus {
 	 *
 	 * @var string[]
 	 */
-	private $syncTraits = [];
+	private array $syncTraits = [];
 
 	/**
 	 * Schedule a command to be fired
-	 *
-	 * @param \OCP\Command\ICommand | callable $command
 	 */
-	public function push($command) {
+	#[\Override]
+	public function push(ICommand $command): void {
 		if ($this->canRunAsync($command)) {
 			$this->queueCommand($command);
 		} else {
@@ -50,39 +38,30 @@ abstract class AsyncBus implements IBus {
 
 	/**
 	 * Queue a command in the bus
-	 *
-	 * @param \OCP\Command\ICommand | callable $command
 	 */
-	abstract protected function queueCommand($command);
+	abstract protected function queueCommand(ICommand $command);
 
 	/**
 	 * Require all commands using a trait to be run synchronous
 	 *
 	 * @param string $trait
 	 */
-	public function requireSync($trait) {
+	#[\Override]
+	public function requireSync(string $trait): void {
 		$this->syncTraits[] = trim($trait, '\\');
 	}
 
-	/**
-	 * @param \OCP\Command\ICommand | callable $command
-	 */
-	private function runCommand($command) {
-		if ($command instanceof ICommand) {
-			$command->handle();
-		} else {
-			$command();
-		}
+	private function runCommand(ICommand $command): void {
+		$command->handle();
 	}
 
 	/**
-	 * @param \OCP\Command\ICommand | callable $command
 	 * @return bool
 	 */
-	private function canRunAsync($command) {
+	private function canRunAsync(ICommand $command): bool {
 		$traits = $this->getTraits($command);
 		foreach ($traits as $trait) {
-			if (array_search($trait, $this->syncTraits) !== false) {
+			if (in_array($trait, $this->syncTraits, true)) {
 				return false;
 			}
 		}
@@ -90,14 +69,9 @@ abstract class AsyncBus implements IBus {
 	}
 
 	/**
-	 * @param \OCP\Command\ICommand | callable $command
 	 * @return string[]
 	 */
-	private function getTraits($command) {
-		if ($command instanceof ICommand) {
-			return class_uses($command);
-		} else {
-			return [];
-		}
+	private function getTraits(ICommand $command): array {
+		return class_uses($command);
 	}
 }

@@ -3,13 +3,6 @@ OC.L10N.register(
     {
     "Dashboard" : "მთავარი დაფა",
     "Dashboard app" : "დეშბორდის აპი",
-    "Show something" : "აჩვენე რამე",
-    "Customize" : "პერსონალიზაცია",
-    "Edit widgets" : "ვიჯეტების დაედითება",
-    "Change background image" : "შეცვალე უკანა ფონის სურათი",
-    "Weather service" : "ამინდის სერვისი",
-    "For your privacy, the weather data is requested by your Nextcloud server on your behalf so the weather service receives no personal information." : "თქვენი კონფენდენციალურობისთვის, ამინდზე ინფორმაცია მოთხოვნილია ჩვენი Nextcloud-ის სერვერის მიერ, ამჟამად ამინდის სერვისები თქვენს პირად ინფორმაციას არ მიიღებენ.",
-    "Weather data from Met.no" : "ამინდის პროგნოზი Met.no-დან",
     "Weather" : "ამინდი",
     "Status" : "სტატუსი",
     "Good morning" : "დილამშვიდობისა",
@@ -20,13 +13,9 @@ OC.L10N.register(
     "Good evening, {name}" : "ღამემშვიდობისა, {name}",
     "Hello" : "გამარჯობა",
     "Hello, {name}" : "გამარჯობა, {name}",
-    "Pick from Files" : "აირჩიე ფაილებიდან",
-    "Default images" : "საწყისი სურათები",
-    "Plain background" : "ცარიელი ფონი",
-    "Insert from {productName}" : "შეავსეთ {productName}-დან",
-    "Get more widgets from the app store" : "გადმოწერე მეტი ვიჯეტები app store-დან.",
-    "Good night, {name}" : "ღამე მშვიდობის, {name}",
-    "Good night" : "ღამე მშვიდობის",
-    "Pick from files" : "აირჩიეთ ფაილებიდან"
+    "Customize" : "პერსონალიზაცია",
+    "Edit widgets" : "ვიჯეტების დაედითება",
+    "Weather service" : "ამინდის სერვისი",
+    "Weather data from Met.no" : "ამინდის პროგნოზი Met.no-დან"
 },
 "nplurals=2; plural=(n!=1);");

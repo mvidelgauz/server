@@ -1,22 +1,9 @@
 <?php
+
 /**
- * @author Joas Schilling <nickvergessen@owncloud.com>
- *
- * @copyright Copyright (c) 2015, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Test\Notification;
@@ -29,12 +16,13 @@ class ActionTest extends TestCase {
 	/** @var IAction */
 	protected $action;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 		$this->action = new Action();
 	}
 
-	public function dataSetLabel() {
+	public static function dataSetLabel(): array {
 		return [
 			['test1'],
 			[str_repeat('a', 1)],
@@ -43,16 +31,16 @@ class ActionTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider dataSetLabel
 	 * @param string $label
 	 */
-	public function testSetLabel($label) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataSetLabel')]
+	public function testSetLabel($label): void {
 		$this->assertSame('', $this->action->getLabel());
 		$this->assertSame($this->action, $this->action->setLabel($label));
 		$this->assertSame($label, $this->action->getLabel());
 	}
 
-	public function dataSetLabelInvalid() {
+	public static function dataSetLabelInvalid(): array {
 		return [
 			[''],
 			[str_repeat('a', 33)],
@@ -60,17 +48,17 @@ class ActionTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider dataSetLabelInvalid
 	 * @param mixed $label
 	 *
 	 */
-	public function testSetLabelInvalid($label) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataSetLabelInvalid')]
+	public function testSetLabelInvalid($label): void {
 		$this->expectException(\InvalidArgumentException::class);
 
 		$this->action->setLabel($label);
 	}
 
-	public function dataSetParsedLabel() {
+	public static function dataSetParsedLabel(): array {
 		return [
 			['test1'],
 			[str_repeat('a', 1)],
@@ -79,77 +67,95 @@ class ActionTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider dataSetParsedLabel
 	 * @param string $label
 	 */
-	public function testSetParsedLabel($label) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataSetParsedLabel')]
+	public function testSetParsedLabel($label): void {
 		$this->assertSame('', $this->action->getParsedLabel());
 		$this->assertSame($this->action, $this->action->setParsedLabel($label));
 		$this->assertSame($label, $this->action->getParsedLabel());
 	}
 
-	public function dataSetParsedLabelInvalid() {
+	public static function dataSetParsedLabelInvalid(): array {
 		return [
 			[''],
 		];
 	}
 
 	/**
-	 * @dataProvider dataSetParsedLabelInvalid
 	 * @param mixed $label
 	 *
 	 */
-	public function testSetParsedLabelInvalid($label) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataSetParsedLabelInvalid')]
+	public function testSetParsedLabelInvalid($label): void {
 		$this->expectException(\InvalidArgumentException::class);
 
 		$this->action->setParsedLabel($label);
 	}
 
-	public function dataSetLink() {
+	public static function dataSetLink(): array {
 		return [
-			['test1', 'GET'],
-			['test2', 'POST'],
-			[str_repeat('a', 1), 'PUT'],
-			[str_repeat('a', 256), 'DELETE'],
+			['http://example.tld/', 'GET'],
+			['https://example.tld/api/v1/resource', 'POST'],
+			['https://example.tld/?q=1&r=2', 'PUT'],
+			['https://example.tld/path#frag', 'DELETE'],
+			['https://example.tld/web', 'WEB'],
+			// Maximum length (256 chars total, including the scheme)
+			['https://' . str_repeat('a', 256 - 8), 'GET'],
 		];
 	}
 
 	/**
-	 * @dataProvider dataSetLink
 	 * @param string $link
 	 * @param string $type
 	 */
-	public function testSetLink($link, $type) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataSetLink')]
+	public function testSetLink($link, $type): void {
 		$this->assertSame('', $this->action->getLink());
 		$this->assertSame($this->action, $this->action->setLink($link, $type));
 		$this->assertSame($link, $this->action->getLink());
 		$this->assertSame($type, $this->action->getRequestType());
 	}
 
-	public function dataSetLinkInvalid() {
+	public static function dataSetLinkInvalid(): array {
 		return [
-			// Invalid link
+			// Invalid link — empty / too long
 			['', 'GET'],
-			[str_repeat('a', 257), 'GET'],
+			['https://' . str_repeat('a', 257 - 8), 'GET'],
 
-			// Invalid type
-			['url', 'notGET'],
+			// Disallowed schemes
+			['javascript:alert(1)', 'WEB'],
+			['JavaScript:alert(1)', 'WEB'],
+			['javascript:alert(1)', 'GET'],
+			['data:text/html,<script>alert(1)</script>', 'WEB'],
+			['vbscript:msgbox("xss")', 'WEB'],
+			['file:///etc/passwd', 'GET'],
+			['mailto:test@example.tld', 'WEB'],
+			['ftp://example.tld/', 'GET'],
+
+			// Relative urls
+			['/relative/path', 'WEB'],
+			['//protocol-relative.tld/', 'GET'],
+			['url', 'GET'],
+
+			// Invalid type (with a valid http(s) link, so the type check is what trips)
+			['https://example.tld/', 'notGET'],
 		];
 	}
 
 	/**
-	 * @dataProvider dataSetLinkInvalid
 	 * @param mixed $link
 	 * @param mixed $type
 	 *
 	 */
-	public function testSetLinkInvalid($link, $type) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataSetLinkInvalid')]
+	public function testSetLinkInvalid($link, $type): void {
 		$this->expectException(\InvalidArgumentException::class);
 
 		$this->action->setLink($link, $type);
 	}
 
-	public function dataSetPrimary() {
+	public static function dataSetPrimary(): array {
 		return [
 			[true],
 			[false],
@@ -157,33 +163,33 @@ class ActionTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider dataSetPrimary
 	 * @param bool $primary
 	 */
-	public function testSetPrimary($primary) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataSetPrimary')]
+	public function testSetPrimary($primary): void {
 		$this->assertSame(false, $this->action->isPrimary());
 		$this->assertSame($this->action, $this->action->setPrimary($primary));
 		$this->assertSame($primary, $this->action->isPrimary());
 	}
 
-	public function testIsValid() {
+	public function testIsValid(): void {
 		$this->assertFalse($this->action->isValid());
 		$this->assertFalse($this->action->isValidParsed());
 		$this->action->setLabel('label');
 		$this->assertFalse($this->action->isValid());
 		$this->assertFalse($this->action->isValidParsed());
-		$this->action->setLink('link', 'GET');
+		$this->action->setLink('https://example.tld/', 'GET');
 		$this->assertTrue($this->action->isValid());
 		$this->assertFalse($this->action->isValidParsed());
 	}
 
-	public function testIsValidParsed() {
+	public function testIsValidParsed(): void {
 		$this->assertFalse($this->action->isValid());
 		$this->assertFalse($this->action->isValidParsed());
 		$this->action->setParsedLabel('label');
 		$this->assertFalse($this->action->isValid());
 		$this->assertFalse($this->action->isValidParsed());
-		$this->action->setLink('link', 'GET');
+		$this->action->setLink('https://example.tld/', 'GET');
 		$this->assertFalse($this->action->isValid());
 		$this->assertTrue($this->action->isValidParsed());
 	}

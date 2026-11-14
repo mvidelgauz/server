@@ -3,80 +3,88 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2017 Lukas Reschke <lukas@statuscode.ch>
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\OAuth2\Db;
 
+use OCA\OAuth2\Controller\OauthApiController;
 use OCA\OAuth2\Exceptions\AccessTokenNotFoundException;
-use OCP\AppFramework\Db\IMapperException;
-use OCP\AppFramework\Db\QBMapper;
+use OCP\AppFramework\Db\DoesNotExistException;
+use OCP\AppFramework\ORM\Repository;
+use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\DB\Exception;
 use OCP\DB\QueryBuilder\IQueryBuilder;
-use OCP\IDBConnection;
 
 /**
- * @template-extends QBMapper<AccessToken>
+ * @template-extends Repository<AccessToken>
+ * @psalm-suppress ClassMustBeFinal For unit tests
  */
-class AccessTokenMapper extends QBMapper {
+class AccessTokenMapper extends Repository {
+	public const string entityClass = AccessToken::class;
 
 	/**
-	 * @param IDBConnection $db
-	 */
-	public function __construct(IDBConnection $db) {
-		parent::__construct($db, 'oauth2_access_tokens');
-	}
-
-	/**
-	 * @param string $code
-	 * @return AccessToken
 	 * @throws AccessTokenNotFoundException
 	 */
 	public function getByCode(string $code): AccessToken {
-		$qb = $this->db->getQueryBuilder();
-		$qb
-			->select('*')
-			->from($this->tableName)
-			->where($qb->expr()->eq('hashed_code', $qb->createNamedParameter(hash('sha512', $code))));
-
 		try {
-			$token = $this->findEntity($qb);
-		} catch (IMapperException $e) {
-			throw new AccessTokenNotFoundException('Could not find access token', 0, $e);
+			return $this->findOneBy([
+				'hashedCode' => hash('sha512', $code),
+			]);
+		} catch (DoesNotExistException $doesNotExistException) {
+			throw new AccessTokenNotFoundException('Could not find access token', 0, $doesNotExistException);
 		}
-
-		return $token;
 	}
 
 	/**
-	 * delete all access token from a given client
-	 *
-	 * @param int $id
+	 * Delete all access token from a given client
 	 */
-	public function deleteByClientId(int $id) {
-		$qb = $this->db->getQueryBuilder();
+	public function deleteByClientId(int $id): void {
+		$this->deleteBy([
+			'clientId' => $id,
+		]);
+	}
+
+	/**
+	 * Delete access tokens that have an expired authorization code
+	 * -> those that are old enough
+	 * and which never delivered any oauth token (still in authorization state)
+	 *
+	 * @throws Exception
+	 */
+	public function cleanupExpiredAuthorizationCode(ITimeFactory $timeFactory): void {
+		$now = $timeFactory->now()->getTimestamp();
+		$maxTokenCreationTs = $now - OauthApiController::AUTHORIZATION_CODE_EXPIRES_AFTER;
+
+		$qb = $this->connection->getQueryBuilder();
 		$qb
-			->delete($this->tableName)
-			->where($qb->expr()->eq('client_id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)));
+			->delete($this->getTableName())
+			->where($qb->expr()->eq('token_count', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->lt('code_created_at', $qb->createNamedParameter($maxTokenCreationTs, IQueryBuilder::PARAM_INT)));
 		$qb->executeStatement();
+	}
+
+	/**
+	 * Rotate an access token only if it still matches the caller's previously-read state.
+	 *
+	 * @param bool $expectAuthorizationCodeState Require the token to still be unused
+	 * @return int Number of updated rows
+	 */
+	public function rotateToken(int $id, string $oldCode, string $newCode, string $encryptedToken, bool $expectAuthorizationCodeState): int {
+		$qb = $this->connection->getQueryBuilder();
+		$qb
+			->update($this->getTableName())
+			->set('hashed_code', $qb->createNamedParameter(hash('sha512', $newCode)))
+			->set('encrypted_token', $qb->createNamedParameter($encryptedToken))
+			->set('token_count', $qb->createFunction('token_count + 1'))
+			->where($qb->expr()->eq('id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('hashed_code', $qb->createNamedParameter(hash('sha512', $oldCode))));
+
+		if ($expectAuthorizationCodeState) {
+			$qb->andWhere($qb->expr()->eq('token_count', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT)));
+		}
+
+		return $qb->executeStatement();
 	}
 }

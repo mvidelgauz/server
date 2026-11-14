@@ -1,61 +1,45 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright 2018 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Settings\Tests\Controller;
 
 use OC\Authentication\TwoFactorAuth\EnforcementState;
 use OC\Authentication\TwoFactorAuth\MandatoryTwoFactor;
 use OCA\Settings\Controller\TwoFactorSettingsController;
 use OCP\AppFramework\Http\JSONResponse;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IRequest;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
 use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class TwoFactorSettingsControllerTest extends TestCase {
-
-	/** @var IRequest|MockObject */
-	private $request;
-
-	/** @var MandatoryTwoFactor|MockObject */
-	private $mandatoryTwoFactor;
-
-	/** @var TwoFactorSettingsController */
-	private $controller;
+	private IRequest&MockObject $request;
+	private MandatoryTwoFactor&MockObject $mandatoryTwoFactor;
+	private IEventDispatcher&MockObject $eventDispatcher;
+	private TwoFactorSettingsController $controller;
 
 	protected function setUp(): void {
 		parent::setUp();
 
 		$this->request = $this->createMock(IRequest::class);
 		$this->mandatoryTwoFactor = $this->createMock(MandatoryTwoFactor::class);
+		$this->eventDispatcher = $this->createMock(IEventDispatcher::class);
 
 		$this->controller = new TwoFactorSettingsController(
 			'settings',
 			$this->request,
-			$this->mandatoryTwoFactor
+			$this->mandatoryTwoFactor,
+			$this->eventDispatcher,
 		);
 	}
 
-	public function testIndex() {
+	public function testIndex(): void {
 		$state = new EnforcementState(true);
 		$this->mandatoryTwoFactor->expects($this->once())
 			->method('getState')
@@ -67,7 +51,7 @@ class TwoFactorSettingsControllerTest extends TestCase {
 		$this->assertEquals($expected, $resp);
 	}
 
-	public function testUpdate() {
+	public function testUpdate(): void {
 		$state = new EnforcementState(true);
 		$this->mandatoryTwoFactor->expects($this->once())
 			->method('setState')
@@ -80,5 +64,17 @@ class TwoFactorSettingsControllerTest extends TestCase {
 		$resp = $this->controller->update(true);
 
 		$this->assertEquals($expected, $resp);
+	}
+
+	public function testUpdateIsAudited(): void {
+		$this->mandatoryTwoFactor->method('getState')
+			->willReturn(new EnforcementState(true, ['admin', 'staff'], ['guests']));
+		$this->eventDispatcher->expects($this->once())
+			->method('dispatchTyped')
+			->with($this->callback(fn (CriticalActionPerformedEvent $event): bool => $event->getOperation() === 'auth.twofactor_enforcement.updated'
+				&& $event->getParameters() === ['enforced' => 'enabled', 'enforcedGroups' => 'admin, staff', 'excludedGroups' => 'guests']
+				&& $event->getLogMessage() === 'Two-factor authentication enforcement was set to "%s" with enforced groups "%s" and excluded groups "%s"'));
+
+		$this->controller->update(true, ['admin', 'staff'], ['guests']);
 	}
 }

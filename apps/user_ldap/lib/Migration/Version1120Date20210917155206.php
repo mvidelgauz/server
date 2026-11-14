@@ -2,6 +2,11 @@
 
 declare(strict_types=1);
 
+/**
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 namespace OCA\User_LDAP\Migration;
 
 use Closure;
@@ -9,7 +14,6 @@ use OC\Hooks\PublicEmitter;
 use OCP\DB\Exception;
 use OCP\DB\ISchemaWrapper;
 use OCP\DB\QueryBuilder\IQueryBuilder;
-use OCP\DB\Types;
 use OCP\IDBConnection;
 use OCP\IUserManager;
 use OCP\Migration\IOutput;
@@ -18,17 +22,11 @@ use Psr\Log\LoggerInterface;
 
 class Version1120Date20210917155206 extends SimpleMigrationStep {
 
-	/** @var IDBConnection */
-	private $dbc;
-	/** @var IUserManager */
-	private $userManager;
-	/** @var LoggerInterface */
-	private $logger;
-
-	public function __construct(IDBConnection $dbc, IUserManager $userManager, LoggerInterface $logger) {
-		$this->dbc = $dbc;
-		$this->userManager = $userManager;
-		$this->logger = $logger;
+	public function __construct(
+		private IDBConnection $dbc,
+		private IUserManager $userManager,
+		private LoggerInterface $logger,
+	) {
 	}
 
 	public function getName() {
@@ -40,6 +38,7 @@ class Version1120Date20210917155206 extends SimpleMigrationStep {
 	 * @param Closure $schemaClosure The `\Closure` returns a `ISchemaWrapper`
 	 * @param array $options
 	 */
+	#[\Override]
 	public function preSchemaChange(IOutput $output, Closure $schemaClosure, array $options): void {
 		// ensure that there is no user or group id longer than 64char in LDAP table
 		$this->handleIDs('ldap_group_mapping', false);
@@ -52,6 +51,7 @@ class Version1120Date20210917155206 extends SimpleMigrationStep {
 	 * @param array $options
 	 * @return null|ISchemaWrapper
 	 */
+	#[\Override]
 	public function changeSchema(IOutput $output, Closure $schemaClosure, array $options): ?ISchemaWrapper {
 		/** @var ISchemaWrapper $schema */
 		$schema = $schemaClosure();
@@ -70,19 +70,19 @@ class Version1120Date20210917155206 extends SimpleMigrationStep {
 	}
 
 	protected function handleIDs(string $table, bool $emitHooks) {
-		$q = $this->getSelectQuery($table);
-		$u = $this->getUpdateQuery($table);
+		$select = $this->getSelectQuery($table);
+		$update = $this->getUpdateQuery($table);
 
-		$r = $q->executeQuery();
-		while ($row = $r->fetch()) {
+		$result = $select->executeQuery();
+		while ($row = $result->fetchAssociative()) {
 			$newId = hash('sha256', $row['owncloud_name'], false);
 			if ($emitHooks) {
 				$this->emitUnassign($row['owncloud_name'], true);
 			}
-			$u->setParameter('uuid', $row['directory_uuid']);
-			$u->setParameter('newId', $newId);
+			$update->setParameter('uuid', $row['directory_uuid']);
+			$update->setParameter('newId', $newId);
 			try {
-				$u->executeStatement();
+				$update->executeStatement();
 				if ($emitHooks) {
 					$this->emitUnassign($row['owncloud_name'], false);
 					$this->emitAssign($newId);
@@ -100,23 +100,23 @@ class Version1120Date20210917155206 extends SimpleMigrationStep {
 				);
 			}
 		}
-		$r->closeCursor();
+		$result->closeCursor();
 	}
 
 	protected function getSelectQuery(string $table): IQueryBuilder {
-		$q = $this->dbc->getQueryBuilder();
-		$q->select('owncloud_name', 'directory_uuid')
+		$qb = $this->dbc->getQueryBuilder();
+		$qb->select('owncloud_name', 'directory_uuid')
 			->from($table)
-			->where($q->expr()->like('owncloud_name', $q->createNamedParameter(str_repeat('_', 65) . '%'), Types::STRING));
-		return $q;
+			->where($qb->expr()->gt($qb->func()->octetLength('owncloud_name'), $qb->createNamedParameter('64'), IQueryBuilder::PARAM_INT));
+		return $qb;
 	}
 
 	protected function getUpdateQuery(string $table): IQueryBuilder {
-		$q = $this->dbc->getQueryBuilder();
-		$q->update($table)
-			->set('owncloud_name', $q->createParameter('newId'))
-			->where($q->expr()->eq('directory_uuid', $q->createParameter('uuid')));
-		return $q;
+		$qb = $this->dbc->getQueryBuilder();
+		$qb->update($table)
+			->set('owncloud_name', $qb->createParameter('newId'))
+			->where($qb->expr()->eq('directory_uuid', $qb->createParameter('uuid')));
+		return $qb;
 	}
 
 	protected function emitUnassign(string $oldId, bool $pre): void {

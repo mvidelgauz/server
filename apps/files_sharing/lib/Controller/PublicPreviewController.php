@@ -1,69 +1,58 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016-2026 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Sharing\Controller;
 
+use NCU\AppFramework\Http\Attribute\TokenScope;
+use OCA\Files\TokenScopes;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
+use OCP\AppFramework\Http\Attribute\NoSameSiteCookieRequired;
+use OCP\AppFramework\Http\Attribute\OpenAPI;
+use OCP\AppFramework\Http\Attribute\PublicPage;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\Http\FileDisplayResponse;
+use OCP\AppFramework\Http\RedirectResponse;
 use OCP\AppFramework\PublicShareController;
 use OCP\Constants;
+use OCP\Files\File;
 use OCP\Files\Folder;
 use OCP\Files\NotFoundException;
+use OCP\Files\NotPermittedException;
 use OCP\IPreview;
 use OCP\IRequest;
 use OCP\ISession;
+use OCP\Preview\IMimeIconProvider;
 use OCP\Share\Exceptions\ShareNotFound;
 use OCP\Share\IManager as ShareManager;
 use OCP\Share\IShare;
 
+#[TokenScope(scope: TokenScopes::FILES_READ)]
 class PublicPreviewController extends PublicShareController {
 
-	/** @var ShareManager */
-	private $shareManager;
+	private IShare $share;
 
-	/** @var IPreview */
-	private $previewManager;
-
-	/** @var IShare */
-	private $share;
-
-	public function __construct(string $appName,
-								IRequest $request,
-								ShareManager $shareManger,
-								ISession $session,
-								IPreview $previewManager) {
+	public function __construct(
+		string $appName,
+		IRequest $request,
+		private ShareManager $shareManager,
+		ISession $session,
+		private IPreview $previewManager,
+		private IMimeIconProvider $mimeIconProvider,
+	) {
 		parent::__construct($appName, $request, $session);
-
-		$this->shareManager = $shareManger;
-		$this->previewManager = $previewManager;
 	}
 
-	protected function getPasswordHash(): string {
+	#[\Override]
+	protected function getPasswordHash(): ?string {
 		return $this->share->getPassword();
 	}
 
+	#[\Override]
 	public function isValidToken(): bool {
 		try {
 			$this->share = $this->shareManager->getShareByToken($this->getToken());
@@ -73,28 +62,44 @@ class PublicPreviewController extends PublicShareController {
 		}
 	}
 
+	#[\Override]
 	protected function isPasswordProtected(): bool {
-		return $this->share->getPassword() !== null;
+		return $this->share->isPasswordProtected();
 	}
 
-
 	/**
-	 * @PublicPage
-	 * @NoCSRFRequired
+	 * Get a preview for a public share
 	 *
-	 * @param string $file
-	 * @param int $x
-	 * @param int $y
-	 * @param bool $a
-	 * @return DataResponse|FileDisplayResponse
+	 * For shares pointing to a single file, the file parameter is ignored.
+	 * For folder shares, file must be the relative path to a file inside the shared folder.
+	 *
+	 * @param string $token Token of the share
+	 * @param string $file Relative path to a file inside a shared folder; ignored for single-file shares
+	 * @param int $x Width of the preview
+	 * @param int $y Height of the preview
+	 * @param bool $a Whether to not crop the preview
+	 * @param bool $mimeFallback Whether to fallback to the mime icon if no preview is available
+	 * @return FileDisplayResponse<Http::STATUS_OK, array{Content-Type: string}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_FORBIDDEN|Http::STATUS_NOT_FOUND, list<empty>, array{}>|RedirectResponse<Http::STATUS_SEE_OTHER, array{}>
+	 *
+	 * 200: Preview returned
+	 * 303: Redirect to the mime icon url if mimeFallback is true
+	 * 400: Getting preview is not possible
+	 * 403: Getting preview is not allowed
+	 * 404: Share or preview not found
 	 */
+	#[PublicPage]
+	#[NoCSRFRequired]
+	#[OpenAPI(scope: OpenAPI::SCOPE_DEFAULT)]
 	public function getPreview(
 		string $token,
 		string $file = '',
 		int $x = 32,
 		int $y = 32,
-		$a = false
+		$a = false,
+		bool $mimeFallback = false,
 	) {
+		$cacheForSeconds = 60 * 60 * 24; // 1 day
+
 		if ($token === '' || $x === 0 || $y === 0) {
 			return new DataResponse([], Http::STATUS_BAD_REQUEST);
 		}
@@ -109,34 +114,78 @@ class PublicPreviewController extends PublicShareController {
 			return new DataResponse([], Http::STATUS_FORBIDDEN);
 		}
 
+		// Only explicitly set to false will forbid the download!
+		$downloadForbidden = !$share->canSeeContent();
+
+		// Is this header is set it means our UI is doing a preview for no-download shares
+		// we check a header so we at least prevent people from using the link directly (obfuscation)
+		$isPublicPreview = $this->request->getHeader('x-nc-preview') === 'true';
+
+		if ($isPublicPreview && $downloadForbidden) {
+			// Only cache for 15 minutes on public preview requests to quickly remove from cache
+			$cacheForSeconds = 15 * 60;
+		} elseif ($downloadForbidden) {
+			// This is not a public share preview so we only allow a preview if download permissions are granted
+			return new DataResponse([], Http::STATUS_FORBIDDEN);
+		}
+
+		$previewFile = null;
+
 		try {
-			$node = $share->getNode();
-			if ($node instanceof Folder) {
-				$file = $node->get($file);
+			$shareNode = $share->getNode();
+			if ($shareNode instanceof Folder) {
+				if ($file === '') {
+					return new DataResponse([], Http::STATUS_BAD_REQUEST);
+				}
+
+				$previewFile = $shareNode->get($file);
+				if ($previewFile instanceof Folder) {
+					return new DataResponse([], Http::STATUS_BAD_REQUEST);
+				}
 			} else {
-				$file = $node;
+				$previewFile = $shareNode;
 			}
 
-			$f = $this->previewManager->getPreview($file, $x, $y, !$a);
-			$response = new FileDisplayResponse($f, Http::STATUS_OK, ['Content-Type' => $f->getMimeType()]);
-			$response->cacheFor(3600 * 24);
+			$preview = $this->previewManager->getPreview($previewFile, $x, $y, !$a);
+			$response = new FileDisplayResponse(
+				$preview,
+				Http::STATUS_OK,
+				['Content-Type' => $preview->getMimeType()]
+			);
+
+			$response->cacheFor($cacheForSeconds);
 			return $response;
-		} catch (NotFoundException $e) {
+		} catch (NotFoundException) {
+			// If a preview could not be generated for a resolved file, we can redirect to the mime icon if any
+			if ($mimeFallback && $previewFile instanceof File) {
+				if ($url = $this->mimeIconProvider->getMimeIconUrl($previewFile->getMimeType())) {
+					return new RedirectResponse($url);
+				}
+			}
 			return new DataResponse([], Http::STATUS_NOT_FOUND);
-		} catch (\InvalidArgumentException $e) {
+		} catch (NotPermittedException) {
+			return new DataResponse([], Http::STATUS_FORBIDDEN);
+		} catch (\InvalidArgumentException) {
 			return new DataResponse([], Http::STATUS_BAD_REQUEST);
 		}
 	}
 
 	/**
-	 * @PublicPage
-	 * @NoCSRFRequired
-	 * @NoSameSiteCookieRequired
+	 * Get a direct link preview for a shared file
 	 *
-	 * @param $token
-	 * @return DataResponse|FileDisplayResponse
+	 * @param string $token Token of the share
+	 * @return FileDisplayResponse<Http::STATUS_OK, array{Content-Type: string}>|DataResponse<Http::STATUS_BAD_REQUEST|Http::STATUS_FORBIDDEN|Http::STATUS_NOT_FOUND, list<empty>, array{}>
+	 *
+	 * 200: Preview returned
+	 * 400: Getting preview is not possible
+	 * 403: Getting preview is not allowed
+	 * 404: Share or preview not found
 	 */
-	public function directLink($token) {
+	#[PublicPage]
+	#[NoCSRFRequired]
+	#[OpenAPI(scope: OpenAPI::SCOPE_DEFAULT)]
+	#[NoSameSiteCookieRequired]
+	public function directLink(string $token) {
 		// No token no image
 		if ($token === '') {
 			return new DataResponse([], Http::STATUS_BAD_REQUEST);
@@ -155,7 +204,11 @@ class PublicPreviewController extends PublicShareController {
 		}
 
 		// Password protected shares have no direct link!
-		if ($share->getPassword() !== null) {
+		if ($share->isPasswordProtected()) {
+			return new DataResponse([], Http::STATUS_FORBIDDEN);
+		}
+
+		if (!$share->canSeeContent()) {
 			return new DataResponse([], Http::STATUS_FORBIDDEN);
 		}
 
@@ -170,8 +223,10 @@ class PublicPreviewController extends PublicShareController {
 			$response = new FileDisplayResponse($f, Http::STATUS_OK, ['Content-Type' => $f->getMimeType()]);
 			$response->cacheFor(3600 * 24);
 			return $response;
-		} catch (NotFoundException $e) {
+		} catch (NotFoundException) {
 			return new DataResponse([], Http::STATUS_NOT_FOUND);
+		} catch (NotPermittedException) {
+			return new DataResponse([], Http::STATUS_FORBIDDEN);
 		} catch (\InvalidArgumentException $e) {
 			return new DataResponse([], Http::STATUS_BAD_REQUEST);
 		}

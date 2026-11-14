@@ -3,46 +3,29 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2016 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\TwoFactorBackupCodes\Db;
 
-use OCP\AppFramework\Db\Entity;
+use OCP\AppFramework\ORM\Attribute\Column;
+use OCP\AppFramework\ORM\Attribute\Entity;
+use OCP\AppFramework\ORM\Attribute\Id;
+use OCP\DB\Schema\ColumnType;
 
-/**
- * @method string getUserId()
- * @method void setUserId(string $userId)
- * @method string getCode()
- * @method void setCode(string $code)
- * @method int getUsed()
- * @method void setUsed(int $code)
- */
-class BackupCode extends Entity {
+#[Entity(name: 'twofactor_backupcodes')]
+final class BackupCode {
+	#[Id]
+	#[Column(name: 'id', type: ColumnType::Integer, nullable: false)]
+	public ?int $id = null;
 
-	/** @var string */
-	protected $userId;
+	#[Column(name: 'user_id', type: ColumnType::String, length: 64, nullable: false)]
+	public string $userId;
 
-	/** @var string */
-	protected $code;
+	#[Column(name: 'code', type: ColumnType::String, length: 128, nullable: false)]
+	public string $code;
 
-	/** @var int */
-	protected $used;
+	#[Column(name: 'used', type: ColumnType::Smallint, nullable: false, default: 0)]
+	public int $used = 0;
 }

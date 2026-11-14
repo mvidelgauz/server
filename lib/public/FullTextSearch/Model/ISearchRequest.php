@@ -1,28 +1,11 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright 2018
- *
- * @author Maxence Lange <maxence@artificial-owl.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\FullTextSearch\Model;
 
 /**
@@ -43,8 +26,6 @@ namespace OCP\FullTextSearch\Model;
  *
  */
 interface ISearchRequest {
-
-
 	/**
 	 * Get the maximum number of results to be returns by the Search Platform.
 	 *
@@ -53,7 +34,6 @@ interface ISearchRequest {
 	 * @return int
 	 */
 	public function getSize(): int;
-
 
 	/**
 	 * Get the current page.
@@ -64,7 +44,6 @@ interface ISearchRequest {
 	 * @return int
 	 */
 	public function getPage(): int;
-
 
 	/**
 	 * Get the author of the request.
@@ -106,7 +85,6 @@ interface ISearchRequest {
 	 */
 	public function addSearch(string $search): ISearchRequest;
 
-
 	/**
 	 * Get the value of an option (as string).
 	 *
@@ -130,7 +108,6 @@ interface ISearchRequest {
 	 * @return array
 	 */
 	public function getOptionArray(string $option, array $default = []): array;
-
 
 	/**
 	 * Limit the search to a part of the document.
@@ -163,7 +140,6 @@ interface ISearchRequest {
 	 */
 	public function getParts(): array;
 
-
 	/**
 	 * Limit the search to a specific meta tag.
 	 *
@@ -193,8 +169,7 @@ interface ISearchRequest {
 	 *
 	 * @return ISearchRequest
 	 */
-	public function setMetaTags(array $tags): IsearchRequest;
-
+	public function setMetaTags(array $tags): ISearchRequest;
 
 	/**
 	 * Limit the search to a specific sub tag.
@@ -230,7 +205,6 @@ interface ISearchRequest {
 	 */
 	public function setSubTags(array $tags): ISearchRequest;
 
-
 	/**
 	 * Limit the search to a specific field of the mapping, using a full string.
 	 *
@@ -250,7 +224,6 @@ interface ISearchRequest {
 	 * @return array
 	 */
 	public function getLimitFields(): array;
-
 
 	/**
 	 * Limit the search to a specific field of the mapping, using a wildcard on
@@ -273,7 +246,6 @@ interface ISearchRequest {
 	 */
 	public function getWildcardFields(): array;
 
-
 	/**
 	 * Filter the results, based on a group of field, using regex
 	 *
@@ -293,7 +265,6 @@ interface ISearchRequest {
 	 * @return array
 	 */
 	public function getRegexFilters(): array;
-
 
 	/**
 	 * Filter the results, based on a group of field, using wildcard
@@ -315,7 +286,6 @@ interface ISearchRequest {
 	 */
 	public function getWildcardFilters(): array;
 
-
 	/**
 	 * Add an extra field to the search.
 	 *
@@ -336,8 +306,6 @@ interface ISearchRequest {
 	 */
 	public function getFields(): array;
 
-
-
 	/**
 	 * Add a MUST search on an extra field
 	 *
@@ -347,7 +315,6 @@ interface ISearchRequest {
 	 * @since 17.0.0
 	 */
 	public function addSimpleQuery(ISearchRequestSimpleQuery $query): ISearchRequest;
-
 
 	/**
 	 * Get the list of queries on extra field.

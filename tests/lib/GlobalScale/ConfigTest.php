@@ -1,22 +1,8 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Bjoern Schiessle <bjoern@schiessle.org>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\GlobalScale;
@@ -26,10 +12,10 @@ use OCP\IConfig;
 use Test\TestCase;
 
 class ConfigTest extends TestCase {
-
-	/** @var  IConfig|\PHPUnit\Framework\MockObject\MockObject */
+	/** @var IConfig|\PHPUnit\Framework\MockObject\MockObject */
 	private $config;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
@@ -44,16 +30,16 @@ class ConfigTest extends TestCase {
 		if (!empty($mockMethods)) {
 			return $this->getMockBuilder(Config::class)
 				->setConstructorArgs([$this->config])
-				->setMethods($mockMethods)
+				->onlyMethods($mockMethods)
 				->getMock();
 		}
 
 		return new Config($this->config);
 	}
 
-	public function testIsGlobalScaleEnabled() {
+	public function testIsGlobalScaleEnabled(): void {
 		$gsConfig = $this->getInstance();
-		$this->config->expects($this->once())->method('getSystemValue')
+		$this->config->expects($this->once())->method('getSystemValueBool')
 			->with('gs.enabled', false)->willReturn(true);
 
 		$result = $gsConfig->isGlobalScaleEnabled();
@@ -61,26 +47,25 @@ class ConfigTest extends TestCase {
 		$this->assertTrue($result);
 	}
 
-
 	/**
-	 * @dataProvider dataTestOnlyInternalFederation
 	 *
 	 * @param bool $gsEnabled
 	 * @param string $gsFederation
 	 * @param bool $expected
 	 */
-	public function testOnlyInternalFederation($gsEnabled, $gsFederation, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestOnlyInternalFederation')]
+	public function testOnlyInternalFederation($gsEnabled, $gsFederation, $expected): void {
 		$gsConfig = $this->getInstance(['isGlobalScaleEnabled']);
 
 		$gsConfig->expects($this->any())->method('isGlobalScaleEnabled')->willReturn($gsEnabled);
 
-		$this->config->expects($this->any())->method('getSystemValue')
+		$this->config->expects($this->any())->method('getSystemValueString')
 			->with('gs.federation', 'internal')->willReturn($gsFederation);
 
 		$this->assertSame($expected, $gsConfig->onlyInternalFederation());
 	}
 
-	public function dataTestOnlyInternalFederation() {
+	public static function dataTestOnlyInternalFederation(): array {
 		return [
 			[true, 'global', false],
 			[true, 'internal', true],

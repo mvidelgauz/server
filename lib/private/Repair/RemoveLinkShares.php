@@ -3,30 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2019, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Repair;
 
 use OCP\AppFramework\Utility\ITimeFactory;
@@ -40,38 +20,25 @@ use OCP\Migration\IRepairStep;
 use OCP\Notification\IManager;
 
 class RemoveLinkShares implements IRepairStep {
-	/** @var IDBConnection */
-	private $connection;
-	/** @var IConfig */
-	private $config;
 	/** @var string[] */
-	private $userToNotify = [];
-	/** @var IGroupManager */
-	private $groupManager;
-	/** @var IManager */
-	private $notificationManager;
-	/** @var ITimeFactory */
-	private $timeFactory;
+	private array $userToNotify = [];
 
-	public function __construct(IDBConnection $connection,
-								IConfig $config,
-								IGroupManager $groupManager,
-								IManager $notificationManager,
-								ITimeFactory $timeFactory) {
-		$this->connection = $connection;
-		$this->config = $config;
-		$this->groupManager = $groupManager;
-		$this->notificationManager = $notificationManager;
-		$this->timeFactory = $timeFactory;
+	public function __construct(
+		private readonly IDBConnection $connection,
+		private readonly IConfig $config,
+		private readonly IGroupManager $groupManager,
+		private readonly IManager $notificationManager,
+		private readonly ITimeFactory $timeFactory,
+	) {
 	}
 
-
+	#[\Override]
 	public function getName(): string {
 		return 'Remove potentially over exposing share links';
 	}
 
 	private function shouldRun(): bool {
-		$versionFromBeforeUpdate = $this->config->getSystemValue('version', '0.0.0');
+		$versionFromBeforeUpdate = $this->config->getSystemValueString('version', '0.0.0');
 
 		if (version_compare($versionFromBeforeUpdate, '14.0.11', '<')) {
 			return true;
@@ -86,22 +53,15 @@ class RemoveLinkShares implements IRepairStep {
 		return false;
 	}
 
-	/**
-	 * Delete the share
-	 *
-	 * @param int $id
-	 */
 	private function deleteShare(int $id): void {
 		$qb = $this->connection->getQueryBuilder();
 		$qb->delete('share')
 			->where($qb->expr()->eq('id', $qb->createNamedParameter($id)));
-		$qb->execute();
+		$qb->executeStatement();
 	}
 
 	/**
 	 * Get the total of affected shares
-	 *
-	 * @return int
 	 */
 	private function getTotal(): int {
 		$subSubQuery = $this->connection->getQueryBuilder();
@@ -126,13 +86,13 @@ class RemoveLinkShares implements IRepairStep {
 		$query = $this->connection->getQueryBuilder();
 		$query->select($query->func()->count('*', 'total'))
 			->from('share')
-			->where($query->expr()->in('id', $query->createFunction('(' . $subQuery->getSQL() . ')')));
+			->where($query->expr()->in('id', $query->createFunction($subQuery->getSQL())));
 
-		$result = $query->execute();
-		$data = $result->fetch();
+		$result = $query->executeQuery();
+		$data = $result->fetchAssociative();
 		$result->closeCursor();
 
-		return (int) $data['total'];
+		return (int)$data['total'];
 	}
 
 	/**
@@ -158,14 +118,14 @@ class RemoveLinkShares implements IRepairStep {
 			))
 			->andWhere($query->expr()->eq('s1.item_source', 's2.item_source'));
 		/** @var IResult $result */
-		$result = $query->execute();
+		$result = $query->executeQuery();
 		return $result;
 	}
 
 	/**
 	 * Process a single share
 	 *
-	 * @param array $data
+	 * @param array{id: int|string, uid_owner: string, uid_initiator: string} $data
 	 */
 	private function processShare(array $data): void {
 		$id = $data['id'];
@@ -178,8 +138,6 @@ class RemoveLinkShares implements IRepairStep {
 
 	/**
 	 * Update list of users to notify
-	 *
-	 * @param string $uid
 	 */
 	private function addToNotify(string $uid): void {
 		if (!isset($this->userToNotify[$uid])) {
@@ -201,7 +159,7 @@ class RemoveLinkShares implements IRepairStep {
 
 		$users = array_keys($this->userToNotify);
 		foreach ($users as $user) {
-			$notification->setUser((string) $user);
+			$notification->setUser((string)$user);
 			$this->notificationManager->notify($notification);
 		}
 	}
@@ -210,14 +168,14 @@ class RemoveLinkShares implements IRepairStep {
 		$output->startProgress($total);
 
 		$shareResult = $this->getShares();
-		while ($data = $shareResult->fetch()) {
+		while ($data = $shareResult->fetchAssociative()) {
 			$this->processShare($data);
 			$output->advance();
 		}
 		$output->finishProgress();
 		$shareResult->closeCursor();
 
-		// Notifiy all admins
+		// Notify all admins
 		$adminGroup = $this->groupManager->get('admin');
 		$adminUsers = $adminGroup->getUsers();
 		foreach ($adminUsers as $user) {
@@ -228,6 +186,7 @@ class RemoveLinkShares implements IRepairStep {
 		$this->sendNotification();
 	}
 
+	#[\Override]
 	public function run(IOutput $output): void {
 		if ($this->shouldRun() === false || ($total = $this->getTotal()) === 0) {
 			$output->info('No need to remove link shares.');

@@ -1,22 +1,8 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Robin Appelman <robin@icewind.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Files\Cache;
@@ -30,17 +16,14 @@ use OCP\Files\IMimeTypeLoader;
 use OCP\Files\Search\ISearchBinaryOperator;
 use OCP\Files\Search\ISearchComparison;
 use OCP\Files\Search\ISearchOperator;
+use OCP\IDBConnection;
+use OCP\Server;
 use Test\TestCase;
 
-/**
- * @group DB
- */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class SearchBuilderTest extends TestCase {
 	/** @var IQueryBuilder */
 	private $builder;
-
-	/** @var IMimeTypeLoader|\PHPUnit\Framework\MockObject\MockObject */
-	private $mimetypeLoader;
 
 	/** @var SearchBuilder */
 	private $searchBuilder;
@@ -48,12 +31,13 @@ class SearchBuilderTest extends TestCase {
 	/** @var integer */
 	private $numericStorageId;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
-		$this->builder = \OC::$server->getDatabaseConnection()->getQueryBuilder();
-		$this->mimetypeLoader = $this->createMock(IMimeTypeLoader::class);
+		$this->builder = Server::get(IDBConnection::class)->getQueryBuilder();
+		$this->searchBuilder = $this->createInstanceWithMocks(SearchBuilder::class);
 
-		$this->mimetypeLoader->expects($this->any())
+		$this->getAutoMock(IMimeTypeLoader::class)->expects($this->any())
 			->method('getId')
 			->willReturnMap([
 				['text', 1],
@@ -64,7 +48,7 @@ class SearchBuilderTest extends TestCase {
 				['image', 6],
 			]);
 
-		$this->mimetypeLoader->expects($this->any())
+		$this->getAutoMock(IMimeTypeLoader::class)->expects($this->any())
 			->method('getMimetypeById')
 			->willReturnMap([
 				[1, 'text'],
@@ -74,24 +58,23 @@ class SearchBuilderTest extends TestCase {
 				[5, 'image/png'],
 				[6, 'image']
 			]);
-
-		$this->searchBuilder = new SearchBuilder($this->mimetypeLoader);
 		$this->numericStorageId = 10000;
 
 		$this->builder->select(['fileid'])
-			->from('filecache')
+			->from('filecache', 'file') // alias needed for QuerySearchHelper#getOperatorFieldAndValue
 			->where($this->builder->expr()->eq('storage', new Literal($this->numericStorageId)));
 	}
 
+	#[\Override]
 	protected function tearDown(): void {
 		parent::tearDown();
 
-		$builder = \OC::$server->getDatabaseConnection()->getQueryBuilder();
+		$builder = Server::get(IDBConnection::class)->getQueryBuilder();
 
 		$builder->delete('filecache')
 			->where($builder->expr()->eq('storage', $builder->createNamedParameter($this->numericStorageId, IQueryBuilder::PARAM_INT)));
 
-		$builder->execute();
+		$builder->executeStatement();
 	}
 
 	private function addCacheEntry(array $data) {
@@ -112,14 +95,14 @@ class SearchBuilderTest extends TestCase {
 		$data['parent'] = -1;
 		if (isset($data['mimetype'])) {
 			[$mimepart,] = explode('/', $data['mimetype']);
-			$data['mimepart'] = $this->mimetypeLoader->getId($mimepart);
-			$data['mimetype'] = $this->mimetypeLoader->getId($data['mimetype']);
+			$data['mimepart'] = $this->getAutoMock(IMimeTypeLoader::class)->getId($mimepart);
+			$data['mimetype'] = $this->getAutoMock(IMimeTypeLoader::class)->getId($data['mimetype']);
 		} else {
 			$data['mimepart'] = 1;
 			$data['mimetype'] = 1;
 		}
 
-		$builder = \OC::$server->getDatabaseConnection()->getQueryBuilder();
+		$builder = Server::get(IDBConnection::class)->getQueryBuilder();
 
 		$values = [];
 		foreach ($data as $key => $value) {
@@ -128,7 +111,7 @@ class SearchBuilderTest extends TestCase {
 
 		$builder->insert('filecache')
 			->values($values)
-			->execute();
+			->executeStatement();
 
 		return $builder->getLastInsertId();
 	}
@@ -137,14 +120,14 @@ class SearchBuilderTest extends TestCase {
 		$dbOperator = $this->searchBuilder->searchOperatorToDBExpr($this->builder, $operator);
 		$this->builder->andWhere($dbOperator);
 
-		$result = $this->builder->execute();
-		$rows = $result->fetchAll(\PDO::FETCH_COLUMN);
+		$result = $this->builder->executeQuery();
+		$rows = $result->fetchFirstColumn();
 		$result->closeCursor();
 
 		return $rows;
 	}
 
-	public function comparisonProvider() {
+	public static function comparisonProvider(): array {
 		return [
 			[new SearchComparison(ISearchComparison::COMPARE_GREATER_THAN, 'mtime', 125), [1]],
 			[new SearchComparison(ISearchComparison::COMPARE_LESS_THAN, 'mtime', 125), [0]],
@@ -154,6 +137,7 @@ class SearchBuilderTest extends TestCase {
 			[new SearchComparison(ISearchComparison::COMPARE_LIKE, 'name', 'foo%'), [0, 1]],
 			[new SearchComparison(ISearchComparison::COMPARE_EQUAL, 'mimetype', 'image/jpg'), [0]],
 			[new SearchComparison(ISearchComparison::COMPARE_LIKE, 'mimetype', 'image/%'), [0, 1]],
+			[new SearchComparison(ISearchComparison::COMPARE_IN, 'mimetype', ['image/jpg', 'image/png']), [0, 1]],
 			[new SearchBinaryOperator(ISearchBinaryOperator::OPERATOR_AND, [
 				new SearchComparison(ISearchComparison::COMPARE_EQUAL, 'size', 50),
 				new SearchComparison(ISearchComparison::COMPARE_LESS_THAN, 'mtime', 125)
@@ -179,17 +163,25 @@ class SearchBuilderTest extends TestCase {
 			[new SearchBinaryOperator(ISearchBinaryOperator::OPERATOR_NOT, [
 				new SearchComparison(ISearchComparison::COMPARE_LIKE, 'name', '%bar'),
 			]), [1]],
-
+			[new SearchComparison(ISearchComparison::COMPARE_IN, 'fileid', []), []],
+			[new SearchComparison(ISearchComparison::COMPARE_IN, 'mimetype', []), []],
+			[new SearchBinaryOperator(ISearchBinaryOperator::OPERATOR_NOT, [
+				new SearchComparison(ISearchComparison::COMPARE_IN, 'fileid', []),
+			]), [0, 1]],
+			[new SearchBinaryOperator(ISearchBinaryOperator::OPERATOR_OR, [
+				new SearchComparison(ISearchComparison::COMPARE_EQUAL, 'mtime', 100),
+				new SearchComparison(ISearchComparison::COMPARE_IN, 'fileid', []),
+			]), [0]],
 		];
 	}
 
 	/**
-	 * @dataProvider comparisonProvider
 	 *
 	 * @param ISearchOperator $operator
 	 * @param array $fileIds
 	 */
-	public function testComparison(ISearchOperator $operator, array $fileIds) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('comparisonProvider')]
+	public function testComparison(ISearchOperator $operator, array $fileIds): void {
 		$fileId = [];
 		$fileId[] = $this->addCacheEntry([
 			'path' => 'foobar',

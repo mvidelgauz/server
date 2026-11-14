@@ -3,27 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2018, Michael Weimann <mail@michael-weimann.eu>
- *
- * @author Michael Weimann <mail@michael-weimann.eu>
- * @author Morris Jobke <hey@morrisjobke.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\Files\SimpleFS;
 
 use OCP\Files\NotPermittedException;
@@ -36,17 +19,13 @@ use OCP\Files\NotPermittedException;
 class InMemoryFile implements ISimpleFile {
 	/**
 	 * Holds the file name.
-	 *
-	 * @var string
 	 */
-	private $name;
+	private string $name;
 
 	/**
 	 * Holds the file contents.
-	 *
-	 * @var string
 	 */
-	private $contents;
+	private string $contents;
 
 	/**
 	 * InMemoryFile constructor.
@@ -64,7 +43,8 @@ class InMemoryFile implements ISimpleFile {
 	 * @inheritdoc
 	 * @since 16.0.0
 	 */
-	public function getName() {
+	#[\Override]
+	public function getName(): string {
 		return $this->name;
 	}
 
@@ -72,7 +52,8 @@ class InMemoryFile implements ISimpleFile {
 	 * @inheritdoc
 	 * @since 16.0.0
 	 */
-	public function getSize() {
+	#[\Override]
+	public function getSize(): int|float {
 		return strlen($this->contents);
 	}
 
@@ -80,7 +61,8 @@ class InMemoryFile implements ISimpleFile {
 	 * @inheritdoc
 	 * @since 16.0.0
 	 */
-	public function getETag() {
+	#[\Override]
+	public function getETag(): string {
 		return '';
 	}
 
@@ -88,7 +70,8 @@ class InMemoryFile implements ISimpleFile {
 	 * @inheritdoc
 	 * @since 16.0.0
 	 */
-	public function getMTime() {
+	#[\Override]
+	public function getMTime(): int {
 		return time();
 	}
 
@@ -96,7 +79,8 @@ class InMemoryFile implements ISimpleFile {
 	 * @inheritdoc
 	 * @since 16.0.0
 	 */
-	public function getContent() {
+	#[\Override]
+	public function getContent(): string {
 		return $this->contents;
 	}
 
@@ -104,7 +88,8 @@ class InMemoryFile implements ISimpleFile {
 	 * @inheritdoc
 	 * @since 16.0.0
 	 */
-	public function putContent($data) {
+	#[\Override]
+	public function putContent($data): void {
 		$this->contents = $data;
 	}
 
@@ -113,7 +98,8 @@ class InMemoryFile implements ISimpleFile {
 	 *
 	 * @since 16.0.0
 	 */
-	public function delete() {
+	#[\Override]
+	public function delete(): void {
 		// unimplemented for in memory files
 	}
 
@@ -121,21 +107,32 @@ class InMemoryFile implements ISimpleFile {
 	 * @inheritdoc
 	 * @since 16.0.0
 	 */
-	public function getMimeType() {
+	#[\Override]
+	public function getMimeType(): string {
 		$fileInfo = new \finfo(FILEINFO_MIME_TYPE);
 		return $fileInfo->buffer($this->contents);
 	}
 
 	/**
-	 * Stream reading is unsupported for in memory files.
-	 *
-	 * @throws NotPermittedException
-	 * @since 16.0.0
+	 * @inheritDoc
+	 * @since 24.0.0
 	 */
+	#[\Override]
+	public function getExtension(): string {
+		return \pathinfo($this->name, PATHINFO_EXTENSION);
+	}
+
+	/**
+	 * @inheritDoc
+	 * @since 16.0.0
+	 * @since 34.0.0 - return in-memory stream of contents
+	 */
+	#[\Override]
 	public function read() {
-		throw new NotPermittedException(
-			'Stream reading is unsupported for in memory files'
-		);
+		$stream = fopen('php://memory', 'r+');
+		fwrite($stream, $this->contents);
+		rewind($stream);
+		return $stream;
 	}
 
 	/**
@@ -144,6 +141,7 @@ class InMemoryFile implements ISimpleFile {
 	 * @throws NotPermittedException
 	 * @since 16.0.0
 	 */
+	#[\Override]
 	public function write() {
 		throw new NotPermittedException(
 			'Stream writing is unsupported for in memory files'

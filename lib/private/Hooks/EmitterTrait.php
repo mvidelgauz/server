@@ -1,33 +1,17 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Hooks;
 
 /**
  * @deprecated 18.0.0 use events and the \OCP\EventDispatcher\IEventDispatcher service
  */
 trait EmitterTrait {
-
 	/**
 	 * @var callable[][] $listeners
 	 */
@@ -44,7 +28,7 @@ trait EmitterTrait {
 		if (!isset($this->listeners[$eventName])) {
 			$this->listeners[$eventName] = [];
 		}
-		if (array_search($callback, $this->listeners[$eventName], true) === false) {
+		if (!in_array($callback, $this->listeners[$eventName], true)) {
 			$this->listeners[$eventName][] = $callback;
 		}
 	}
@@ -55,10 +39,10 @@ trait EmitterTrait {
 	 * @param callable $callback optional
 	 * @deprecated 18.0.0 use \OCP\EventDispatcher\IEventDispatcher::removeListener
 	 */
-	public function removeListener($scope = null, $method = null, callable $callback = null) {
+	public function removeListener($scope = null, $method = null, ?callable $callback = null) {
 		$names = [];
 		$allNames = array_keys($this->listeners);
-		if ($scope and $method) {
+		if ($scope && $method) {
 			$name = $scope . '::' . $method;
 			if (isset($this->listeners[$name])) {
 				$names[] = $name;
@@ -66,14 +50,14 @@ trait EmitterTrait {
 		} elseif ($scope) {
 			foreach ($allNames as $name) {
 				$parts = explode('::', $name, 2);
-				if ($parts[0] == $scope) {
+				if ($parts[0] === $scope) {
 					$names[] = $name;
 				}
 			}
 		} elseif ($method) {
 			foreach ($allNames as $name) {
 				$parts = explode('::', $name, 2);
-				if ($parts[1] == $method) {
+				if ($parts[1] === $method) {
 					$names[] = $name;
 				}
 			}

@@ -3,59 +3,37 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2019 Daniel Kesselberg <mail@danielkesselberg.de>
- *
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Collaboration\Resources;
 
 use OCP\AppFramework\QueryException;
 use OCP\Collaboration\Resources\IProvider;
 use OCP\Collaboration\Resources\IProviderManager;
-use OCP\IServerContainer;
+use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 
 class ProviderManager implements IProviderManager {
-
 	/** @var string[] */
-	protected $providers = [];
+	protected array $providers = [];
 
 	/** @var IProvider[] */
-	protected $providerInstances = [];
+	protected array $providerInstances = [];
 
-	/** @var IServerContainer */
-	protected $serverContainer;
-
-	/** @var LoggerInterface */
-	protected $logger;
-
-	public function __construct(IServerContainer $serverContainer, LoggerInterface $logger) {
-		$this->serverContainer = $serverContainer;
-		$this->logger = $logger;
+	public function __construct(
+		protected ContainerInterface $serverContainer,
+		protected LoggerInterface $logger,
+	) {
 	}
 
+	#[\Override]
 	public function getResourceProviders(): array {
 		if ($this->providers !== []) {
 			foreach ($this->providers as $provider) {
 				try {
-					$this->providerInstances[] = $this->serverContainer->query($provider);
+					$this->providerInstances[] = $this->serverContainer->get($provider);
 				} catch (QueryException $e) {
 					$this->logger->error("Could not query resource provider $provider: " . $e->getMessage(), [
 						'exception' => $e,
@@ -68,6 +46,7 @@ class ProviderManager implements IProviderManager {
 		return $this->providerInstances;
 	}
 
+	#[\Override]
 	public function registerResourceProvider(string $provider): void {
 		$this->providers[] = $provider;
 	}

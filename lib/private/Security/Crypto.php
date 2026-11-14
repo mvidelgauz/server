@@ -1,40 +1,20 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Andreas Fischer <bantu@owncloud.com>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author lynn-stephenson <lynn.stephenson@protonmail.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Security;
 
 use Exception;
 use OCP\IConfig;
 use OCP\Security\ICrypto;
-use OCP\Security\ISecureRandom;
-use phpseclib\Crypt\AES;
-use phpseclib\Crypt\Hash;
+use phpseclib3\Crypt\AES;
+use phpseclib3\Crypt\Hash;
+use SensitiveParameter;
 
 /**
  * Class Crypto provides a high-level encryption layer using AES-CBC. If no key has been provided
@@ -47,20 +27,13 @@ use phpseclib\Crypt\Hash;
  * @package OC\Security
  */
 class Crypto implements ICrypto {
-	/** @var AES $cipher */
-	private $cipher;
-	/** @var int */
-	private $ivLength = 16;
-	/** @var IConfig */
-	private $config;
+	private AES $cipher;
+	private int $ivLength = 16;
 
-	/**
-	 * @param IConfig $config
-	 * @param ISecureRandom $random
-	 */
-	public function __construct(IConfig $config) {
-		$this->cipher = new AES();
-		$this->config = $config;
+	public function __construct(
+		private IConfig $config,
+	) {
+		$this->cipher = new AES('cbc');
 	}
 
 	/**
@@ -68,9 +41,14 @@ class Crypto implements ICrypto {
 	 * @param string $password Password to use (defaults to `secret` in config.php)
 	 * @return string Calculated HMAC
 	 */
-	public function calculateHMAC(string $message, string $password = ''): string {
+	#[\Override]
+	public function calculateHMAC(
+		string $message,
+		#[SensitiveParameter]
+		string $password = '',
+	): string {
 		if ($password === '') {
-			$password = $this->config->getSystemValue('secret');
+			$password = $this->config->getSystemValueString('secret');
 		}
 
 		// Append an "a" behind the password and hash it to prevent reusing the same password as for encryption
@@ -84,18 +62,26 @@ class Crypto implements ICrypto {
 	/**
 	 * Encrypts a value and adds an HMAC (Encrypt-Then-MAC)
 	 *
-	 * @param string $plaintext
 	 * @param string $password Password to encrypt, if not specified the secret from config.php will be taken
 	 * @return string Authenticated ciphertext
 	 * @throws Exception if it was not possible to gather sufficient entropy
 	 * @throws Exception if encrypting the data failed
 	 */
-	public function encrypt(string $plaintext, string $password = ''): string {
+	#[\Override]
+	public function encrypt(
+		string $plaintext,
+		#[SensitiveParameter]
+		string $password = '',
+	): string {
 		if ($password === '') {
-			$password = $this->config->getSystemValue('secret');
+			$password = $this->config->getSystemValueString('secret');
 		}
 		$keyMaterial = hash_hkdf('sha512', $password);
-		$this->cipher->setPassword(substr($keyMaterial, 0, 32));
+		// Pin the PBKDF2 parameters to phpseclib v2 defaults ('sha1' hash, 'phpseclib' salt).
+		// phpseclib v3 changed the default salt to 'phpseclib/salt', which would derive a
+		// different AES key and break decryption of previously stored ciphertexts.
+		// TODO: We should put our own salt into the HKDF derivation to avoid this dependency on phpseclib's defaults!
+		$this->cipher->setPassword(substr($keyMaterial, 0, 32), 'pbkdf2', 'sha1', 'phpseclib');
 
 		$iv = \random_bytes($this->ivLength);
 		$this->cipher->setIV($iv);
@@ -108,23 +94,45 @@ class Crypto implements ICrypto {
 
 		$ciphertext = bin2hex($encrypted);
 		$iv = bin2hex($iv);
-		$hmac = bin2hex($this->calculateHMAC($ciphertext.$iv, substr($keyMaterial, 32)));
+		$hmac = bin2hex($this->calculateHMAC($ciphertext . $iv, substr($keyMaterial, 32)));
 
-		return $ciphertext.'|'.$iv.'|'.$hmac.'|3';
+		return $ciphertext . '|' . $iv . '|' . $hmac . '|3';
 	}
 
 	/**
 	 * Decrypts a value and verifies the HMAC (Encrypt-Then-Mac)
-	 * @param string $authenticatedCiphertext
 	 * @param string $password Password to encrypt, if not specified the secret from config.php will be taken
-	 * @return string plaintext
 	 * @throws Exception If the HMAC does not match
 	 * @throws Exception If the decryption failed
 	 */
-	public function decrypt(string $authenticatedCiphertext, string $password = ''): string {
-		if ($password === '') {
-			$password = $this->config->getSystemValue('secret');
+	#[\Override]
+	public function decrypt(
+		string $authenticatedCiphertext,
+		#[SensitiveParameter]
+		string $password = '',
+	): string {
+		$secret = $this->config->getSystemValue('secret');
+		try {
+			if ($password === '') {
+				return $this->decryptWithoutSecret($authenticatedCiphertext, $secret);
+			}
+			return $this->decryptWithoutSecret($authenticatedCiphertext, $password);
+		} catch (Exception $e) {
+			if ($password === '') {
+				// Retry with empty secret as a fallback for instances where the secret might not have been set by accident
+				try {
+					return $this->decryptWithoutSecret($authenticatedCiphertext, '');
+				} catch (\Throwable) {
+					// Fallback failed (e.g. v3 ciphertext requires a non-empty key for hash_hkdf),
+					// rethrow the original exception
+					throw $e;
+				}
+			}
+			throw $e;
 		}
+	}
+
+	private function decryptWithoutSecret(string $authenticatedCiphertext, string $password = ''): string {
 		$hmacKey = $encryptionKey = $password;
 
 		$parts = explode('|', $authenticatedCiphertext);
@@ -133,6 +141,25 @@ class Crypto implements ICrypto {
 			throw new Exception('Authenticated ciphertext could not be decoded.');
 		}
 
+		/*
+		 * Rearrange arguments for legacy ownCloud migrations
+		 *
+		 * The original scheme consistent of three parts. Nextcloud added a
+		 * fourth at the end as "2" or later "3", ownCloud added "v2" at the
+		 * beginning.
+		 */
+		$originalParts = $parts;
+		$isOwnCloudV2Migration = $partCount === 4 && $originalParts[0] === 'v2';
+		if ($isOwnCloudV2Migration) {
+			$parts = [
+				$parts[1],
+				$parts[2],
+				$parts[3],
+				'2'
+			];
+		}
+
+		// Convert hex-encoded values to binary
 		$ciphertext = $this->hex2bin($parts[0]);
 		$iv = $parts[1];
 		$hmac = $this->hex2bin($parts[2]);
@@ -143,17 +170,26 @@ class Crypto implements ICrypto {
 				$iv = $this->hex2bin($iv);
 			}
 
-			if ($version === '3') {
+			if ($version === '3' || $isOwnCloudV2Migration) {
 				$keyMaterial = hash_hkdf('sha512', $password);
 				$encryptionKey = substr($keyMaterial, 0, 32);
 				$hmacKey = substr($keyMaterial, 32);
 			}
 		}
-		$this->cipher->setPassword($encryptionKey);
+		// Match the v2-compatible PBKDF2 parameters used in encrypt(), see the note there.
+		// TODO: We should put our own salt into the HKDF derivation to avoid this dependency on phpseclib's defaults!
+		$this->cipher->setPassword($encryptionKey, 'pbkdf2', 'sha1', 'phpseclib');
 		$this->cipher->setIV($iv);
 
-		if (!hash_equals($this->calculateHMAC($parts[0] . $parts[1], $hmacKey), $hmac)) {
-			throw new Exception('HMAC does not match.');
+		if ($isOwnCloudV2Migration) {
+			// ownCloud uses the binary IV for HMAC calculation
+			if (!hash_equals($this->calculateHMAC($parts[0] . $iv, $hmacKey), $hmac)) {
+				throw new Exception('HMAC does not match.');
+			}
+		} else {
+			if (!hash_equals($this->calculateHMAC($parts[0] . $parts[1], $hmacKey), $hmac)) {
+				throw new \RuntimeException('HMAC does not match.');
+			}
 		}
 
 		$result = $this->cipher->decrypt($ciphertext);

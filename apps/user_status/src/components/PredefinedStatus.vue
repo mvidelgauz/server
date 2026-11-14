@@ -1,69 +1,77 @@
 <!--
-  - @copyright Copyright (c) 2020 Georg Ehrke <oc.list@georgehrke.com>
-  - @author Georg Ehrke <oc.list@georgehrke.com>
-  -
-  - @license GNU AGPL version 3 or any later version
-  -
-  - This program is free software: you can redistribute it and/or modify
-  - it under the terms of the GNU Affero General Public License as
-  - published by the Free Software Foundation, either version 3 of the
-  - License, or (at your option) any later version.
-  -
-  - This program is distributed in the hope that it will be useful,
-  - but WITHOUT ANY WARRANTY; without even the implied warranty of
-  - MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-  - GNU Affero General Public License for more details.
-  -
-  - You should have received a copy of the GNU Affero General Public License
-  - along with this program. If not, see <http://www.gnu.org/licenses/>.
-  -
-  -->
+  - SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 <template>
-	<div
-		class="predefined-status"
-		tabindex="0"
-		@keyup.enter="select"
-		@keyup.space="select"
-		@click="select">
-		<span class="predefined-status__icon">
-			{{ icon }}
-		</span>
-		<span class="predefined-status__message">
-			{{ message }}
-		</span>
-		<span class="predefined-status__clear-at">
-			{{ clearAt | clearAtFilter }}
-		</span>
-	</div>
+	<li class="predefined-status">
+		<input
+			:id="id"
+			class="hidden-visually predefined-status__input"
+			type="radio"
+			name="predefined-status"
+			:checked="selected"
+			@change="select">
+		<label class="predefined-status__label" :for="id">
+			<span aria-hidden="true" class="predefined-status__label--icon">
+				{{ icon }}
+			</span>
+			<span class="predefined-status__label--message">
+				{{ message }}
+			</span>
+			<span class="predefined-status__label--clear-at">
+				{{ formattedClearAt }}
+			</span>
+		</label>
+	</li>
 </template>
 
 <script>
-import { clearAtFilter } from '../filters/clearAtFilter'
+import { clearAtFormat } from '../services/clearAtService.js'
 
 export default {
 	name: 'PredefinedStatus',
-	filters: {
-		clearAtFilter,
-	},
+
 	props: {
 		messageId: {
 			type: String,
 			required: true,
 		},
+
 		icon: {
 			type: String,
 			required: true,
 		},
+
 		message: {
 			type: String,
 			required: true,
 		},
+
 		clearAt: {
 			type: Object,
 			required: false,
 			default: null,
 		},
+
+		selected: {
+			type: Boolean,
+			required: false,
+			default: false,
+		},
 	},
+
+	emits: ['select'],
+
+	computed: {
+		id() {
+			return `user-status-predefined-status-${this.messageId}`
+		},
+
+		formattedClearAt() {
+			return clearAtFormat(this.clearAt)
+		},
+	},
+
 	methods: {
 		/**
 		 * Emits an event when the user clicks the row
@@ -77,35 +85,55 @@ export default {
 
 <style lang="scss" scoped>
 .predefined-status {
-	display: flex;
-	flex-wrap: nowrap;
-	justify-content: flex-start;
-	flex-basis: 100%;
-	border-radius: var(--border-radius);
-	align-items: center;
-	min-height: 44px;
+	&__label {
+		display: flex;
+		flex-wrap: nowrap;
+		justify-content: flex-start;
+		flex-basis: 100%;
+		border-radius: var(--border-radius);
+		align-items: center;
+		min-height: var(--default-clickable-area);
+		padding-inline: var(--default-grid-baseline);
 
-	&:hover,
-	&:focus {
-		background-color: var(--color-background-hover);
-	}
-
-	&__icon {
-		flex-basis: 40px;
-		text-align: center;
-	}
-
-	&__message {
-		font-weight: bold;
-		padding: 0 6px;
-	}
-
-	&__clear-at {
-		opacity: .7;
-
-		&::before {
-			content: ' - ';
+		&, & * {
+			cursor: pointer;
 		}
+
+		&:hover {
+			background-color: var(--color-background-dark);
+		}
+
+		&--icon {
+			flex-basis: var(--default-clickable-area);
+			text-align: center;
+		}
+
+		&--message {
+			font-weight: bold;
+			padding: 0 6px;
+		}
+
+		&--clear-at {
+			color: var(--color-text-maxcontrast);
+
+			&::before {
+				content: ' – ';
+			}
+		}
+	}
+
+	&__input:checked + &__label,
+	&__label:active {
+		outline: 2px solid var(--color-main-text);
+		box-shadow: 0 0 0 4px var(--color-main-background);
+		background-color: var(--color-background-dark);
+		border-radius: var(--border-radius-large);
+	}
+
+	&__input:focus-visible + &__label {
+		outline: 2px solid var(--color-primary-element) !important;
+		background-color: var(--color-background-dark);
+		border-radius: var(--border-radius-large);
 	}
 }
 </style>

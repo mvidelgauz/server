@@ -1,29 +1,12 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Citharel <nextcloud@tcit.fr>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Security\CSP;
 
 /**
@@ -34,181 +17,94 @@ namespace OC\Security\CSP;
  * @package OC\Security\CSP
  */
 class ContentSecurityPolicy extends \OCP\AppFramework\Http\ContentSecurityPolicy {
-	/**
-	 * @return boolean
-	 */
 	public function isInlineScriptAllowed(): bool {
 		return $this->inlineScriptAllowed;
 	}
 
-	/**
-	 * @param boolean $inlineScriptAllowed
-	 */
-	public function setInlineScriptAllowed(bool $inlineScriptAllowed) {
+	public function setInlineScriptAllowed(bool $inlineScriptAllowed): void {
 		$this->inlineScriptAllowed = $inlineScriptAllowed;
 	}
 
-	/**
-	 * @return boolean
-	 */
-	public function isEvalScriptAllowed(): bool {
-		return $this->evalScriptAllowed;
+	public function isEvalWasmAllowed(): ?bool {
+		return $this->evalWasmAllowed;
 	}
 
-	/**
-	 * @param boolean $evalScriptAllowed
-	 *
-	 * @deprecated 17.0.0 Unsafe eval should not be used anymore.
-	 */
-	public function setEvalScriptAllowed(bool $evalScriptAllowed) {
-		$this->evalScriptAllowed = $evalScriptAllowed;
+	public function setEvalWasmAllowed(bool $evalWasmAllowed): void {
+		$this->evalWasmAllowed = $evalWasmAllowed;
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getAllowedScriptDomains(): array {
 		return $this->allowedScriptDomains;
 	}
 
-	/**
-	 * @param array $allowedScriptDomains
-	 */
-	public function setAllowedScriptDomains(array $allowedScriptDomains) {
+	public function setAllowedScriptDomains(array $allowedScriptDomains): void {
 		$this->allowedScriptDomains = $allowedScriptDomains;
 	}
 
-	/**
-	 * @return boolean
-	 */
 	public function isInlineStyleAllowed(): bool {
 		return $this->inlineStyleAllowed;
 	}
 
-	/**
-	 * @param boolean $inlineStyleAllowed
-	 */
-	public function setInlineStyleAllowed(bool $inlineStyleAllowed) {
+	public function setInlineStyleAllowed(bool $inlineStyleAllowed): void {
 		$this->inlineStyleAllowed = $inlineStyleAllowed;
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getAllowedStyleDomains(): array {
 		return $this->allowedStyleDomains;
 	}
 
-	/**
-	 * @param array $allowedStyleDomains
-	 */
-	public function setAllowedStyleDomains(array $allowedStyleDomains) {
+	public function setAllowedStyleDomains(array $allowedStyleDomains): void {
 		$this->allowedStyleDomains = $allowedStyleDomains;
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getAllowedImageDomains(): array {
 		return $this->allowedImageDomains;
 	}
 
-	/**
-	 * @param array $allowedImageDomains
-	 */
-	public function setAllowedImageDomains(array $allowedImageDomains) {
+	public function setAllowedImageDomains(array $allowedImageDomains): void {
 		$this->allowedImageDomains = $allowedImageDomains;
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getAllowedConnectDomains(): array {
 		return $this->allowedConnectDomains;
 	}
 
-	/**
-	 * @param array $allowedConnectDomains
-	 */
-	public function setAllowedConnectDomains(array $allowedConnectDomains) {
+	public function setAllowedConnectDomains(array $allowedConnectDomains): void {
 		$this->allowedConnectDomains = $allowedConnectDomains;
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getAllowedMediaDomains(): array {
 		return $this->allowedMediaDomains;
 	}
 
-	/**
-	 * @param array $allowedMediaDomains
-	 */
-	public function setAllowedMediaDomains(array $allowedMediaDomains) {
+	public function setAllowedMediaDomains(array $allowedMediaDomains): void {
 		$this->allowedMediaDomains = $allowedMediaDomains;
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getAllowedObjectDomains(): array {
 		return $this->allowedObjectDomains;
 	}
 
-	/**
-	 * @param array $allowedObjectDomains
-	 */
-	public function setAllowedObjectDomains(array $allowedObjectDomains) {
+	public function setAllowedObjectDomains(array $allowedObjectDomains): void {
 		$this->allowedObjectDomains = $allowedObjectDomains;
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getAllowedFrameDomains(): array {
 		return $this->allowedFrameDomains;
 	}
 
-	/**
-	 * @param array $allowedFrameDomains
-	 */
-	public function setAllowedFrameDomains(array $allowedFrameDomains) {
+	public function setAllowedFrameDomains(array $allowedFrameDomains): void {
 		$this->allowedFrameDomains = $allowedFrameDomains;
 	}
 
-	/**
-	 * @return array
-	 */
 	public function getAllowedFontDomains(): array {
 		return $this->allowedFontDomains;
 	}
 
-	/**
-	 * @param array $allowedFontDomains
-	 */
-	public function setAllowedFontDomains($allowedFontDomains) {
+	public function setAllowedFontDomains($allowedFontDomains): void {
 		$this->allowedFontDomains = $allowedFontDomains;
 	}
 
-	/**
-	 * @return array
-	 * @deprecated 15.0.0 use FrameDomains and WorkerSrcDomains
-	 */
-	public function getAllowedChildSrcDomains(): array {
-		return $this->allowedChildSrcDomains;
-	}
-
-	/**
-	 * @param array $allowedChildSrcDomains
-	 * @deprecated 15.0.0 use FrameDomains and WorkerSrcDomains
-	 */
-	public function setAllowedChildSrcDomains($allowedChildSrcDomains) {
-		$this->allowedChildSrcDomains = $allowedChildSrcDomains;
-	}
-
-	/**
-	 * @return array
-	 */
 	public function getAllowedFrameAncestors(): array {
 		return $this->allowedFrameAncestors;
 	}
@@ -216,7 +112,7 @@ class ContentSecurityPolicy extends \OCP\AppFramework\Http\ContentSecurityPolicy
 	/**
 	 * @param array $allowedFrameAncestors
 	 */
-	public function setAllowedFrameAncestors($allowedFrameAncestors) {
+	public function setAllowedFrameAncestors($allowedFrameAncestors): void {
 		$this->allowedFrameAncestors = $allowedFrameAncestors;
 	}
 
@@ -224,7 +120,7 @@ class ContentSecurityPolicy extends \OCP\AppFramework\Http\ContentSecurityPolicy
 		return $this->allowedWorkerSrcDomains;
 	}
 
-	public function setAllowedWorkerSrcDomains(array $allowedWorkerSrcDomains) {
+	public function setAllowedWorkerSrcDomains(array $allowedWorkerSrcDomains): void {
 		$this->allowedWorkerSrcDomains = $allowedWorkerSrcDomains;
 	}
 
@@ -236,12 +132,27 @@ class ContentSecurityPolicy extends \OCP\AppFramework\Http\ContentSecurityPolicy
 		$this->allowedFormActionDomains = $allowedFormActionDomains;
 	}
 
-
 	public function getReportTo(): array {
 		return $this->reportTo;
 	}
 
-	public function setReportTo(array $reportTo) {
+	public function setReportTo(array $reportTo): void {
 		$this->reportTo = $reportTo;
+	}
+
+	public function isStrictDynamicAllowed(): bool {
+		return $this->strictDynamicAllowed;
+	}
+
+	public function setStrictDynamicAllowed(bool $strictDynamicAllowed): void {
+		$this->strictDynamicAllowed = $strictDynamicAllowed;
+	}
+
+	public function isStrictDynamicAllowedOnScripts(): bool {
+		return $this->strictDynamicAllowedOnScripts;
+	}
+
+	public function setStrictDynamicAllowedOnScripts(bool $strictDynamicAllowedOnScripts): void {
+		$this->strictDynamicAllowedOnScripts = $strictDynamicAllowedOnScripts;
 	}
 }

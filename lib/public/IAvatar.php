@@ -1,101 +1,88 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCP;
 
-use OCP\Files\File;
 use OCP\Files\NotFoundException;
+use OCP\Files\SimpleFS\ISimpleFile;
 
 /**
  * This class provides avatar functionality
  * @since 6.0.0
  */
 interface IAvatar {
-
 	/**
-	 * get the users avatar
+	 * Get the users avatar
+	 *
 	 * @param int $size size in px of the avatar, avatars are square, defaults to 64, -1 can be used to not scale the image
-	 * @return boolean|\OCP\IImage containing the avatar or false if there's no image
+	 * @param bool $darkTheme Should the generated avatar be dark themed
+	 * @return false|\OCP\IImage containing the avatar or false if there's no image
 	 * @since 6.0.0 - size of -1 was added in 9.0.0
 	 */
-	public function get($size = 64);
+	public function get(int $size = 64, bool $darkTheme = false);
 
 	/**
 	 * Check if an avatar exists for the user
 	 *
-	 * @return bool
 	 * @since 8.1.0
 	 */
-	public function exists();
+	public function exists(): bool;
 
 	/**
 	 * Check if the avatar of a user is a custom uploaded one
 	 *
-	 * @return bool
 	 * @since 14.0.0
 	 */
 	public function isCustomAvatar(): bool;
 
 	/**
-	 * sets the users avatar
+	 * Sets the users avatar
+	 *
 	 * @param \OCP\IImage|resource|string $data An image object, imagedata or path to set a new avatar
 	 * @throws \Exception if the provided file is not a jpg or png image
 	 * @throws \Exception if the provided image is not valid
 	 * @throws \OC\NotSquareException if the image is not square
-	 * @return void
 	 * @since 6.0.0
 	 */
-	public function set($data);
+	public function set($data): void;
 
 	/**
-	 * remove the users avatar
-	 * @return void
+	 * Remove the user's avatar
+	 *
+	 * @param bool $silent Whether removing the avatar should trigger a change
 	 * @since 6.0.0
 	 */
-	public function remove();
+	public function remove(bool $silent = false): void;
 
 	/**
 	 * Get the file of the avatar
-	 * @param int $size -1 can be used to not scale the image
-	 * @return File
+	 *
+	 * @param int $size The desired image size. -1 can be used to not scale the image
+	 * @param bool $darkTheme Should the generated avatar be dark themed
 	 * @throws NotFoundException
 	 * @since 9.0.0
 	 */
-	public function getFile($size);
+	public function getFile(int $size, bool $darkTheme = false): ISimpleFile;
 
 	/**
-	 * @param string $text
-	 * @return Color Object containting r g b int in the range [0, 255]
+	 * Get the avatar background color
+	 *
 	 * @since 14.0.0
 	 */
-	public function avatarBackgroundColor(string $text);
+	public function avatarBackgroundColor(string $hash): Color;
 
 	/**
-	 * Handle a changed user
+	 * Updates the display name if changed.
+	 *
+	 * @param string $feature The changed feature
+	 * @param mixed $oldValue The previous value
+	 * @param mixed $newValue The new value
 	 * @since 13.0.0
 	 */
-	public function userChanged($feature, $oldValue, $newValue);
+	public function userChanged(string $feature, $oldValue, $newValue): void;
 }

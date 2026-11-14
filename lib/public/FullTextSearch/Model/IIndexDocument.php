@@ -1,29 +1,11 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright 2018
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Maxence Lange <maxence@artificial-owl.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\FullTextSearch\Model;
 
 /**
@@ -41,10 +23,15 @@ namespace OCP\FullTextSearch\Model;
  * @since 15.0.0
  */
 interface IIndexDocument {
+	/**
+	 * @since 15.0.0
+	 */
 	public const NOT_ENCODED = 0;
+
+	/**
+	 * @since 15.0.0
+	 */
 	public const ENCODED_BASE64 = 1;
-
-
 
 	/**
 	 * Returns the Id of the original document.
@@ -55,7 +42,6 @@ interface IIndexDocument {
 	 */
 	public function getId(): string;
 
-
 	/**
 	 * Returns the Id of the provider.
 	 *
@@ -64,7 +50,6 @@ interface IIndexDocument {
 	 * @return string
 	 */
 	public function getProviderId(): string;
-
 
 	/**
 	 * Set the Index related to the IIndexDocument.
@@ -97,7 +82,6 @@ interface IIndexDocument {
 	 */
 	public function hasIndex(): bool;
 
-
 	/**
 	 * Set the modified time of the original document.
 	 *
@@ -129,7 +113,6 @@ interface IIndexDocument {
 	 */
 	public function isOlderThan(int $time): bool;
 
-
 	/**
 	 * Set the read rights of the original document using a IDocumentAccess.
 	 *
@@ -151,7 +134,6 @@ interface IIndexDocument {
 	 * @return IDocumentAccess
 	 */
 	public function getAccess(): IDocumentAccess;
-
 
 	/**
 	 * Add a tag to the list.
@@ -184,7 +166,6 @@ interface IIndexDocument {
 	 */
 	public function getTags(): array;
 
-
 	/**
 	 * Add a meta tag to the list.
 	 *
@@ -215,7 +196,6 @@ interface IIndexDocument {
 	 * @return array
 	 */
 	public function getMetaTags(): array;
-
 
 	/**
 	 * Add a sub tag to the list.
@@ -253,7 +233,6 @@ interface IIndexDocument {
 	 */
 	public function getSubTags(bool $formatted = false): array;
 
-
 	/**
 	 * Set the source of the original document.
 	 *
@@ -274,7 +253,6 @@ interface IIndexDocument {
 	 */
 	public function getSource(): string;
 
-
 	/**
 	 * Set the title of the original document.
 	 *
@@ -294,7 +272,6 @@ interface IIndexDocument {
 	 * @return string
 	 */
 	public function getTitle(): string;
-
 
 	/**
 	 * Set the content of the document.
@@ -337,7 +314,6 @@ interface IIndexDocument {
 	 */
 	public function getContentSize(): int;
 
-
 	/**
 	 * Generate an hash, based on the content of the original document.
 	 *
@@ -366,7 +342,6 @@ interface IIndexDocument {
 	 * @return string
 	 */
 	public function getHash(): string;
-
 
 	/**
 	 * Add a part, identified by a string, and its content.
@@ -403,7 +378,6 @@ interface IIndexDocument {
 	 */
 	public function getParts(): array;
 
-
 	/**
 	 * Add a link, usable by the frontend.
 	 *
@@ -424,7 +398,6 @@ interface IIndexDocument {
 	 */
 	public function getLink(): string;
 
-
 	/**
 	 * Set more information that couldn't be set using other method.
 	 *
@@ -444,7 +417,6 @@ interface IIndexDocument {
 	 * @return array
 	 */
 	public function getMore(): array;
-
 
 	/**
 	 * Add some excerpt of the content of the original document, usually based
@@ -479,7 +451,6 @@ interface IIndexDocument {
 	 */
 	public function getExcerpts(): array;
 
-
 	/**
 	 * Set the score to the result assigned to this document during a search
 	 * request.
@@ -500,7 +471,6 @@ interface IIndexDocument {
 	 * @return string
 	 */
 	public function getScore(): string;
-
 
 	/**
 	 * Set some information about the original document that will be available

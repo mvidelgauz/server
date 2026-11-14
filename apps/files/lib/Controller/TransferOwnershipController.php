@@ -3,109 +3,88 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2019, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files\Controller;
 
+use NCU\AppFramework\Http\Attribute\TokenScope;
 use OCA\Files\BackgroundJob\TransferOwnership;
 use OCA\Files\Db\TransferOwnership as TransferOwnershipEntity;
 use OCA\Files\Db\TransferOwnershipMapper;
+use OCA\Files\TokenScopes;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\OCSController;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Files\IHomeStorage;
 use OCP\Files\IRootFolder;
 use OCP\IRequest;
+use OCP\IUser;
 use OCP\IUserManager;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
 use OCP\Notification\IManager as NotificationManager;
 
-class TransferOwnershipController extends OCSController {
+#[TokenScope(scope: TokenScopes::FILES_WRITE)]
+final class TransferOwnershipController extends OCSController {
 
-	/** @var string */
-	private $userId;
-	/** @var NotificationManager */
-	private $notificationManager;
-	/** @var ITimeFactory */
-	private $timeFactory;
-	/** @var IJobList */
-	private $jobList;
-	/** @var TransferOwnershipMapper */
-	private $mapper;
-	/** @var IUserManager */
-	private $userManager;
-	/** @var IRootFolder */
-	private $rootFolder;
-
-	public function __construct(string $appName,
-								IRequest $request,
-								string $userId,
-								NotificationManager $notificationManager,
-								ITimeFactory $timeFactory,
-								IJobList $jobList,
-								TransferOwnershipMapper $mapper,
-								IUserManager $userManager,
-								IRootFolder $rootFolder) {
+	public function __construct(
+		string $appName,
+		IRequest $request,
+		private readonly NotificationManager $notificationManager,
+		private readonly ITimeFactory $timeFactory,
+		private readonly IJobList $jobList,
+		private readonly TransferOwnershipMapper $mapper,
+		private readonly IUserManager $userManager,
+		private readonly IRootFolder $rootFolder,
+		private readonly IEventDispatcher $eventDispatcher,
+	) {
 		parent::__construct($appName, $request);
-
-		$this->userId = $userId;
-		$this->notificationManager = $notificationManager;
-		$this->timeFactory = $timeFactory;
-		$this->jobList = $jobList;
-		$this->mapper = $mapper;
-		$this->userManager = $userManager;
-		$this->rootFolder = $rootFolder;
 	}
 
-
 	/**
-	 * @NoAdminRequired
+	 * Transfer the ownership to another user
+	 *
+	 * @param string $recipient Username of the recipient
+	 * @param string $path Path of the file
+	 *
+	 * @return DataResponse<Http::STATUS_OK|Http::STATUS_BAD_REQUEST|Http::STATUS_FORBIDDEN, list<empty>, array{}>
+	 *
+	 * 200: Ownership transferred successfully
+	 * 400: Transferring ownership is not possible
+	 * 403: Transferring ownership is not allowed
 	 */
-	public function transfer(string $recipient, string $path): DataResponse {
+	#[NoAdminRequired]
+	public function transfer(IUser $user, string $recipient, string $path): DataResponse {
 		$recipientUser = $this->userManager->get($recipient);
 
-		if ($recipientUser === null) {
+		if (!$recipientUser instanceof IUser) {
 			return new DataResponse([], Http::STATUS_BAD_REQUEST);
 		}
 
-		$userRoot = $this->rootFolder->getUserFolder($this->userId);
+		$userRoot = $this->rootFolder->getUserFolder($user->getUID());
 
 		try {
 			$node = $userRoot->get($path);
-		} catch (\Exception $e) {
+		} catch (\Exception) {
 			return new DataResponse([], Http::STATUS_BAD_REQUEST);
 		}
 
-		if ($node->getOwner()->getUID() !== $this->userId) {
+		$owner = $node->getOwner();
+		if ($owner === null || $owner->getUID() !== $user->getUID() || !$node->getStorage()->instanceOfStorage(IHomeStorage::class)) {
 			return new DataResponse([], Http::STATUS_FORBIDDEN);
 		}
 
 		$transferOwnership = new TransferOwnershipEntity();
-		$transferOwnership->setSourceUser($this->userId);
-		$transferOwnership->setTargetUser($recipient);
-		$transferOwnership->setFileId($node->getId());
-		$transferOwnership->setNodeName($node->getName());
+		$transferOwnership->sourceUser = $user->getUID();
+		$transferOwnership->targetUser = $recipient;
+		$transferOwnership->fileId = $node->getId();
+		$transferOwnership->nodeName = $node->getName();
 		$transferOwnership = $this->mapper->insert($transferOwnership);
 
 		$notification = $this->notificationManager->createNotification();
@@ -113,61 +92,96 @@ class TransferOwnershipController extends OCSController {
 			->setApp($this->appName)
 			->setDateTime($this->timeFactory->getDateTime())
 			->setSubject('transferownershipRequest', [
-				'sourceUser' => $this->userId,
+				'sourceUser' => $user->getUID(),
 				'targetUser' => $recipient,
 				'nodeName' => $node->getName(),
 			])
-			->setObject('transfer', (string)$transferOwnership->getId());
+			->setObject('transfer', (string)$transferOwnership->id);
 
 		$this->notificationManager->notify($notification);
+
+		$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+			'Ownership transfer "%s" from user "%s" to user "%s" was requested for "%s" (file ID "%s")',
+			[
+				'transferId' => $transferOwnership->id,
+				'sourceUser' => $user->getUID(),
+				'targetUser' => $recipient,
+				'path' => $path,
+				'fileId' => $node->getId(),
+			],
+			false,
+			'files.ownership_transfer.requested',
+		));
 
 		return new DataResponse([]);
 	}
 
 	/**
-	 * @NoAdminRequired
+	 * Accept an ownership transfer
+	 *
+	 * @param positive-int $id ID of the ownership transfer
+	 *
+	 * @return DataResponse<Http::STATUS_OK|Http::STATUS_FORBIDDEN|Http::STATUS_NOT_FOUND, list<empty>, array{}>
+	 *
+	 * 200: Ownership transfer accepted successfully
+	 * 403: Accepting ownership transfer is not allowed
+	 * 404: Ownership transfer not found
 	 */
-	public function accept(int $id): DataResponse {
+	#[NoAdminRequired]
+	public function accept(IUser $user, int $id): DataResponse {
 		try {
 			$transferOwnership = $this->mapper->getById($id);
-		} catch (DoesNotExistException $e) {
+		} catch (DoesNotExistException) {
 			return new DataResponse([], Http::STATUS_NOT_FOUND);
 		}
 
-		if ($transferOwnership->getTargetUser() !== $this->userId) {
+		if ($transferOwnership->targetUser !== $user->getUID()) {
 			return new DataResponse([], Http::STATUS_FORBIDDEN);
 		}
+
+		$this->jobList->add(TransferOwnership::class, [
+			'id' => $transferOwnership->id,
+		]);
 
 		$notification = $this->notificationManager->createNotification();
 		$notification->setApp('files')
 			->setObject('transfer', (string)$id);
 		$this->notificationManager->markProcessed($notification);
 
-		$newTransferOwnership = new TransferOwnershipEntity();
-		$newTransferOwnership->setNodeName($transferOwnership->getNodeName());
-		$newTransferOwnership->setFileId($transferOwnership->getFileId());
-		$newTransferOwnership->setSourceUser($transferOwnership->getSourceUser());
-		$newTransferOwnership->setTargetUser($transferOwnership->getTargetUser());
-		$this->mapper->insert($newTransferOwnership);
-
-		$this->jobList->add(TransferOwnership::class, [
-			'id' => $newTransferOwnership->getId(),
-		]);
+		$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+			'Ownership transfer "%s" from user "%s" to user "%s" was accepted',
+			[
+				'transferId' => $transferOwnership->id,
+				'sourceUser' => $transferOwnership->sourceUser,
+				'targetUser' => $transferOwnership->targetUser,
+			],
+			false,
+			'files.ownership_transfer.accepted',
+		));
 
 		return new DataResponse([], Http::STATUS_OK);
 	}
 
 	/**
-	 * @NoAdminRequired
+	 * Reject an ownership transfer
+	 *
+	 * @param positive-int $id ID of the ownership transfer
+	 *
+	 * @return DataResponse<Http::STATUS_OK|Http::STATUS_FORBIDDEN|Http::STATUS_NOT_FOUND, list<empty>, array{}>
+	 *
+	 * 200: Ownership transfer rejected successfully
+	 * 403: Rejecting ownership transfer is not allowed
+	 * 404: Ownership transfer not found
 	 */
-	public function reject(int $id): DataResponse {
+	#[NoAdminRequired]
+	public function reject(IUser $user, int $id): DataResponse {
 		try {
 			$transferOwnership = $this->mapper->getById($id);
-		} catch (DoesNotExistException $e) {
+		} catch (DoesNotExistException) {
 			return new DataResponse([], Http::STATUS_NOT_FOUND);
 		}
 
-		if ($transferOwnership->getTargetUser() !== $this->userId) {
+		if ($transferOwnership->targetUser !== $user->getUID()) {
 			return new DataResponse([], Http::STATUS_FORBIDDEN);
 		}
 
@@ -176,19 +190,20 @@ class TransferOwnershipController extends OCSController {
 			->setObject('transfer', (string)$id);
 		$this->notificationManager->markProcessed($notification);
 
-		$notification = $this->notificationManager->createNotification();
-		$notification->setUser($transferOwnership->getSourceUser())
-			->setApp($this->appName)
-			->setDateTime($this->timeFactory->getDateTime())
-			->setSubject('transferownershipRequestDenied', [
-				'sourceUser' => $transferOwnership->getSourceUser(),
-				'targetUser' => $transferOwnership->getTargetUser(),
-				'nodeName' => $transferOwnership->getNodeName()
-			])
-			->setObject('transfer', (string)$transferOwnership->getId());
-		$this->notificationManager->notify($notification);
-
 		$this->mapper->delete($transferOwnership);
+
+		$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+			'Ownership transfer "%s" from user "%s" to user "%s" was rejected',
+			[
+				'transferId' => $id,
+				'sourceUser' => $transferOwnership->sourceUser,
+				'targetUser' => $transferOwnership->targetUser,
+			],
+			false,
+			'files.ownership_transfer.rejected',
+		));
+
+		// A "request denied" notification will be created by Notifier::dismissNotification
 
 		return new DataResponse([], Http::STATUS_OK);
 	}

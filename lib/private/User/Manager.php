@@ -1,68 +1,55 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Vincent Chan <plus.vincchan@gmail.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\User;
 
 use OC\Hooks\PublicEmitter;
+use OC\KnownUser\KnownUserService;
+use OC\Memcache\WithLocalCache;
+use OCP\Config\IUserConfig;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Federation\ICloudId;
 use OCP\HintException;
 use OCP\ICache;
 use OCP\ICacheFactory;
 use OCP\IConfig;
+use OCP\IDBConnection;
 use OCP\IGroup;
+use OCP\IRequest;
+use OCP\IURLGenerator;
 use OCP\IUser;
 use OCP\IUserBackend;
 use OCP\IUserManager;
-use OCP\Support\Subscription\IRegistry;
+use OCP\L10N\IFactory;
+use OCP\Server;
+use OCP\Support\Subscription\IAssertion;
+use OCP\User\Backend\ICheckPasswordBackend;
+use OCP\User\Backend\ICountMappedUsersBackend;
+use OCP\User\Backend\ICountUsersBackend;
 use OCP\User\Backend\IGetRealUIDBackend;
+use OCP\User\Backend\IGetUserNameFromLoginNameBackend;
+use OCP\User\Backend\ILimitAwareCountUsersBackend;
+use OCP\User\Backend\IProvideEnabledStateBackend;
 use OCP\User\Backend\ISearchKnownUsersBackend;
 use OCP\User\Events\BeforeUserCreatedEvent;
 use OCP\User\Events\UserCreatedEvent;
+use OCP\User\Events\UserDeletedEvent;
+use OCP\User\Exceptions\UserNotFoundException;
 use OCP\UserInterface;
-use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use OCP\Util;
+use Override;
+use Psr\Log\LoggerInterface;
 
 /**
  * Class Manager
  *
  * Hooks available in scope \OC\User:
- * - preSetPassword(\OC\User\User $user, string $password, string $recoverPassword)
- * - postSetPassword(\OC\User\User $user, string $password, string $recoverPassword)
- * - preDelete(\OC\User\User $user)
- * - postDelete(\OC\User\User $user)
- * - preCreateUser(string $uid, string $password)
- * - postCreateUser(\OC\User\User $user, string $password)
- * - change(\OC\User\User $user)
  * - assignedUserId(string $uid)
  * - preUnassignedUserId(string $uid)
  * - postUnassignedUserId(string $uid)
@@ -71,94 +58,95 @@ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
  */
 class Manager extends PublicEmitter implements IUserManager {
 	/**
-	 * @var \OCP\UserInterface[] $backends
+	 * @var UserInterface[] $backends
 	 */
-	private $backends = [];
+	private array $backends = [];
 
 	/**
-	 * @var \OC\User\User[] $cachedUsers
+	 * @var array<string, User> $cachedUsers
 	 */
-	private $cachedUsers = [];
+	private array $cachedUsers = [];
 
-	/** @var IConfig */
-	private $config;
+	private ICache $cache;
 
-	/** @var EventDispatcherInterface */
-	private $dispatcher;
+	private DisplayNameCache $displayNameCache;
 
-	/** @var ICache */
-	private $cache;
+	// These services cannot be injected through DI because user manager is used early in install process
+	private ?IURLGenerator $urlGenerator = null;
+	private ?KnownUserService $knownUserService = null;
 
-	/** @var IEventDispatcher */
-	private $eventDispatcher;
+	// This constructor can't autoload any class requiring a DB connection.
+	public function __construct(
+		private IConfig $config,
+		ICacheFactory $cacheFactory,
+		private IEventDispatcher $eventDispatcher,
+		private LoggerInterface $logger,
+	) {
+		$this->cache = new WithLocalCache($cacheFactory->createDistributed('user_backend_map'));
+		$this->eventDispatcher->addListener(UserDeletedEvent::class, $this->handleUserDeletedEvent(...));
+		$this->displayNameCache = new DisplayNameCache($cacheFactory, $this);
+	}
 
-	public function __construct(IConfig $config,
-								EventDispatcherInterface $oldDispatcher,
-								ICacheFactory $cacheFactory,
-								IEventDispatcher $eventDispatcher) {
-		$this->config = $config;
-		$this->dispatcher = $oldDispatcher;
-		$this->cache = $cacheFactory->createDistributed('user_backend_map');
-		$cachedUsers = &$this->cachedUsers;
-		$this->listen('\OC\User', 'postDelete', function ($user) use (&$cachedUsers) {
-			/** @var \OC\User\User $user */
-			unset($cachedUsers[$user->getUID()]);
-		});
-		$this->eventDispatcher = $eventDispatcher;
+	private function handleUserDeletedEvent(UserDeletedEvent $event): void {
+		unset($this->cachedUsers[$event->getUser()->getUID()]);
+	}
+
+	private function getKnownUserService(): KnownUserService {
+		return $this->knownUserService ??= Server::get(KnownUserService::class);
 	}
 
 	/**
 	 * Get the active backends
-	 * @return \OCP\UserInterface[]
+	 * @return UserInterface[]
 	 */
-	public function getBackends() {
+	#[\Override]
+	public function getBackends(): array {
 		return $this->backends;
 	}
 
-	/**
-	 * register a user backend
-	 *
-	 * @param \OCP\UserInterface $backend
-	 */
-	public function registerBackend($backend) {
+	#[\Override]
+	public function registerBackend(UserInterface $backend): void {
 		$this->backends[] = $backend;
 	}
 
-	/**
-	 * remove a user backend
-	 *
-	 * @param \OCP\UserInterface $backend
-	 */
-	public function removeBackend($backend) {
+	#[\Override]
+	public function removeBackend(UserInterface $backend): void {
 		$this->cachedUsers = [];
 		if (($i = array_search($backend, $this->backends)) !== false) {
 			unset($this->backends[$i]);
 		}
 	}
 
-	/**
-	 * remove all user backends
-	 */
-	public function clearBackends() {
+	#[\Override]
+	public function clearBackends(): void {
 		$this->cachedUsers = [];
 		$this->backends = [];
 	}
 
 	/**
-	 * get a user by user id
-	 *
-	 * @param string $uid
-	 * @return \OC\User\User|null Either the user or null if the specified user does not exist
+	 * {@inheritDoc}
+	 * @param list<string> $excludeBackends A list of IUserBackend::getBackendName() that need to be excluded from the search.
 	 */
-	public function get($uid) {
+	#[\Override]
+	public function get($uid, array $excludeBackends = []): ?IUser {
 		if (is_null($uid) || $uid === '' || $uid === false) {
 			return null;
 		}
-		if (isset($this->cachedUsers[$uid])) { //check the cache first to prevent having to loop over the backends
+
+		if (strlen($uid) > IUser::MAX_USERID_LENGTH) {
+			return null;
+		}
+
+		// check the cache first to prevent having to loop over the backends
+		if ($excludeBackends === [] && isset($this->cachedUsers[$uid])) {
 			return $this->cachedUsers[$uid];
 		}
 
 		$cachedBackend = $this->cache->get(sha1($uid));
+		if (in_array((string)$cachedBackend, $excludeBackends, true)) {
+			$cachedBackend = null;
+		}
+
 		if ($cachedBackend !== null && isset($this->backends[$cachedBackend])) {
 			// Cache has the info of the user backend already, so ask that one directly
 			$backend = $this->backends[$cachedBackend];
@@ -173,6 +161,10 @@ class Manager extends PublicEmitter implements IUserManager {
 				continue;
 			}
 
+			if (in_array($i, $excludeBackends, true)) {
+				continue;
+			}
+
 			if ($backend->userExists($uid)) {
 				// Hash $uid to ensure that only valid characters are used for the cache key
 				$this->cache->set(sha1($uid), $i, 300);
@@ -182,15 +174,24 @@ class Manager extends PublicEmitter implements IUserManager {
 		return null;
 	}
 
+	#[\Override]
+	public function getDisplayName(string $uid): ?string {
+		if (isset($this->cachedUsers[$uid])) {
+			return $this->cachedUsers[$uid]->getDisplayName();
+		}
+
+		return $this->displayNameCache->getDisplayName($uid);
+	}
+
 	/**
 	 * get or construct the user object
 	 *
 	 * @param string $uid
-	 * @param \OCP\UserInterface $backend
+	 * @param UserInterface $backend
 	 * @param bool $cacheUser If false the newly created user object will not be cached
-	 * @return \OC\User\User
+	 * @return User
 	 */
-	protected function getUserObject($uid, $backend, $cacheUser = true) {
+	public function getUserObject($uid, $backend, $cacheUser = true) {
 		if ($backend instanceof IGetRealUIDBackend) {
 			$uid = $backend->getRealUID($uid);
 		}
@@ -199,21 +200,20 @@ class Manager extends PublicEmitter implements IUserManager {
 			return $this->cachedUsers[$uid];
 		}
 
-		$user = new User($uid, $backend, $this->dispatcher, $this, $this->config);
+		$user = new User($uid, $backend, $this->eventDispatcher, $this->config);
 		if ($cacheUser) {
 			$this->cachedUsers[$uid] = $user;
 		}
 		return $user;
 	}
 
-	/**
-	 * check if a user exists
-	 *
-	 * @param string $uid
-	 * @return bool
-	 */
-	public function userExists($uid) {
-		$user = $this->get($uid);
+	#[\Override]
+	public function userExists(string $uid, array $excludeBackends = []): bool {
+		if (strlen($uid) > IUser::MAX_USERID_LENGTH) {
+			return false;
+		}
+
+		$user = $this->get($uid, $excludeBackends);
 		return ($user !== null);
 	}
 
@@ -222,13 +222,14 @@ class Manager extends PublicEmitter implements IUserManager {
 	 *
 	 * @param string $loginName
 	 * @param string $password
-	 * @return mixed the User object on success, false otherwise
+	 * @return IUser|false the User object on success, false otherwise
 	 */
+	#[\Override]
 	public function checkPassword($loginName, $password) {
 		$result = $this->checkPasswordNoLogging($loginName, $password);
 
 		if ($result === false) {
-			\OC::$server->getLogger()->warning('Login failed: \''. $loginName .'\' (Remote IP: \''. \OC::$server->getRequest()->getRemoteAddress(). '\')', ['app' => 'core']);
+			$this->logger->warning('Login failed: \'' . $loginName . '\' (Remote IP: \'' . Server::get(IRequest::class)->getRemoteAddress() . '\')', ['app' => 'core']);
 		}
 
 		return $result;
@@ -243,11 +244,23 @@ class Manager extends PublicEmitter implements IUserManager {
 	 * @return IUser|false the User object on success, false otherwise
 	 */
 	public function checkPasswordNoLogging($loginName, $password) {
-		$loginName = str_replace("\0", '', $loginName);
+		// A NUL byte in the login name must not turn it into a second name for an
+		// account: the checks done before the password check (e.g. 2FA enforcement
+		// in Session::logClientIn()) see the name as sent, so the name has to stay the same
+		if (str_contains($loginName, "\0")) {
+			return false;
+		}
 		$password = str_replace("\0", '', $password);
 
-		foreach ($this->backends as $backend) {
-			if ($backend->implementsActions(Backend::CHECK_PASSWORD)) {
+		$cachedBackend = $this->cache->get($loginName);
+		if ($cachedBackend !== null && isset($this->backends[$cachedBackend])) {
+			$backends = [$this->backends[$cachedBackend]];
+		} else {
+			$backends = $this->backends;
+		}
+		foreach ($backends as $backend) {
+			if ($backend instanceof ICheckPasswordBackend || $backend->implementsActions(Backend::CHECK_PASSWORD)) {
+				/** @var ICheckPasswordBackend $backend */
 				$uid = $backend->checkPassword($loginName, $password);
 				if ($uid !== false) {
 					return $this->getUserObject($uid, $backend);
@@ -257,11 +270,12 @@ class Manager extends PublicEmitter implements IUserManager {
 
 		// since http basic auth doesn't provide a standard way of handling non ascii password we allow password to be urlencoded
 		// we only do this decoding after using the plain password fails to maintain compatibility with any password that happens
-		// to contains urlencoded patterns by "accident".
+		// to contain urlencoded patterns by "accident".
 		$password = urldecode($password);
 
-		foreach ($this->backends as $backend) {
-			if ($backend->implementsActions(Backend::CHECK_PASSWORD)) {
+		foreach ($backends as $backend) {
+			if ($backend instanceof ICheckPasswordBackend || $backend->implementsActions(Backend::CHECK_PASSWORD)) {
+				/** @var ICheckPasswordBackend|UserInterface $backend */
 				$uid = $backend->checkPassword($loginName, $password);
 				if ($uid !== false) {
 					return $this->getUserObject($uid, $backend);
@@ -272,62 +286,84 @@ class Manager extends PublicEmitter implements IUserManager {
 		return false;
 	}
 
-	/**
-	 * search by user id
-	 *
-	 * @param string $pattern
-	 * @param int $limit
-	 * @param int $offset
-	 * @return \OC\User\User[]
-	 */
+	#[\Override]
 	public function search($pattern, $limit = null, $offset = null) {
 		$users = [];
 		foreach ($this->backends as $backend) {
 			$backendUsers = $backend->getUsers($pattern, $limit, $offset);
 			if (is_array($backendUsers)) {
 				foreach ($backendUsers as $uid) {
-					$users[$uid] = $this->getUserObject($uid, $backend);
+					$users[$uid] = new LazyUser($uid, $this, null, $backend);
 				}
 			}
 		}
 
-		uasort($users, function ($a, $b) {
-			/**
-			 * @var \OC\User\User $a
-			 * @var \OC\User\User $b
-			 */
+		uasort($users, function (IUser $a, IUser $b) {
 			return strcasecmp($a->getUID(), $b->getUID());
 		});
 		return $users;
 	}
 
-	/**
-	 * search by displayName
-	 *
-	 * @param string $pattern
-	 * @param int $limit
-	 * @param int $offset
-	 * @return \OC\User\User[]
-	 */
+	#[\Override]
 	public function searchDisplayName($pattern, $limit = null, $offset = null) {
 		$users = [];
 		foreach ($this->backends as $backend) {
 			$backendUsers = $backend->getDisplayNames($pattern, $limit, $offset);
 			if (is_array($backendUsers)) {
 				foreach ($backendUsers as $uid => $displayName) {
-					$users[] = $this->getUserObject($uid, $backend);
+					$users[] = new LazyUser($uid, $this, $displayName, $backend);
 				}
 			}
 		}
 
-		usort($users, function ($a, $b) {
-			/**
-			 * @var \OC\User\User $a
-			 * @var \OC\User\User $b
-			 */
+		usort($users, function (IUser $a, IUser $b) {
 			return strcasecmp($a->getDisplayName(), $b->getDisplayName());
 		});
 		return $users;
+	}
+
+	/**
+	 * @return IUser[]
+	 */
+	#[\Override]
+	public function getDisabledUsers(?int $limit = null, int $offset = 0, string $search = ''): array {
+		$users = $this->config->getUsersForUserValue('core', 'enabled', 'false');
+		$users = array_combine(
+			$users,
+			array_map(
+				fn (string $uid): IUser => new LazyUser($uid, $this),
+				$users
+			)
+		);
+		if ($search !== '') {
+			$users = array_filter(
+				$users,
+				function (IUser $user) use ($search): bool {
+					try {
+						return mb_stripos($user->getUID(), $search) !== false
+						|| mb_stripos($user->getDisplayName(), $search) !== false
+						|| mb_stripos($user->getEMailAddress() ?? '', $search) !== false;
+					} catch (UserNotFoundException $ex) {
+						$this->logger->error('Error while filtering disabled users', ['exception' => $ex, 'userUID' => $user->getUID()]);
+						return false;
+					}
+				});
+		}
+
+		$tempLimit = ($limit === null ? null : $limit + $offset);
+		foreach ($this->backends as $backend) {
+			if (($tempLimit !== null) && (count($users) >= $tempLimit)) {
+				break;
+			}
+			if ($backend instanceof IProvideEnabledStateBackend) {
+				$backendUsers = $backend->getDisabledUserList(($tempLimit === null ? null : $tempLimit - count($users)), 0, $search);
+				foreach ($backendUsers as $uid) {
+					$users[$uid] = new LazyUser($uid, $this, null, $backend);
+				}
+			}
+		}
+
+		return array_slice($users, $offset, $limit);
 	}
 
 	/**
@@ -339,6 +375,7 @@ class Manager extends PublicEmitter implements IUserManager {
 	 * @param int|null $offset
 	 * @return IUser[]
 	 */
+	#[\Override]
 	public function searchKnownUsersByDisplayName(string $searcher, string $pattern, ?int $limit = null, ?int $offset = null): array {
 		$users = [];
 		foreach ($this->backends as $backend) {
@@ -346,12 +383,15 @@ class Manager extends PublicEmitter implements IUserManager {
 				$backendUsers = $backend->searchKnownUsersByDisplayName($searcher, $pattern, $limit, $offset);
 			} else {
 				// Better than nothing, but filtering after pagination can remove lots of results.
-				$backendUsers = $backend->getDisplayNames($pattern, $limit, $offset);
+				$backendUsers = array_filter(
+					$backend->getDisplayNames($pattern, $limit, $offset),
+					fn (string $uid): bool => $this->getKnownUserService()->isKnownToUser($searcher, $uid),
+					ARRAY_FILTER_USE_KEY,
+				);
+
 			}
-			if (is_array($backendUsers)) {
-				foreach ($backendUsers as $uid => $displayName) {
-					$users[] = $this->getUserObject($uid, $backend);
-				}
+			foreach ($backendUsers as $uid => $displayName) {
+				$users[] = $this->getUserObject($uid, $backend);
 			}
 		}
 
@@ -368,15 +408,16 @@ class Manager extends PublicEmitter implements IUserManager {
 	/**
 	 * @param string $uid
 	 * @param string $password
+	 * @return false|IUser the created user or false
 	 * @throws \InvalidArgumentException
-	 * @return bool|IUser the created user or false
+	 * @throws HintException
 	 */
-	public function createUser($uid, $password) {
+	#[\Override]
+	public function createUser($uid, $password): IUser|false {
 		// DI injection is not used here as IRegistry needs the user manager itself for user count and thus it would create a cyclic dependency
-		if (\OC::$server->get(IRegistry::class)->delegateIsHardUserLimitReached()) {
-			$l = \OC::$server->getL10N('lib');
-			throw new HintException($l->t('The user limit has been reached and the user was not created.'));
-		}
+		/** @var IAssertion $assertion */
+		$assertion = Server::get(IAssertion::class);
+		$assertion->createUserIsLegit();
 
 		$localBackends = [];
 		foreach ($this->backends as $backend) {
@@ -403,38 +444,13 @@ class Manager extends PublicEmitter implements IUserManager {
 	/**
 	 * @param string $uid
 	 * @param string $password
-	 * @param UserInterface $backend
-	 * @return IUser|null
 	 * @throws \InvalidArgumentException
 	 */
-	public function createUserFromBackend($uid, $password, UserInterface $backend) {
-		$l = \OC::$server->getL10N('lib');
+	#[\Override]
+	public function createUserFromBackend($uid, $password, UserInterface $backend): IUser|false {
+		$l = Util::getL10N('lib');
 
-		// Check the name for bad characters
-		// Allowed are: "a-z", "A-Z", "0-9" and "_.@-'"
-		if (preg_match('/[^a-zA-Z0-9 _.@\-\']/', $uid)) {
-			throw new \InvalidArgumentException($l->t('Only the following characters are allowed in a username:'
-				. ' "a-z", "A-Z", "0-9", and "_.@-\'"'));
-		}
-
-		// No empty username
-		if (trim($uid) === '') {
-			throw new \InvalidArgumentException($l->t('A valid username must be provided'));
-		}
-
-		// No whitespace at the beginning or at the end
-		if (trim($uid) !== $uid) {
-			throw new \InvalidArgumentException($l->t('Username contains whitespace at the beginning or at the end'));
-		}
-
-		// Username only consists of 1 or 2 dots (directory traversal)
-		if ($uid === '.' || $uid === '..') {
-			throw new \InvalidArgumentException($l->t('Username must not consist of dots only'));
-		}
-
-		if (!$this->verifyUid($uid)) {
-			throw new \InvalidArgumentException($l->t('Username is invalid because files already exist for this user'));
-		}
+		$this->validateUserId($uid, true);
 
 		// No empty password
 		if (trim($password) === '') {
@@ -443,47 +459,52 @@ class Manager extends PublicEmitter implements IUserManager {
 
 		// Check if user already exists
 		if ($this->userExists($uid)) {
-			throw new \InvalidArgumentException($l->t('The username is already being used'));
+			throw new \InvalidArgumentException($l->t('The Login is already being used'));
 		}
 
-		/** @deprecated 21.0.0 use BeforeUserCreatedEvent event with the IEventDispatcher instead */
-		$this->emit('\OC\User', 'preCreateUser', [$uid, $password]);
 		$this->eventDispatcher->dispatchTyped(new BeforeUserCreatedEvent($uid, $password));
 		$state = $backend->createUser($uid, $password);
 		if ($state === false) {
-			throw new \InvalidArgumentException($l->t('Could not create user'));
+			throw new \InvalidArgumentException($l->t('Could not create account'));
 		}
-		$user = $this->getUserObject($uid, $backend);
+		try {
+			$user = $this->getUserObject($uid, $backend);
+		} catch (\RuntimeException $e) {
+			$this->logger->error('Failed to get user after creation', [
+				'exception' => $e,
+				'uid' => $uid,
+				'exists_backend' => $backend->userExists($uid),
+			]);
+			throw new \RuntimeException('Failed to get user after creation', previous: $e);
+		}
 		if ($user instanceof IUser) {
-			/** @deprecated 21.0.0 use UserCreatedEvent event with the IEventDispatcher instead */
-			$this->emit('\OC\User', 'postCreateUser', [$user, $password]);
 			$this->eventDispatcher->dispatchTyped(new UserCreatedEvent($user, $password));
+			return $user;
 		}
-		return $user;
+		return false;
 	}
 
 	/**
 	 * returns how many users per backend exist (if supported by backend)
 	 *
-	 * @param boolean $hasLoggedIn when true only users that have a lastLogin
-	 *                entry in the preferences table will be affected
-	 * @return array|int an array of backend class as key and count number as value
-	 *                if $hasLoggedIn is true only an int is returned
+	 * @return array<string, int> an array of backend class as key and count number as value
 	 */
-	public function countUsers($hasLoggedIn = false) {
-		if ($hasLoggedIn) {
-			return $this->countSeenUsers();
-		}
+	#[\Override]
+	public function countUsers(bool $onlyMappedUsers = false) {
 		$userCountStatistics = [];
 		foreach ($this->backends as $backend) {
-			if ($backend->implementsActions(Backend::COUNT_USERS)) {
+			$name = $backend instanceof IUserBackend
+				? $backend->getBackendName()
+				: get_class($backend);
+
+			if ($onlyMappedUsers && $backend instanceof ICountMappedUsersBackend) {
+				$userCountStatistics[$name] = $backend->countMappedUsers();
+				continue;
+			}
+			if ($backend instanceof ICountUsersBackend || $backend->implementsActions(Backend::COUNT_USERS)) {
+				/** @var ICountUsersBackend|IUserBackend $backend */
 				$backendUsers = $backend->countUsers();
 				if ($backendUsers !== false) {
-					if ($backend instanceof IUserBackend) {
-						$name = $backend->getBackendName();
-					} else {
-						$name = get_class($backend);
-					}
 					if (isset($userCountStatistics[$name])) {
 						$userCountStatistics[$name] += $backendUsers;
 					} else {
@@ -492,37 +513,76 @@ class Manager extends PublicEmitter implements IUserManager {
 				}
 			}
 		}
+
 		return $userCountStatistics;
+	}
+
+	#[\Override]
+	public function countUsersTotal(int $limit = 0, bool $onlyMappedUsers = false): int|false {
+		$userCount = false;
+
+		foreach ($this->backends as $backend) {
+			if ($onlyMappedUsers && $backend instanceof ICountMappedUsersBackend) {
+				$backendUsers = $backend->countMappedUsers();
+			} elseif ($backend instanceof ILimitAwareCountUsersBackend) {
+				$backendUsers = $backend->countUsers($limit);
+			} elseif ($backend instanceof ICountUsersBackend || $backend->implementsActions(Backend::COUNT_USERS)) {
+				/** @var ICountUsersBackend $backend */
+				$backendUsers = $backend->countUsers();
+			} else {
+				$this->logger->debug('Skip backend for user count: ' . get_class($backend));
+				continue;
+			}
+			if ($backendUsers !== false) {
+				$userCount = (int)$userCount + $backendUsers;
+				if ($limit > 0) {
+					if ($userCount >= $limit) {
+						break;
+					}
+					$limit -= $userCount;
+				}
+			} else {
+				$this->logger->warning('Can not determine user count for ' . get_class($backend));
+			}
+		}
+		return $userCount;
 	}
 
 	/**
 	 * returns how many users per backend exist in the requested groups (if supported by backend)
 	 *
-	 * @param IGroup[] $groups an array of gid to search in
-	 * @return array|int an array of backend class as key and count number as value
-	 *                if $hasLoggedIn is true only an int is returned
+	 * @param IGroup[] $groups an array of groups to search in
+	 * @param int $limit limit to stop counting
+	 * @return array{int,int} total number of users, and number of disabled users in the given groups, below $limit. If limit is reached, -1 is returned for number of disabled users
 	 */
-	public function countUsersOfGroups(array $groups) {
+	public function countUsersAndDisabledUsersOfGroups(array $groups, int $limit): array {
 		$users = [];
+		$disabled = [];
 		foreach ($groups as $group) {
-			$usersIds = array_map(function ($user) {
-				return $user->getUID();
-			}, $group->getUsers());
-			$users = array_merge($users, $usersIds);
+			foreach ($group->getUsers() as $user) {
+				$users[$user->getUID()] = 1;
+				if (!$user->isEnabled()) {
+					$disabled[$user->getUID()] = 1;
+				}
+				if (count($users) >= $limit) {
+					return [count($users),-1];
+				}
+			}
 		}
-		return count(array_unique($users));
+		return [count($users),count($disabled)];
 	}
 
 	/**
 	 * The callback is executed for each user on each backend.
 	 * If the callback returns false no further users will be retrieved.
 	 *
-	 * @param \Closure $callback
+	 * @psalm-param \Closure(IUser):?bool $callback
 	 * @param string $search
 	 * @param boolean $onlySeen when true only users that have a lastLogin entry
-	 *                in the preferences table will be affected
+	 *                          in the preferences table will be affected
 	 * @since 9.0.0
 	 */
+	#[\Override]
 	public function callForAllUsers(\Closure $callback, $search = '', $onlySeen = false) {
 		if ($onlySeen) {
 			$this->callForSeenUsers($callback);
@@ -554,46 +614,16 @@ class Manager extends PublicEmitter implements IUserManager {
 	 * @return int
 	 * @since 12.0.0
 	 */
+	#[\Override]
 	public function countDisabledUsers(): int {
-		$queryBuilder = \OC::$server->getDatabaseConnection()->getQueryBuilder();
+		$queryBuilder = Server::get(IDBConnection::class)->getQueryBuilder();
 		$queryBuilder->select($queryBuilder->func()->count('*'))
 			->from('preferences')
 			->where($queryBuilder->expr()->eq('appid', $queryBuilder->createNamedParameter('core')))
 			->andWhere($queryBuilder->expr()->eq('configkey', $queryBuilder->createNamedParameter('enabled')))
 			->andWhere($queryBuilder->expr()->eq('configvalue', $queryBuilder->createNamedParameter('false'), IQueryBuilder::PARAM_STR));
 
-
-		$result = $queryBuilder->execute();
-		$count = $result->fetchOne();
-		$result->closeCursor();
-
-		if ($count !== false) {
-			$count = (int)$count;
-		} else {
-			$count = 0;
-		}
-
-		return $count;
-	}
-
-	/**
-	 * returns how many users are disabled in the requested groups
-	 *
-	 * @param array $groups groupids to search
-	 * @return int
-	 * @since 14.0.0
-	 */
-	public function countDisabledUsersOfGroups(array $groups): int {
-		$queryBuilder = \OC::$server->getDatabaseConnection()->getQueryBuilder();
-		$queryBuilder->select($queryBuilder->createFunction('COUNT(DISTINCT ' . $queryBuilder->getColumnName('uid') . ')'))
-			->from('preferences', 'p')
-			->innerJoin('p', 'group_user', 'g', $queryBuilder->expr()->eq('p.userid', 'g.uid'))
-			->where($queryBuilder->expr()->eq('appid', $queryBuilder->createNamedParameter('core')))
-			->andWhere($queryBuilder->expr()->eq('configkey', $queryBuilder->createNamedParameter('enabled')))
-			->andWhere($queryBuilder->expr()->eq('configvalue', $queryBuilder->createNamedParameter('false'), IQueryBuilder::PARAM_STR))
-			->andWhere($queryBuilder->expr()->in('gid', $queryBuilder->createNamedParameter($groups, IQueryBuilder::PARAM_STR_ARRAY)));
-
-		$result = $queryBuilder->execute();
+		$result = $queryBuilder->executeQuery();
 		$count = $result->fetchOne();
 		$result->closeCursor();
 
@@ -612,15 +642,15 @@ class Manager extends PublicEmitter implements IUserManager {
 	 * @return int
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function countSeenUsers() {
-		$queryBuilder = \OC::$server->getDatabaseConnection()->getQueryBuilder();
+		$queryBuilder = Server::get(IDBConnection::class)->getQueryBuilder();
 		$queryBuilder->select($queryBuilder->func()->count('*'))
 			->from('preferences')
 			->where($queryBuilder->expr()->eq('appid', $queryBuilder->createNamedParameter('login')))
-			->andWhere($queryBuilder->expr()->eq('configkey', $queryBuilder->createNamedParameter('lastLogin')))
-			->andWhere($queryBuilder->expr()->isNotNull('configvalue'));
+			->andWhere($queryBuilder->expr()->eq('configkey', $queryBuilder->createNamedParameter('lastLogin')));
 
-		$query = $queryBuilder->execute();
+		$query = $queryBuilder->executeQuery();
 
 		$result = (int)$query->fetchOne();
 		$query->closeCursor();
@@ -628,34 +658,19 @@ class Manager extends PublicEmitter implements IUserManager {
 		return $result;
 	}
 
-	/**
-	 * @param \Closure $callback
-	 * @psalm-param \Closure(\OCP\IUser):?bool $callback
-	 * @since 11.0.0
-	 */
+	#[\Override]
 	public function callForSeenUsers(\Closure $callback) {
-		$limit = 1000;
-		$offset = 0;
-		do {
-			$userIds = $this->getSeenUserIds($limit, $offset);
-			$offset += $limit;
-			foreach ($userIds as $userId) {
-				foreach ($this->backends as $backend) {
-					if ($backend->userExists($userId)) {
-						$user = $this->getUserObject($userId, $backend, false);
-						$return = $callback($user);
-						if ($return === false) {
-							return;
-						}
-						break;
-					}
-				}
+		$users = $this->getSeenUsers();
+		foreach ($users as $user) {
+			$return = $callback($user);
+			if ($return === false) {
+				return;
 			}
-		} while (count($userIds) >= $limit);
+		}
 	}
 
 	/**
-	 * Getting all userIds that have a listLogin value requires checking the
+	 * Getting all userIds that have a lastLogin value requires checking the
 	 * value in php because on oracle you cannot use a clob in a where clause,
 	 * preventing us from doing a not null or length(value) > 0 check.
 	 *
@@ -664,7 +679,7 @@ class Manager extends PublicEmitter implements IUserManager {
 	 * @return string[] with user ids
 	 */
 	private function getSeenUserIds($limit = null, $offset = null) {
-		$queryBuilder = \OC::$server->getDatabaseConnection()->getQueryBuilder();
+		$queryBuilder = Server::get(IDBConnection::class)->getQueryBuilder();
 		$queryBuilder->select(['userid'])
 			->from('preferences')
 			->where($queryBuilder->expr()->eq(
@@ -682,10 +697,10 @@ class Manager extends PublicEmitter implements IUserManager {
 		if ($offset !== null) {
 			$queryBuilder->setFirstResult($offset);
 		}
-		$query = $queryBuilder->execute();
+		$query = $queryBuilder->executeQuery();
 		$result = [];
 
-		while ($row = $query->fetch()) {
+		while ($row = $query->fetchAssociative()) {
 			$result[] = $row['userid'];
 		}
 
@@ -695,39 +710,215 @@ class Manager extends PublicEmitter implements IUserManager {
 	}
 
 	/**
+	 * @internal Only for mocks it in unit tests.
+	 */
+	public function getUserConfig(): IUserConfig {
+		return Server::get(IUserConfig::class);
+	}
+
+	/**
 	 * @param string $email
 	 * @return IUser[]
 	 * @since 9.1.0
 	 */
-	public function getByEmail($email) {
+	#[\Override]
+	public function getByEmail($email): array {
+		$users = [];
+		$userConfig = $this->getUserConfig();
 		// looking for 'email' only (and not primary_mail) is intentional
-		$userIds = $this->config->getUsersForUserValueCaseInsensitive('settings', 'email', $email);
-
-		$users = array_map(function ($uid) {
-			return $this->get($uid);
-		}, $userIds);
-
-		return array_values(array_filter($users, function ($u) {
-			return ($u instanceof IUser);
-		}));
+		$userIds = $userConfig->searchUsersByValueString('settings', 'email', $email, caseInsensitive: true);
+		foreach ($userIds as $userId) {
+			$user = $this->get($userId);
+			if ($user !== null) {
+				$users[] = $user;
+			}
+		}
+		return $users;
 	}
 
-	private function verifyUid(string $uid): bool {
+	/**
+	 * @param string $uid
+	 * @param bool $checkDataDirectory
+	 * @throws \InvalidArgumentException Message is an already translated string with a reason why the id is not valid
+	 * @since 26.0.0
+	 */
+	#[\Override]
+	public function validateUserId(string $uid, bool $checkDataDirectory = false): void {
+		$l = Server::get(IFactory::class)->get('lib');
+
+		// Check the ID for bad characters
+		// Allowed are: "a-z", "A-Z", "0-9", spaces and "_.@-'"
+		if (preg_match('/[^a-zA-Z0-9 _.@\-\']/', $uid)) {
+			throw new \InvalidArgumentException($l->t('Only the following characters are allowed in an Login:'
+				. ' "a-z", "A-Z", "0-9", spaces and "_.@-\'"'));
+		}
+
+		// No empty user ID
+		if (trim($uid) === '') {
+			throw new \InvalidArgumentException($l->t('A valid Login must be provided'));
+		}
+
+		// No whitespace at the beginning or at the end
+		if (trim($uid) !== $uid) {
+			throw new \InvalidArgumentException($l->t('Login contains whitespace at the beginning or at the end'));
+		}
+
+		// User ID only consists of 1 or 2 dots (directory traversal)
+		if ($uid === '.' || $uid === '..') {
+			throw new \InvalidArgumentException($l->t('Login must not consist of dots only'));
+		}
+
+		// User ID is too long
+		if (strlen($uid) > IUser::MAX_USERID_LENGTH) {
+			// TRANSLATORS User ID is too long
+			throw new \InvalidArgumentException($l->t('Username is too long'));
+		}
+
+		if (!$this->verifyUid($uid, $checkDataDirectory)) {
+			throw new \InvalidArgumentException($l->t('Login is invalid because files already exist for this user'));
+		}
+	}
+
+	/**
+	 * Gets the list of user ids sorted by lastLogin, from most recent to least recent
+	 *
+	 * @param int|null $limit how many users to fetch (default: 25, max: 100)
+	 * @param int $offset from which offset to fetch
+	 * @param string $search search users based on search params
+	 * @return list<string> list of user IDs
+	 */
+	#[\Override]
+	public function getLastLoggedInUsers(?int $limit = null, int $offset = 0, string $search = ''): array {
+		// We can't load all users who already logged in
+		$limit = min(100, $limit ?: 25);
+
+		$connection = Server::get(IDBConnection::class);
+		$queryBuilder = $connection->getQueryBuilder();
+		$queryBuilder->select('pref_login.userid')
+			->from('preferences', 'pref_login')
+			->where($queryBuilder->expr()->eq('pref_login.appid', $queryBuilder->expr()->literal('login')))
+			->andWhere($queryBuilder->expr()->eq('pref_login.configkey', $queryBuilder->expr()->literal('lastLogin')))
+			->setFirstResult($offset)
+			->setMaxResults($limit)
+		;
+
+		// Oracle don't want to run ORDER BY on CLOB column
+		$loginOrder = $connection->getDatabaseProvider() === IDBConnection::PLATFORM_ORACLE
+			? $queryBuilder->expr()->castColumn('pref_login.configvalue', IQueryBuilder::PARAM_INT)
+			: 'pref_login.configvalue';
+		$queryBuilder
+			->orderBy($loginOrder, 'DESC')
+			->addOrderBy($queryBuilder->func()->lower('pref_login.userid'), 'ASC');
+
+		if ($search !== '') {
+			$displayNameMatches = $this->searchDisplayName($search);
+			$matchedUids = array_map(static fn (IUser $u): string => $u->getUID(), $displayNameMatches);
+
+			$queryBuilder
+				->leftJoin('pref_login', 'preferences', 'pref_email', $queryBuilder->expr()->andX(
+					$queryBuilder->expr()->eq('pref_login.userid', 'pref_email.userid'),
+					$queryBuilder->expr()->eq('pref_email.appid', $queryBuilder->expr()->literal('settings')),
+					$queryBuilder->expr()->eq('pref_email.configkey', $queryBuilder->expr()->literal('email')),
+				))
+				->andWhere($queryBuilder->expr()->orX(
+					$queryBuilder->expr()->in('pref_login.userid', $queryBuilder->createNamedParameter($matchedUids, IQueryBuilder::PARAM_STR_ARRAY)),
+				));
+		}
+
+		/** @var list<string> */
+		$list = $queryBuilder->executeQuery()->fetchFirstColumn();
+
+		return $list;
+	}
+
+	private function verifyUid(string $uid, bool $checkDataDirectory = false): bool {
 		$appdata = 'appdata_' . $this->config->getSystemValueString('instanceid');
 
 		if (\in_array($uid, [
 			'.htaccess',
 			'files_external',
 			'__groupfolders',
-			'.ocdata',
+			'.ncdata',
 			'owncloud.log',
 			'nextcloud.log',
+			'updater.log',
+			'audit.log',
 			$appdata], true)) {
 			return false;
+		}
+
+		if (!$checkDataDirectory) {
+			return true;
 		}
 
 		$dataDirectory = $this->config->getSystemValueString('datadirectory', \OC::$SERVERROOT . '/data');
 
 		return !file_exists(rtrim($dataDirectory, '/') . '/' . $uid);
+	}
+
+	public function getDisplayNameCache(): DisplayNameCache {
+		return $this->displayNameCache;
+	}
+
+	#[\Override]
+	public function getSeenUsers(int $offset = 0, ?int $limit = null): \Iterator {
+		$maxBatchSize = 1000;
+
+		do {
+			if ($limit !== null) {
+				$batchSize = min($limit, $maxBatchSize);
+				$limit -= $batchSize;
+			} else {
+				$batchSize = $maxBatchSize;
+			}
+
+			$userIds = $this->getSeenUserIds($batchSize, $offset);
+			$offset += $batchSize;
+
+			foreach ($userIds as $userId) {
+				foreach ($this->backends as $backend) {
+					if ($backend->userExists($userId)) {
+						$user = new LazyUser($userId, $this, null, $backend);
+						yield $userId => $user;
+						break;
+					}
+				}
+			}
+		} while (count($userIds) === $batchSize && $limit !== 0);
+	}
+
+	#[\Override]
+	public function getExistingUser(string $userId, ?string $displayName = null): IUser {
+		return new LazyUser($userId, $this, $displayName);
+	}
+
+	#[\Override]
+	public function getAvatarUrlLight(string $userId, int $size): string {
+		return ($this->urlGenerator ??= Server::get(IURLGenerator::class))->linkToRouteAbsolute('core.avatar.getAvatar', ['userId' => $userId, 'size' => $size]);
+	}
+
+	#[\Override]
+	public function getAvatarUrlDark(string $userId, int $size): string {
+		return ($this->urlGenerator ??= Server::get(IURLGenerator::class))->linkToRouteAbsolute('core.avatar.getAvatarDark', ['userId' => $userId, 'size' => $size]);
+	}
+
+	#[\Override]
+	public function getFederatedUser(ICloudId $cloudId): IUser {
+		return new LazyUser($cloudId->getDisplayId(), $this, $cloudId->getDisplayId());
+	}
+
+	#[Override]
+	public function getUserNameFromLoginName(string $loginName): string {
+		$userName = $loginName;
+		foreach ($this->getBackends() as $backend) {
+			if ($backend instanceof IGetUserNameFromLoginNameBackend) {
+				$newUserName = $backend->getUserNameFromLoginName($loginName);
+				if ($newUserName !== false) {
+					$userName = $newUserName;
+					break;
+				}
+			}
+		}
+		return $userName;
 	}
 }

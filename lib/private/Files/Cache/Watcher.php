@@ -1,76 +1,57 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Jagszent <daniel@jagszent.de>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files\Cache;
 
+use OCP\Files\Cache\ICache;
 use OCP\Files\Cache\ICacheEntry;
+use OCP\Files\Cache\IScanner;
 use OCP\Files\Cache\IWatcher;
+use OCP\Files\Storage\IStorage;
 
 /**
  * check the storage backends for updates and change the cache accordingly
  */
 class Watcher implements IWatcher {
-	protected $watchPolicy = self::CHECK_ONCE;
+	protected int $watchPolicy = self::CHECK_ONCE;
+	/** @var array<string, true> $checkedPaths */
+	protected array $checkedPaths = [];
+	protected ICache $cache;
+	protected IScanner $scanner;
+	/** @var callable[] */
+	protected array $onUpdate = [];
 
-	protected $checkedPaths = [];
+	protected ?string $checkFilter = null;
 
-	/**
-	 * @var \OC\Files\Storage\Storage $storage
-	 */
-	protected $storage;
-
-	/**
-	 * @var Cache $cache
-	 */
-	protected $cache;
-
-	/**
-	 * @var Scanner $scanner ;
-	 */
-	protected $scanner;
-
-	/**
-	 * @param \OC\Files\Storage\Storage $storage
-	 */
-	public function __construct(\OC\Files\Storage\Storage $storage) {
-		$this->storage = $storage;
-		$this->cache = $storage->getCache();
-		$this->scanner = $storage->getScanner();
+	public function __construct(
+		protected IStorage $storage,
+	) {
+		$this->cache = $this->storage->getCache();
+		$this->scanner = $this->storage->getScanner();
 	}
 
 	/**
 	 * @param int $policy either \OC\Files\Cache\Watcher::CHECK_NEVER, \OC\Files\Cache\Watcher::CHECK_ONCE, \OC\Files\Cache\Watcher::CHECK_ALWAYS
 	 */
+	#[\Override]
 	public function setPolicy($policy) {
 		$this->watchPolicy = $policy;
+	}
+
+	#[\Override]
+	public function setCheckFilter(?string $filter): void {
+		$this->checkFilter = $filter;
 	}
 
 	/**
 	 * @return int either \OC\Files\Cache\Watcher::CHECK_NEVER, \OC\Files\Cache\Watcher::CHECK_ONCE, \OC\Files\Cache\Watcher::CHECK_ALWAYS
 	 */
+	#[\Override]
 	public function getPolicy() {
 		return $this->watchPolicy;
 	}
@@ -82,13 +63,21 @@ class Watcher implements IWatcher {
 	 * @param ICacheEntry|null $cachedEntry
 	 * @return boolean true if path was updated
 	 */
+	#[\Override]
 	public function checkUpdate($path, $cachedEntry = null) {
 		if (is_null($cachedEntry)) {
 			$cachedEntry = $this->cache->get($path);
 		}
 		if ($cachedEntry === false || $this->needsUpdate($path, $cachedEntry)) {
 			$this->update($path, $cachedEntry);
-			return true;
+
+			if ($cachedEntry === false) {
+				return true;
+			} else {
+				// storage backends can sometimes return false positives, only return true if the scanner actually found a change
+				$newEntry = $this->cache->get($path);
+				return $newEntry->getStorageMTime() > $cachedEntry->getStorageMTime();
+			}
 		} else {
 			return false;
 		}
@@ -100,6 +89,7 @@ class Watcher implements IWatcher {
 	 * @param string $path
 	 * @param ICacheEntry $cachedData
 	 */
+	#[\Override]
 	public function update($path, $cachedData) {
 		if ($this->storage->is_dir($path)) {
 			$this->scanner->scan($path, Scanner::SCAN_SHALLOW);
@@ -112,6 +102,9 @@ class Watcher implements IWatcher {
 		if ($this->cache instanceof Cache) {
 			$this->cache->correctFolderSize($path);
 		}
+		foreach ($this->onUpdate as $callback) {
+			$callback($path);
+		}
 	}
 
 	/**
@@ -121,10 +114,17 @@ class Watcher implements IWatcher {
 	 * @param ICacheEntry $cachedData
 	 * @return bool
 	 */
+	#[\Override]
 	public function needsUpdate($path, $cachedData) {
-		if ($this->watchPolicy === self::CHECK_ALWAYS or ($this->watchPolicy === self::CHECK_ONCE and array_search($path, $this->checkedPaths) === false)) {
-			$this->checkedPaths[] = $path;
-			return $this->storage->hasUpdated($path, $cachedData['storage_mtime']);
+		if ($this->checkFilter !== null) {
+			if (!preg_match($this->checkFilter, $path)) {
+				return false;
+			}
+		}
+
+		if ($this->watchPolicy === self::CHECK_ALWAYS || ($this->watchPolicy === self::CHECK_ONCE && !isset($this->checkedPaths[$path]))) {
+			$this->checkedPaths[$path] = true;
+			return $cachedData['storage_mtime'] === null || $this->storage->hasUpdated($path, $cachedData['storage_mtime']);
 		}
 		return false;
 	}
@@ -134,6 +134,7 @@ class Watcher implements IWatcher {
 	 *
 	 * @param string $path
 	 */
+	#[\Override]
 	public function cleanFolder($path) {
 		$cachedContent = $this->cache->getFolderContents($path);
 		foreach ($cachedContent as $entry) {
@@ -141,5 +142,13 @@ class Watcher implements IWatcher {
 				$this->cache->remove($entry['path']);
 			}
 		}
+	}
+
+	/**
+	 * register a callback to be called whenever the watcher triggers and update
+	 */
+	#[\Override]
+	public function onUpdate(callable $callback): void {
+		$this->onUpdate[] = $callback;
 	}
 }

@@ -1,38 +1,15 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Julius Härtl <jus@bitgrid.net>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Gary Kim <gary@garykim.dev>
- * @author Jacob Neplokh <me@jacobneplokh.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Julien Veyssier <eneiluj@posteo.net>
- * @author Julius Haertl <jus@bitgrid.net>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Michael Weimann <mail@michael-weimann.eu>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author ste101 <stephan_bauer@gmx.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Theming;
 
+use OCA\Theming\AppInfo\Application;
+use OCA\Theming\Service\BackgroundService;
+use OCP\AppFramework\Services\IAppConfig;
 use OCP\Files\IAppData;
 use OCP\Files\NotFoundException;
 use OCP\Files\NotPermittedException;
@@ -40,48 +17,38 @@ use OCP\Files\SimpleFS\ISimpleFile;
 use OCP\Files\SimpleFS\ISimpleFolder;
 use OCP\ICacheFactory;
 use OCP\IConfig;
-use OCP\ILogger;
 use OCP\ITempManager;
 use OCP\IURLGenerator;
+use Psr\Log\LoggerInterface;
 
 class ImageManager {
+	public const SUPPORTED_IMAGE_KEYS = ['background', 'logo', 'logoheader', 'favicon'];
 
-	/** @var IConfig */
-	private $config;
-	/** @var IAppData */
-	private $appData;
-	/** @var IURLGenerator */
-	private $urlGenerator;
-	/** @var array */
-	private $supportedImageKeys = ['background', 'logo', 'logoheader', 'favicon'];
-	/** @var ICacheFactory */
-	private $cacheFactory;
-	/** @var ILogger */
-	private $logger;
-	/** @var ITempManager */
-	private $tempManager;
-
-	public function __construct(IConfig $config,
-								IAppData $appData,
-								IURLGenerator $urlGenerator,
-								ICacheFactory $cacheFactory,
-								ILogger $logger,
-								ITempManager $tempManager
+	public function __construct(
+		private IConfig $config,
+		private IAppData $appData,
+		private IURLGenerator $urlGenerator,
+		private ICacheFactory $cacheFactory,
+		private LoggerInterface $logger,
+		private ITempManager $tempManager,
+		private BackgroundService $backgroundService,
+		private IAppConfig $appConfig,
 	) {
-		$this->config = $config;
-		$this->appData = $appData;
-		$this->urlGenerator = $urlGenerator;
-		$this->cacheFactory = $cacheFactory;
-		$this->logger = $logger;
-		$this->tempManager = $tempManager;
 	}
 
-	public function getImageUrl(string $key, bool $useSvg = true): string {
-		$cacheBusterCounter = $this->config->getAppValue('theming', 'cachebuster', '0');
-		try {
-			$image = $this->getImage($key, $useSvg);
+	/**
+	 * Get a globally defined image (admin theming settings)
+	 *
+	 * @param string $key the image key
+	 * @return string the image url
+	 */
+	public function getImageUrl(string $key): string {
+		$cacheBusterCounter = (string)$this->appConfig->getAppValueInt(ConfigLexicon::CACHE_BUSTER);
+		if ($this->hasImage($key)) {
 			return $this->urlGenerator->linkToRoute('theming.Theming.getImage', [ 'key' => $key ]) . '?v=' . $cacheBusterCounter;
-		} catch (NotFoundException $e) {
+		} elseif ($key === 'backgroundDark' && $this->hasImage('background')) {
+			// Fall back to light variant
+			return $this->urlGenerator->linkToRoute('theming.Theming.getImage', [ 'key' => 'background' ]) . '?v=' . $cacheBusterCounter;
 		}
 
 		switch ($key) {
@@ -89,13 +56,30 @@ class ImageManager {
 			case 'logoheader':
 			case 'favicon':
 				return $this->urlGenerator->imagePath('core', 'logo/logo.png') . '?v=' . $cacheBusterCounter;
+			case 'backgroundDark':
 			case 'background':
-				return $this->urlGenerator->imagePath('core', 'background.png') . '?v=' . $cacheBusterCounter;
+				// Removing the background defines its mime as 'backgroundColor'
+				$mimeSetting = $this->config->getAppValue('theming', 'backgroundMime', '');
+				if ($mimeSetting !== 'backgroundColor') {
+					$image = BackgroundService::DEFAULT_BACKGROUND_IMAGE;
+					if ($key === 'backgroundDark') {
+						$image = BackgroundService::SHIPPED_BACKGROUNDS[$image]['dark_variant'] ?? $image;
+					}
+					return $this->urlGenerator->linkTo(Application::APP_ID, "img/background/$image");
+				}
 		}
+		return '';
 	}
 
-	public function getImageUrlAbsolute(string $key, bool $useSvg = true): string {
-		return $this->urlGenerator->getAbsoluteURL($this->getImageUrl($key, $useSvg));
+	/**
+	 * Get the absolute url. See getImageUrl
+	 */
+	public function getImageUrlAbsolute(string $key): string {
+		return $this->urlGenerator->getAbsoluteURL($this->getImageUrl($key));
+	}
+
+	public function getImageMime(string $key): string {
+		return $this->appConfig->getAppValueString($key . 'Mime', '');
 	}
 
 	/**
@@ -106,23 +90,27 @@ class ImageManager {
 	 * @throws NotPermittedException
 	 */
 	public function getImage(string $key, bool $useSvg = true): ISimpleFile {
-		$logo = $this->config->getAppValue('theming', $key . 'Mime', '');
-		$folder = $this->appData->getFolder('images');
-		if ($logo === '' || !$folder->fileExists($key)) {
+		$mime = $this->getImageMime($key);
+		$folder = $this->getRootFolder()->getFolder('images');
+
+		if ($mime === '' || !$folder->fileExists($key)) {
 			throw new NotFoundException();
 		}
-		if (!$useSvg && $this->shouldReplaceIcons()) {
+		// only convert SVG originals to PNG when SVG output is not desired;
+		// converting raster images to SVG produces broken output and is not useful
+		$isOriginalSvg = ($mime === 'image/svg+xml' || $mime === 'image/svg');
+		if ($isOriginalSvg && !$useSvg && $this->canConvert('SVG') && $this->canConvert('PNG')) {
 			if (!$folder->fileExists($key . '.png')) {
 				try {
 					$finalIconFile = new \Imagick();
 					$finalIconFile->setBackgroundColor('none');
 					$finalIconFile->readImageBlob($folder->getFile($key)->getContent());
-					$finalIconFile->setImageFormat('png32');
+					$finalIconFile->setImageFormat('PNG32');
 					$pngFile = $folder->newFile($key . '.png');
 					$pngFile->putContent($finalIconFile->getImageBlob());
 					return $pngFile;
 				} catch (\ImagickException $e) {
-					$this->logger->info('The image was requested to be no SVG file, but converting it to PNG failed: ' . $e->getMessage());
+					$this->logger->info('Converting SVG to PNG failed: ' . $e->getMessage());
 				}
 			} else {
 				return $folder->getFile($key . '.png');
@@ -131,11 +119,20 @@ class ImageManager {
 		return $folder->getFile($key);
 	}
 
+	public function hasImage(string $key): bool {
+		$mimeSetting = $this->getImageMime($key);
+		// Removing the background defines its mime as 'backgroundColor'
+		return $mimeSetting !== '' && $mimeSetting !== 'backgroundColor';
+	}
+
+	/**
+	 * @return array<string, array{mime: string, url: string}>
+	 */
 	public function getCustomImages(): array {
 		$images = [];
-		foreach ($this->supportedImageKeys as $key) {
+		foreach (self::SUPPORTED_IMAGE_KEYS as $key) {
 			$images[$key] = [
-				'mime' => $this->config->getAppValue('theming', $key . 'Mime', ''),
+				'mime' => $this->getImageMime($key),
 				'url' => $this->getImageUrl($key),
 			];
 		}
@@ -149,11 +146,11 @@ class ImageManager {
 	 * @throws NotPermittedException
 	 */
 	public function getCacheFolder(): ISimpleFolder {
-		$cacheBusterValue = $this->config->getAppValue('theming', 'cachebuster', '0');
+		$cacheBusterValue = (string)$this->appConfig->getAppValueInt(ConfigLexicon::CACHE_BUSTER);
 		try {
-			$folder = $this->appData->getFolder($cacheBusterValue);
+			$folder = $this->getRootFolder()->getFolder($cacheBusterValue);
 		} catch (NotFoundException $e) {
-			$folder = $this->appData->newFolder($cacheBusterValue);
+			$folder = $this->getRootFolder()->newFolder($cacheBusterValue);
 			$this->cleanup();
 		}
 		return $folder;
@@ -164,7 +161,7 @@ class ImageManager {
 	 *
 	 * @param string $filename
 	 * @throws NotFoundException
-	 * @return \OCP\Files\SimpleFS\ISimpleFile
+	 * @return ISimpleFile
 	 * @throws NotPermittedException
 	 */
 	public function getCachedImage(string $filename): ISimpleFile {
@@ -177,7 +174,7 @@ class ImageManager {
 	 *
 	 * @param string $filename
 	 * @param string $data
-	 * @return \OCP\Files\SimpleFS\ISimpleFile
+	 * @return ISimpleFile
 	 * @throws NotFoundException
 	 * @throws NotPermittedException
 	 */
@@ -192,62 +189,142 @@ class ImageManager {
 		return $file;
 	}
 
-	public function delete(string $key) {
+	public function delete(string $key): void {
 		/* ignore exceptions, since we don't want to fail hard if something goes wrong during cleanup */
 		try {
-			$file = $this->appData->getFolder('images')->getFile($key);
+			$file = $this->getRootFolder()->getFolder('images')->getFile($key);
 			$file->delete();
 		} catch (NotFoundException $e) {
 		} catch (NotPermittedException $e) {
 		}
 		try {
-			$file = $this->appData->getFolder('images')->getFile($key . '.png');
+			$file = $this->getRootFolder()->getFolder('images')->getFile($key . '.png');
 			$file->delete();
 		} catch (NotFoundException $e) {
 		} catch (NotPermittedException $e) {
+		}
+		try {
+			$file = $this->getRootFolder()->getFolder('images')->getFile($key . '.svg');
+			$file->delete();
+		} catch (NotFoundException $e) {
+		} catch (NotPermittedException $e) {
+		}
+
+		if ($key === 'logo') {
+			$this->config->deleteAppValue('theming', 'logoDimensions');
 		}
 	}
 
-	public function updateImage(string $key, string $tmpFile) {
-		$this->delete($key);
-
+	public function updateImage(string $key, string $tmpFile): string {
 		try {
-			$folder = $this->appData->getFolder('images');
+			$folder = $this->getRootFolder()->getFolder('images');
 		} catch (NotFoundException $e) {
-			$folder = $this->appData->newFolder('images');
+			$folder = $this->getRootFolder()->newFolder('images');
 		}
 
 		$target = $folder->newFile($key);
 		$supportedFormats = $this->getSupportedUploadImageFormats($key);
 		$detectedMimeType = mime_content_type($tmpFile);
 		if (!in_array($detectedMimeType, $supportedFormats, true)) {
-			throw new \Exception('Unsupported image type');
+			throw new \Exception('Unsupported image type: ' . $detectedMimeType);
 		}
 
-		if ($key === 'background' && strpos($detectedMimeType, 'image/svg') === false && strpos($detectedMimeType, 'image/gif') === false) {
-			// Optimize the image since some people may upload images that will be
-			// either to big or are not progressive rendering.
-			$newImage = @imagecreatefromstring(file_get_contents($tmpFile));
+		$this->delete($key);
 
-			// Preserve transparency
-			imagesavealpha($newImage, true);
-			imagealphablending($newImage, true);
+		if ($key === 'background') {
+			if ($this->shouldOptimizeBackgroundImage($detectedMimeType, filesize($tmpFile))) {
+				try {
+					// Optimize the image since some people may upload images that will be
+					// either to big or are not progressive rendering.
+					$newImage = @imagecreatefromstring(file_get_contents($tmpFile));
+					if ($newImage === false) {
+						throw new \Exception('Could not read background image, possibly corrupted.');
+					}
 
-			$tmpFile = $this->tempManager->getTemporaryFile();
-			$newWidth = (int)(imagesx($newImage) < 4096 ? imagesx($newImage) : 4096);
-			$newHeight = (int)(imagesy($newImage) / (imagesx($newImage) / $newWidth));
-			$outputImage = imagescale($newImage, $newWidth, $newHeight);
+					// Preserve transparency
+					imagesavealpha($newImage, true);
+					imagealphablending($newImage, true);
 
-			imageinterlace($outputImage, 1);
-			imagepng($outputImage, $tmpFile, 8);
-			imagedestroy($outputImage);
+					$imageWidth = imagesx($newImage);
+					$imageHeight = imagesy($newImage);
 
-			$target->putContent(file_get_contents($tmpFile));
-		} else {
-			$target->putContent(file_get_contents($tmpFile));
+					/** @var int */
+					$newWidth = min(4096, $imageWidth);
+					$newHeight = intval($imageHeight / ($imageWidth / $newWidth));
+					$outputImage = imagescale($newImage, $newWidth, $newHeight);
+					if ($outputImage === false) {
+						throw new \Exception('Could not scale uploaded background image.');
+					}
+
+					$newTmpFile = $this->tempManager->getTemporaryFile();
+					imageinterlace($outputImage, true);
+					// Keep jpeg images encoded as jpeg
+					if (str_contains($detectedMimeType, 'image/jpeg')) {
+						if (!imagejpeg($outputImage, $newTmpFile, 90)) {
+							throw new \Exception('Could not recompress background image as JPEG');
+						}
+					} else {
+						if (!imagepng($outputImage, $newTmpFile, 8)) {
+							throw new \Exception('Could not recompress background image as PNG');
+						}
+					}
+					$tmpFile = $newTmpFile;
+				} catch (\Exception $e) {
+					$this->logger->debug($e->getMessage());
+				}
+			}
+
+			// For background images we need to announce it
+			$this->backgroundService->setGlobalBackground($tmpFile);
+		}
+
+		$target->putContent(file_get_contents($tmpFile));
+
+		if ($key === 'logo') {
+			$content = file_get_contents($tmpFile);
+			$newImage = @imagecreatefromstring($content);
+			if ($newImage !== false) {
+				$this->config->setAppValue('theming', 'logoDimensions', imagesx($newImage) . 'x' . imagesy($newImage));
+			} elseif (str_starts_with($detectedMimeType, 'image/svg')) {
+				$matched = preg_match('/viewbox=["\']\d* \d* (\d*\.?\d*) (\d*\.?\d*)["\']/i', $content, $matches);
+				if ($matched) {
+					$this->config->setAppValue('theming', 'logoDimensions', $matches[1] . 'x' . $matches[2]);
+				} else {
+					$this->logger->warning('Could not read logo image dimensions to optimize for mail header');
+					$this->config->deleteAppValue('theming', 'logoDimensions');
+				}
+			} else {
+				$this->logger->warning('Could not read logo image dimensions to optimize for mail header');
+				$this->config->deleteAppValue('theming', 'logoDimensions');
+			}
 		}
 
 		return $detectedMimeType;
+	}
+
+	/**
+	 * Decide whether an image benefits from shrinking and reconverting
+	 *
+	 * @param string $mimeType the mime type of the image
+	 * @param int $contentSize size of the image file
+	 * @return bool
+	 */
+	private function shouldOptimizeBackgroundImage(string $mimeType, int $contentSize): bool {
+		// Do not touch SVGs
+		if (str_contains($mimeType, 'image/svg')) {
+			return false;
+		}
+		// GIF does not benefit from converting
+		if (str_contains($mimeType, 'image/gif')) {
+			return false;
+		}
+		// WebP also does not benefit from converting
+		// We could possibly try to convert to progressive image, but normally webP images are quite small
+		if (str_contains($mimeType, 'image/webp')) {
+			return false;
+		}
+		// As a rule of thumb background images should be max. 150-300 KiB, small images do not benefit from converting
+		return $contentSize > 150000;
 	}
 
 	/**
@@ -255,12 +332,12 @@ class ImageManager {
 	 * "favicon" images are only allowed to be SVG when imagemagick with SVG support is available.
 	 *
 	 * @param string $key The image key, e.g. "favicon"
-	 * @return array
+	 * @return string[]
 	 */
-	private function getSupportedUploadImageFormats(string $key): array {
+	public function getSupportedUploadImageFormats(string $key): array {
 		$supportedFormats = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 
-		if ($key !== 'favicon' || $this->shouldReplaceIcons() === true) {
+		if ($key !== 'favicon' || $this->canConvert('SVG') === true) {
 			$supportedFormats[] = 'image/svg+xml';
 			$supportedFormats[] = 'image/svg';
 		}
@@ -281,7 +358,7 @@ class ImageManager {
 	 */
 	public function cleanup() {
 		$currentFolder = $this->getCacheFolder();
-		$folders = $this->appData->getDirectoryListing();
+		$folders = $this->getRootFolder()->getDirectoryListing();
 		foreach ($folders as $folder) {
 			if ($folder->getName() !== 'images' && $folder->getName() !== $currentFolder->getName()) {
 				$folder->delete();
@@ -296,17 +373,34 @@ class ImageManager {
 	 * @return bool
 	 */
 	public function shouldReplaceIcons() {
+		return $this->canConvert('SVG');
+	}
+
+	/**
+	 * Check if Imagemagick is enabled and if format is supported
+	 *
+	 * @return bool
+	 */
+	public function canConvert(string $format): bool {
 		$cache = $this->cacheFactory->createDistributed('theming-' . $this->urlGenerator->getBaseUrl());
-		if ($value = $cache->get('shouldReplaceIcons')) {
+		if ($value = $cache->get('convert-' . $format)) {
 			return (bool)$value;
 		}
 		$value = false;
 		if (extension_loaded('imagick')) {
-			if (count(\Imagick::queryFormats('SVG')) >= 1) {
+			if (count(\Imagick::queryFormats($format)) >= 1) {
 				$value = true;
 			}
 		}
-		$cache->set('shouldReplaceIcons', $value);
+		$cache->set('convert-' . $format, $value);
 		return $value;
+	}
+
+	private function getRootFolder(): ISimpleFolder {
+		try {
+			return $this->appData->getFolder('global');
+		} catch (NotFoundException $e) {
+			return $this->appData->newFolder('global');
+		}
 	}
 }

@@ -1,46 +1,39 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Nina Pypchenko <22447785+nina-py@users.noreply.github.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files\Controller;
 
 use OCA\Files\Service\TagService;
+use OCA\Files\Service\UserConfig;
+use OCA\Files\Service\ViewConfig;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\AppFramework\Http\FileDisplayResponse;
+use OCP\AppFramework\Http\Response;
 use OCP\Files\File;
-use OCP\Files\Folder;
+use OCP\Files\IRootFolder;
+use OCP\Files\IUserFolder;
 use OCP\Files\NotFoundException;
 use OCP\Files\SimpleFS\ISimpleFile;
+use OCP\Files\Storage\ISharedStorage;
+use OCP\Files\Storage\IStorage;
 use OCP\Files\StorageNotAvailableException;
 use OCP\IConfig;
+use OCP\IL10N;
 use OCP\IPreview;
 use OCP\IRequest;
 use OCP\IUser;
 use OCP\IUserSession;
 use OCP\Share\IManager;
+use OCP\Share\IShare;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 use Test\TestCase;
 
 /**
@@ -49,31 +42,25 @@ use Test\TestCase;
  * @package OCA\Files\Controller
  */
 class ApiControllerTest extends TestCase {
-	/** @var string */
-	private $appName = 'files';
-	/** @var \OCP\IUser */
-	private $user;
-	/** @var IRequest */
-	private $request;
-	/** @var TagService */
-	private $tagService;
-	/** @var IPreview|\PHPUnit\Framework\MockObject\MockObject */
-	private $preview;
-	/** @var ApiController */
-	private $apiController;
-	/** @var \OCP\Share\IManager */
-	private $shareManager;
-	/** @var \OCP\IConfig */
-	private $config;
-	/** @var Folder|\PHPUnit\Framework\MockObject\MockObject */
-	private $userFolder;
+	private string $appName = 'files';
+	private IUser $user;
+	private IRequest $request;
+	private TagService&MockObject $tagService;
+	private IPreview&MockObject $preview;
+	private ApiController $apiController;
+	private IManager $shareManager;
+	private IConfig&MockObject $config;
+	private IUserFolder&MockObject $userFolder;
+	private UserConfig&MockObject $userConfig;
+	private ViewConfig&MockObject $viewConfig;
+	private IL10N&MockObject $l10n;
+	private IRootFolder&MockObject $rootFolder;
+	private LoggerInterface&MockObject $logger;
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->request = $this->getMockBuilder(IRequest::class)
-			->disableOriginalConstructor()
-			->getMock();
+		$this->request = $this->createMock(IRequest::class);
 		$this->user = $this->createMock(IUser::class);
 		$this->user->expects($this->any())
 			->method('getUID')
@@ -82,19 +69,19 @@ class ApiControllerTest extends TestCase {
 		$userSession->expects($this->any())
 			->method('getUser')
 			->willReturn($this->user);
-		$this->tagService = $this->getMockBuilder(TagService::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$this->shareManager = $this->getMockBuilder(IManager::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$this->preview = $this->getMockBuilder(IPreview::class)
-			->disableOriginalConstructor()
-			->getMock();
+		$this->tagService = $this->createMock(TagService::class);
+		$this->shareManager = $this->createMock(IManager::class);
+		$this->preview = $this->createMock(IPreview::class);
 		$this->config = $this->createMock(IConfig::class);
-		$this->userFolder = $this->getMockBuilder(Folder::class)
-			->disableOriginalConstructor()
-			->getMock();
+		$this->userFolder = $this->createMock(IUserFolder::class);
+		$this->userConfig = $this->createMock(UserConfig::class);
+		$this->viewConfig = $this->createMock(ViewConfig::class);
+		$this->l10n = $this->createMock(IL10N::class);
+		$this->rootFolder = $this->createMock(IRootFolder::class);
+		$this->rootFolder->expects($this->any())
+			->method('getUserFolder')
+			->willReturn($this->userFolder);
+		$this->logger = $this->createMock(LoggerInterface::class);
 
 		$this->apiController = new ApiController(
 			$this->appName,
@@ -104,16 +91,20 @@ class ApiControllerTest extends TestCase {
 			$this->preview,
 			$this->shareManager,
 			$this->config,
-			$this->userFolder
+			$this->userConfig,
+			$this->viewConfig,
+			$this->l10n,
+			$this->rootFolder,
+			$this->logger,
 		);
 	}
 
-	public function testUpdateFileTagsEmpty() {
+	public function testUpdateFileTagsEmpty(): void {
 		$expected = new DataResponse([]);
 		$this->assertEquals($expected, $this->apiController->updateFileTags('/path.txt'));
 	}
 
-	public function testUpdateFileTagsWorking() {
+	public function testUpdateFileTagsWorking(): void {
 		$this->tagService->expects($this->once())
 			->method('updateFileTags')
 			->with('/path.txt', ['Tag1', 'Tag2']);
@@ -127,37 +118,37 @@ class ApiControllerTest extends TestCase {
 		$this->assertEquals($expected, $this->apiController->updateFileTags('/path.txt', ['Tag1', 'Tag2']));
 	}
 
-	public function testUpdateFileTagsNotFoundException() {
+	public function testUpdateFileTagsNotFoundException(): void {
 		$this->tagService->expects($this->once())
 			->method('updateFileTags')
 			->with('/path.txt', ['Tag1', 'Tag2'])
-			->will($this->throwException(new NotFoundException('My error message')));
+			->willThrowException(new NotFoundException('My error message'));
 
 		$expected = new DataResponse(['message' => 'My error message'], Http::STATUS_NOT_FOUND);
 		$this->assertEquals($expected, $this->apiController->updateFileTags('/path.txt', ['Tag1', 'Tag2']));
 	}
 
-	public function testUpdateFileTagsStorageNotAvailableException() {
+	public function testUpdateFileTagsStorageNotAvailableException(): void {
 		$this->tagService->expects($this->once())
 			->method('updateFileTags')
 			->with('/path.txt', ['Tag1', 'Tag2'])
-			->will($this->throwException(new StorageNotAvailableException('My error message')));
+			->willThrowException(new StorageNotAvailableException('My error message'));
 
 		$expected = new DataResponse(['message' => 'My error message'], Http::STATUS_SERVICE_UNAVAILABLE);
 		$this->assertEquals($expected, $this->apiController->updateFileTags('/path.txt', ['Tag1', 'Tag2']));
 	}
 
-	public function testUpdateFileTagsStorageGenericException() {
+	public function testUpdateFileTagsStorageGenericException(): void {
 		$this->tagService->expects($this->once())
 			->method('updateFileTags')
 			->with('/path.txt', ['Tag1', 'Tag2'])
-			->will($this->throwException(new \Exception('My error message')));
+			->willThrowException(new \Exception('My error message'));
 
 		$expected = new DataResponse(['message' => 'My error message'], Http::STATUS_NOT_FOUND);
 		$this->assertEquals($expected, $this->apiController->updateFileTags('/path.txt', ['Tag1', 'Tag2']));
 	}
 
-	public function testGetThumbnailInvalidSize() {
+	public function testGetThumbnailInvalidSize(): void {
 		$this->userFolder->method('get')
 			->with($this->equalTo(''))
 			->willThrowException(new NotFoundException());
@@ -165,8 +156,13 @@ class ApiControllerTest extends TestCase {
 		$this->assertEquals($expected, $this->apiController->getThumbnail(0, 0, ''));
 	}
 
-	public function testGetThumbnailInvaidImage() {
+	public function testGetThumbnailInvalidImage(): void {
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('instanceOfStorage')->with(ISharedStorage::class)->willReturn(false);
+
 		$file = $this->createMock(File::class);
+		$file->method('getId')->willReturn(123);
+		$file->method('getStorage')->willReturn($storage);
 		$this->userFolder->method('get')
 			->with($this->equalTo('unknown.jpg'))
 			->willReturn($file);
@@ -178,12 +174,71 @@ class ApiControllerTest extends TestCase {
 		$this->assertEquals($expected, $this->apiController->getThumbnail(10, 10, 'unknown.jpg'));
 	}
 
-	public function testGetThumbnail() {
+	public function testGetThumbnailInvalidPartFile(): void {
 		$file = $this->createMock(File::class);
+		$file->method('getId')->willReturn(0);
+		$this->userFolder->method('get')
+			->with($this->equalTo('unknown.jpg'))
+			->willReturn($file);
+		$expected = new DataResponse(['message' => 'File not found.'], Http::STATUS_NOT_FOUND);
+		$this->assertEquals($expected, $this->apiController->getThumbnail(10, 10, 'unknown.jpg'));
+	}
+
+	public function testGetThumbnailSharedNoDownload(): void {
+		$share = $this->createMock(IShare::class);
+		$share->expects(self::once())
+			->method('canSeeContent')
+			->willReturn(false);
+
+		$storage = $this->createMock(ISharedStorage::class);
+		$storage->expects(self::once())
+			->method('instanceOfStorage')
+			->with(ISharedStorage::class)
+			->willReturn(true);
+		$storage->expects(self::once())
+			->method('getShare')
+			->willReturn($share);
+
+		$file = $this->createMock(File::class);
+		$file->method('getId')->willReturn(123);
+		$file->method('getStorage')->willReturn($storage);
+
+		$this->userFolder->method('get')
+			->with('unknown.jpg')
+			->willReturn($file);
+
+		$this->preview->expects($this->never())
+			->method('getPreview');
+
+		$expected = new DataResponse(['message' => 'File not found.'], Http::STATUS_NOT_FOUND);
+		$this->assertEquals($expected, $this->apiController->getThumbnail(10, 10, 'unknown.jpg'));
+	}
+
+	public function testGetThumbnailShared(): void {
+		$share = $this->createMock(IShare::class);
+		$share->expects(self::once())
+			->method('canSeeContent')
+			->willReturn(true);
+
+		$storage = $this->createMock(ISharedStorage::class);
+		$storage->expects(self::once())
+			->method('instanceOfStorage')
+			->with(ISharedStorage::class)
+			->willReturn(true);
+		$storage->expects(self::once())
+			->method('getShare')
+			->willReturn($share);
+
+		$file = $this->createMock(File::class);
+		$file->method('getId')->willReturn(123);
+		$file->method('getStorage')->willReturn($storage);
+
 		$this->userFolder->method('get')
 			->with($this->equalTo('known.jpg'))
 			->willReturn($file);
 		$preview = $this->createMock(ISimpleFile::class);
+		$preview->method('getName')->willReturn('my name');
+		$preview->method('getMTime')->willReturn(42);
 		$this->preview->expects($this->once())
 			->method('getPreview')
 			->with($this->equalTo($file), 10, 10, true)
@@ -192,69 +247,55 @@ class ApiControllerTest extends TestCase {
 		$ret = $this->apiController->getThumbnail(10, 10, 'known.jpg');
 
 		$this->assertEquals(Http::STATUS_OK, $ret->getStatus());
-		$this->assertInstanceOf(Http\FileDisplayResponse::class, $ret);
+		$this->assertInstanceOf(FileDisplayResponse::class, $ret);
 	}
 
-	public function testUpdateFileSorting() {
-		$mode = 'mtime';
-		$direction = 'desc';
+	public function testGetThumbnail(): void {
+		$storage = $this->createMock(IStorage::class);
+		$storage->method('instanceOfStorage')->with(ISharedStorage::class)->willReturn(false);
 
-		$this->config->expects($this->at(0))
-			->method('setUserValue')
-			->with($this->user->getUID(), 'files', 'file_sorting', $mode);
-		$this->config->expects($this->at(1))
-			->method('setUserValue')
-			->with($this->user->getUID(), 'files', 'file_sorting_direction', $direction);
+		$file = $this->createMock(File::class);
+		$file->method('getId')->willReturn(123);
+		$file->method('getStorage')->willReturn($storage);
 
-		$expected = new HTTP\Response();
-		$actual = $this->apiController->updateFileSorting($mode, $direction);
-		$this->assertEquals($expected, $actual);
+		$this->userFolder->method('get')
+			->with($this->equalTo('known.jpg'))
+			->willReturn($file);
+		$preview = $this->createMock(ISimpleFile::class);
+		$preview->method('getName')->willReturn('my name');
+		$preview->method('getMTime')->willReturn(42);
+		$this->preview->expects($this->once())
+			->method('getPreview')
+			->with($this->equalTo($file), 10, 10, true)
+			->willReturn($preview);
+
+		$ret = $this->apiController->getThumbnail(10, 10, 'known.jpg');
+
+		$this->assertEquals(Http::STATUS_OK, $ret->getStatus());
+		$this->assertInstanceOf(FileDisplayResponse::class, $ret);
 	}
 
-	public function invalidSortingModeData() {
-		return [
-			['color', 'asc'],
-			['name', 'size'],
-			['foo', 'bar']
-		];
-	}
-
-	/**
-	 * @dataProvider invalidSortingModeData
-	 */
-	public function testUpdateInvalidFileSorting($mode, $direction) {
-		$this->config->expects($this->never())
-			->method('setUserValue');
-
-		$expected = new Http\Response(null);
-		$expected->setStatus(Http::STATUS_UNPROCESSABLE_ENTITY);
-
-		$result = $this->apiController->updateFileSorting($mode, $direction);
-
-		$this->assertEquals($expected, $result);
-	}
-
-	public function testShowHiddenFiles() {
+	public function testShowHiddenFiles(): void {
 		$show = false;
 
 		$this->config->expects($this->once())
 			->method('setUserValue')
 			->with($this->user->getUID(), 'files', 'show_hidden', '0');
 
-		$expected = new Http\Response();
+		$expected = new Response();
 		$actual = $this->apiController->showHiddenFiles($show);
 
 		$this->assertEquals($expected, $actual);
 	}
 
-	public function testCropImagePreviews() {
+	public function testCropImagePreviews(): void {
 		$crop = true;
 
 		$this->config->expects($this->once())
 			->method('setUserValue')
-			->with($this->user->getUID(), 'files', 'crop_image_previews', $crop);
+			->with($this->user->getUID(), 'files', 'crop_image_previews', '1');
 
-		$expected = new Http\Response();
+		$expected = new Response();
 		$actual = $this->apiController->cropImagePreviews($crop);
 
 		$this->assertEquals($expected, $actual);

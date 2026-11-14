@@ -1,30 +1,15 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Joas Schilling <coding@schilljs.com>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Sharing\Activity\Providers;
 
+use OCP\Activity\Exceptions\UnknownActivityException;
 use OCP\Activity\IEvent;
+use OCP\Activity\IEventMerger;
 use OCP\Activity\IManager;
 use OCP\Contacts\IManager as IContactsManager;
 use OCP\Federation\ICloudIdManager;
@@ -43,29 +28,29 @@ class Groups extends Base {
 
 	public const SUBJECT_EXPIRED_GROUP = 'expired_group';
 
-	/** @var IGroupManager */
-	protected $groupManager;
-
 	/** @var string[] */
 	protected $groupDisplayNames = [];
 
-	public function __construct(IFactory $languageFactory,
-								IURLGenerator $url,
-								IManager $activityManager,
-								IUserManager $userManager,
-								ICloudIdManager $cloudIdManager,
-								IContactsManager $contactsManager,
-								IGroupManager $groupManager) {
-		parent::__construct($languageFactory, $url, $activityManager, $userManager, $cloudIdManager, $contactsManager);
-		$this->groupManager = $groupManager;
+	public function __construct(
+		IFactory $languageFactory,
+		IURLGenerator $url,
+		IManager $activityManager,
+		IUserManager $userManager,
+		ICloudIdManager $cloudIdManager,
+		IContactsManager $contactsManager,
+		IEventMerger $eventMerger,
+		protected IGroupManager $groupManager,
+	) {
+		parent::__construct($languageFactory, $url, $activityManager, $userManager, $cloudIdManager, $contactsManager, $eventMerger);
 	}
 
 	/**
 	 * @param IEvent $event
 	 * @return IEvent
-	 * @throws \InvalidArgumentException
+	 * @throws UnknownActivityException
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function parseShortVersion(IEvent $event) {
 		$parsedParameters = $this->getParsedParameters($event);
 
@@ -80,7 +65,7 @@ class Groups extends Base {
 		} elseif ($event->getSubject() === self::SUBJECT_EXPIRED_GROUP) {
 			$subject = $this->l->t('Share for group {group} expired');
 		} else {
-			throw new \InvalidArgumentException();
+			throw new UnknownActivityException();
 		}
 
 		if ($this->activityManager->getRequirePNG()) {
@@ -95,11 +80,13 @@ class Groups extends Base {
 
 	/**
 	 * @param IEvent $event
+	 * @param IEvent|null $previousEvent
 	 * @return IEvent
-	 * @throws \InvalidArgumentException
+	 * @throws UnknownActivityException
 	 * @since 11.0.0
 	 */
-	public function parseLongVersion(IEvent $event) {
+	#[\Override]
+	public function parseLongVersion(IEvent $event, ?IEvent $previousEvent = null) {
 		$parsedParameters = $this->getParsedParameters($event);
 
 		if ($event->getSubject() === self::SUBJECT_SHARED_GROUP_SELF) {
@@ -113,7 +100,7 @@ class Groups extends Base {
 		} elseif ($event->getSubject() === self::SUBJECT_EXPIRED_GROUP) {
 			$subject = $this->l->t('Share for file {file} with group {group} expired');
 		} else {
-			throw new \InvalidArgumentException();
+			throw new UnknownActivityException();
 		}
 
 		if ($this->activityManager->getRequirePNG()) {
@@ -146,7 +133,8 @@ class Groups extends Base {
 					'group' => $this->generateGroupParameter($parameters[1]),
 				];
 		}
-		return [];
+
+		throw new UnknownActivityException();
 	}
 
 	/**

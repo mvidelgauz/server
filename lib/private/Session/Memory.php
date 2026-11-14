@@ -1,36 +1,14 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Session;
 
-use Exception;
 use OCP\Session\Exceptions\SessionNotAvailableException;
 
 /**
@@ -43,17 +21,12 @@ use OCP\Session\Exceptions\SessionNotAvailableException;
 class Memory extends Session {
 	protected $data;
 
-	public function __construct(string $name) {
-		//no need to use $name since all data is already scoped to this instance
-		$this->data = [];
-	}
-
 	/**
 	 * @param string $key
-	 * @param integer $value
+	 * @param mixed $value
 	 */
+	#[\Override]
 	public function set(string $key, $value) {
-		$this->validateSession();
 		$this->data[$key] = $value;
 	}
 
@@ -61,6 +34,7 @@ class Memory extends Session {
 	 * @param string $key
 	 * @return mixed
 	 */
+	#[\Override]
 	public function get(string $key) {
 		if (!$this->exists($key)) {
 			return null;
@@ -72,6 +46,7 @@ class Memory extends Session {
 	 * @param string $key
 	 * @return bool
 	 */
+	#[\Override]
 	public function exists(string $key): bool {
 		return isset($this->data[$key]);
 	}
@@ -79,11 +54,12 @@ class Memory extends Session {
 	/**
 	 * @param string $key
 	 */
+	#[\Override]
 	public function remove(string $key) {
-		$this->validateSession();
 		unset($this->data[$key]);
 	}
 
+	#[\Override]
 	public function clear() {
 		$this->data = [];
 	}
@@ -93,6 +69,7 @@ class Memory extends Session {
 	 *
 	 * @param bool $deleteOldSession
 	 */
+	#[\Override]
 	public function regenerateId(bool $deleteOldSession = true, bool $updateToken = false) {
 	}
 
@@ -103,6 +80,7 @@ class Memory extends Session {
 	 * @throws SessionNotAvailableException
 	 * @since 9.1.0
 	 */
+	#[\Override]
 	public function getId(): string {
 		throw new SessionNotAvailableException('Memory session does not have an ID');
 	}
@@ -110,18 +88,10 @@ class Memory extends Session {
 	/**
 	 * Helper function for PHPUnit execution - don't use in non-test code
 	 */
-	public function reopen() {
+	#[\Override]
+	public function reopen(): bool {
+		$reopened = $this->sessionClosed;
 		$this->sessionClosed = false;
-	}
-
-	/**
-	 * In case the session has already been locked an exception will be thrown
-	 *
-	 * @throws Exception
-	 */
-	private function validateSession() {
-		if ($this->sessionClosed) {
-			throw new Exception('Session has been closed - no further changes to the session are allowed');
-		}
+		return $reopened;
 	}
 }

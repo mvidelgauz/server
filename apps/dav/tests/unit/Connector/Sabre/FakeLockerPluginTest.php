@@ -1,30 +1,12 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Tests\unit\Connector\Sabre;
 
 use OCA\DAV\Connector\Sabre\FakeLockerPlugin;
@@ -42,40 +24,33 @@ use Test\TestCase;
  * @package OCA\DAV\Tests\unit\Connector\Sabre
  */
 class FakeLockerPluginTest extends TestCase {
-	/** @var FakeLockerPlugin */
-	private $fakeLockerPlugin;
+	private FakeLockerPlugin $fakeLockerPlugin;
 
 	protected function setUp(): void {
 		parent::setUp();
 		$this->fakeLockerPlugin = new FakeLockerPlugin();
 	}
 
-	public function testInitialize() {
+	public function testInitialize(): void {
 		/** @var Server $server */
-		$server = $this->getMockBuilder(Server::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$server
-			->expects($this->at(0))
+		$server = $this->createMock(Server::class);
+		$calls = [
+			['method:LOCK', [$this->fakeLockerPlugin, 'fakeLockProvider'], 1],
+			['method:UNLOCK', [$this->fakeLockerPlugin, 'fakeUnlockProvider'], 1],
+			['propFind', [$this->fakeLockerPlugin, 'propFind'], 100],
+			['validateTokens', [$this->fakeLockerPlugin, 'validateTokens'], 100],
+		];
+		$server->expects($this->exactly(count($calls)))
 			->method('on')
-			->with('method:LOCK', [$this->fakeLockerPlugin, 'fakeLockProvider'], 1);
-		$server
-			->expects($this->at(1))
-			->method('on')
-			->with('method:UNLOCK', [$this->fakeLockerPlugin, 'fakeUnlockProvider'], 1);
-		$server
-			->expects($this->at(2))
-			->method('on')
-			->with('propFind', [$this->fakeLockerPlugin, 'propFind']);
-		$server
-			->expects($this->at(3))
-			->method('on')
-			->with('validateTokens', [$this->fakeLockerPlugin, 'validateTokens']);
+			->willReturnCallback(function () use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, func_get_args());
+			});
 
 		$this->fakeLockerPlugin->initialize($server);
 	}
 
-	public function testGetHTTPMethods() {
+	public function testGetHTTPMethods(): void {
 		$expected = [
 			'LOCK',
 			'UNLOCK',
@@ -83,32 +58,32 @@ class FakeLockerPluginTest extends TestCase {
 		$this->assertSame($expected, $this->fakeLockerPlugin->getHTTPMethods('Test'));
 	}
 
-	public function testGetFeatures() {
+	public function testGetFeatures(): void {
 		$expected = [
 			2,
 		];
 		$this->assertSame($expected, $this->fakeLockerPlugin->getFeatures());
 	}
 
-	public function testPropFind() {
-		$propFind = $this->getMockBuilder(PropFind::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$node = $this->getMockBuilder(INode::class)
-			->disableOriginalConstructor()
-			->getMock();
+	public function testPropFind(): void {
+		$propFind = $this->createMock(PropFind::class);
+		$node = $this->createMock(INode::class);
 
-		$propFind->expects($this->at(0))
+		$calls = [
+			'{DAV:}supportedlock',
+			'{DAV:}lockdiscovery',
+		];
+		$propFind->expects($this->exactly(count($calls)))
 			->method('handle')
-			->with('{DAV:}supportedlock');
-		$propFind->expects($this->at(1))
-			->method('handle')
-			->with('{DAV:}lockdiscovery');
+			->willReturnCallback(function ($propertyName) use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, $propertyName);
+			});
 
 		$this->fakeLockerPlugin->propFind($propFind, $node);
 	}
 
-	public function tokenDataProvider() {
+	public static function tokenDataProvider(): array {
 		return [
 			[
 				[
@@ -145,23 +120,15 @@ class FakeLockerPluginTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider tokenDataProvider
-	 * @param array $input
-	 * @param array $expected
-	 */
-	public function testValidateTokens(array $input, array $expected) {
-		$request = $this->getMockBuilder(RequestInterface::class)
-			->disableOriginalConstructor()
-			->getMock();
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'tokenDataProvider')]
+	public function testValidateTokens(array $input, array $expected): void {
+		$request = $this->createMock(RequestInterface::class);
 		$this->fakeLockerPlugin->validateTokens($request, $input);
 		$this->assertSame($expected, $input);
 	}
 
-	public function testFakeLockProvider() {
-		$request = $this->getMockBuilder(RequestInterface::class)
-			->disableOriginalConstructor()
-			->getMock();
+	public function testFakeLockProvider(): void {
+		$request = $this->createMock(RequestInterface::class);
 		$response = new Response();
 		$server = $this->getMockBuilder(Server::class)
 			->getMock();
@@ -178,20 +145,16 @@ class FakeLockerPluginTest extends TestCase {
 		$this->assertXmlStringEqualsXmlString($expectedXml, $response->getBody());
 	}
 
-	public function testFakeUnlockProvider() {
-		$request = $this->getMockBuilder(RequestInterface::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$response = $this->getMockBuilder(ResponseInterface::class)
-			->disableOriginalConstructor()
-			->getMock();
+	public function testFakeUnlockProvider(): void {
+		$request = $this->createMock(RequestInterface::class);
+		$response = $this->createMock(ResponseInterface::class);
 
 		$response->expects($this->once())
-				->method('setStatus')
-				->with('204');
+			->method('setStatus')
+			->with('204');
 		$response->expects($this->once())
-				->method('setHeader')
-				->with('Content-Length', '0');
+			->method('setHeader')
+			->with('Content-Length', '0');
 
 		$this->assertSame(false, $this->fakeLockerPlugin->fakeUnlockProvider($request, $response));
 	}

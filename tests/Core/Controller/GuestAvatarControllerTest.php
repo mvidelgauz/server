@@ -1,20 +1,25 @@
 <?php
 
-namespace Core\Controller;
+/**
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+namespace Tests\Core\Controller;
 
 use OC\Core\Controller\GuestAvatarController;
 use OCP\AppFramework\Http\FileDisplayResponse;
+use OCP\Files\File;
 use OCP\Files\SimpleFS\ISimpleFile;
 use OCP\IAvatar;
 use OCP\IAvatarManager;
-use OCP\ILogger;
 use OCP\IRequest;
+use Psr\Log\LoggerInterface;
 
 /**
  * This class provides tests for the guest avatar controller.
  */
 class GuestAvatarControllerTest extends \Test\TestCase {
-
 	/**
 	 * @var GuestAvatarController
 	 */
@@ -36,26 +41,29 @@ class GuestAvatarControllerTest extends \Test\TestCase {
 	private $avatar;
 
 	/**
-	 * @var \OCP\Files\File|\PHPUnit\Framework\MockObject\MockObject
+	 * @var File|\PHPUnit\Framework\MockObject\MockObject
 	 */
 	private $file;
 
 	/**
-	 * @var ILogger|\PHPUnit\Framework\MockObject\MockObject
+	 * @var LoggerInterface|\PHPUnit\Framework\MockObject\MockObject
 	 */
 	private $logger;
 
 	/**
 	 * Sets up the test environment.
 	 */
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->logger = $this->getMockBuilder(ILogger::class)->getMock();
+		$this->logger = $this->getMockBuilder(LoggerInterface::class)->getMock();
 		$this->request = $this->getMockBuilder(IRequest::class)->getMock();
 		$this->avatar = $this->getMockBuilder(IAvatar::class)->getMock();
 		$this->avatarManager = $this->getMockBuilder(IAvatarManager::class)->getMock();
 		$this->file = $this->getMockBuilder(ISimpleFile::class)->getMock();
+		$this->file->method('getName')->willReturn('my name');
+		$this->file->method('getMTime')->willReturn(42);
 		$this->guestAvatarController = new GuestAvatarController(
 			'core',
 			$this->request,
@@ -67,7 +75,7 @@ class GuestAvatarControllerTest extends \Test\TestCase {
 	/**
 	 * Tests getAvatar returns the guest avatar.
 	 */
-	public function testGetAvatar() {
+	public function testGetAvatar(): void {
 		$this->avatarManager->expects($this->once())
 			->method('getGuestAvatar')
 			->with('Peter')
@@ -75,7 +83,7 @@ class GuestAvatarControllerTest extends \Test\TestCase {
 
 		$this->avatar->expects($this->once())
 			->method('getFile')
-			->with(128)
+			->with(512)
 			->willReturn($this->file);
 
 		$this->file->method('getMimeType')

@@ -1,54 +1,34 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2017 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Collaboration\Collaborators;
 
 use OC\Collaboration\Collaborators\Search;
 use OC\Collaboration\Collaborators\SearchResult;
-use OCP\Collaboration\Collaborators\ISearch;
 use OCP\Collaboration\Collaborators\ISearchPlugin;
+use OCP\Collaboration\Collaborators\ISearchResult;
 use OCP\Collaboration\Collaborators\SearchResultType;
 use OCP\IContainer;
 use OCP\Share\IShare;
 use Test\TestCase;
 
 class SearchTest extends TestCase {
-	/** @var  IContainer|\PHPUnit\Framework\MockObject\MockObject */
-	protected $container;
-	/** @var  ISearch */
-	protected $search;
+	protected Search $search;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->container = $this->createMock(IContainer::class);
-
-		$this->search = new Search($this->container);
+		$this->search = $this->createInstanceWithMocks(Search::class);
 	}
 
-	/**
-	 * @dataProvider dataSearchSharees
-	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataSearchSharees')]
 	public function testSearch(
 		string $searchTerm,
 		array $shareTypes,
@@ -59,14 +39,14 @@ class SearchTest extends TestCase {
 		array $mockedRemotesResult,
 		array $mockedMailResult,
 		array $expected,
-		bool $expectedMoreResults
-	) {
+		bool $expectedMoreResults,
+	): void {
 		$searchResult = new SearchResult();
 
 		$userPlugin = $this->createMock(ISearchPlugin::class);
 		$userPlugin->expects($this->any())
 			->method('search')
-			->willReturnCallback(function () use ($searchResult, $mockedUserResult, $expectedMoreResults) {
+			->willReturnCallback(function (string $search, int $limit, int $offset, ISearchResult $searchResult) use ($mockedUserResult, $expectedMoreResults) {
 				$type = new SearchResultType('users');
 				$searchResult->addResultSet($type, $mockedUserResult);
 				return $expectedMoreResults;
@@ -75,7 +55,7 @@ class SearchTest extends TestCase {
 		$groupPlugin = $this->createMock(ISearchPlugin::class);
 		$groupPlugin->expects($this->any())
 			->method('search')
-			->willReturnCallback(function () use ($searchResult, $mockedGroupsResult, $expectedMoreResults) {
+			->willReturnCallback(function (string $search, int $limit, int $offset, ISearchResult $searchResult) use ($mockedGroupsResult, $expectedMoreResults) {
 				$type = new SearchResultType('groups');
 				$searchResult->addResultSet($type, $mockedGroupsResult);
 				return $expectedMoreResults;
@@ -84,7 +64,7 @@ class SearchTest extends TestCase {
 		$remotePlugin = $this->createMock(ISearchPlugin::class);
 		$remotePlugin->expects($this->any())
 			->method('search')
-			->willReturnCallback(function () use ($searchResult, $mockedRemotesResult, $expectedMoreResults) {
+			->willReturnCallback(function (string $search, int $limit, int $offset, ISearchResult $searchResult) use ($mockedRemotesResult, $expectedMoreResults) {
 				if ($mockedRemotesResult !== null) {
 					$type = new SearchResultType('remotes');
 					$searchResult->addResultSet($type, $mockedRemotesResult['results'], $mockedRemotesResult['exact']);
@@ -98,33 +78,31 @@ class SearchTest extends TestCase {
 		$mailPlugin = $this->createMock(ISearchPlugin::class);
 		$mailPlugin->expects($this->any())
 			->method('search')
-			->willReturnCallback(function () use ($searchResult, $mockedMailResult, $expectedMoreResults) {
+			->willReturnCallback(function (string $search, int $limit, int $offset, ISearchResult $searchResult) use ($mockedMailResult, $expectedMoreResults) {
 				$type = new SearchResultType('emails');
 				$searchResult->addResultSet($type, $mockedMailResult);
 				return $expectedMoreResults;
 			});
 
-		$this->container->expects($this->any())
-			->method('resolve')
-			->willReturnCallback(function ($class) use ($searchResult, $userPlugin, $groupPlugin, $remotePlugin, $mailPlugin) {
-				if ($class === SearchResult::class) {
-					return $searchResult;
-				} elseif ($class === $userPlugin) {
+		$this->getAutoMock(IContainer::class)->expects($this->any())
+			->method('get')
+			->willReturnCallback(function ($class) use ($userPlugin, $groupPlugin, $remotePlugin, $mailPlugin) {
+				if ($class === 'user') {
 					return $userPlugin;
-				} elseif ($class === $groupPlugin) {
+				} elseif ($class === 'group') {
 					return $groupPlugin;
-				} elseif ($class === $remotePlugin) {
+				} elseif ($class === 'remote') {
 					return $remotePlugin;
-				} elseif ($class === $mailPlugin) {
+				} elseif ($class === 'mail') {
 					return $mailPlugin;
 				}
 				return null;
 			});
 
-		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_USER', 'class' => $userPlugin]);
-		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_GROUP', 'class' => $groupPlugin]);
-		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_REMOTE', 'class' => $remotePlugin]);
-		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_EMAIL', 'class' => $mailPlugin]);
+		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_USER', 'class' => 'user']);
+		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_GROUP', 'class' => 'group']);
+		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_REMOTE', 'class' => 'remote']);
+		$this->search->registerPlugin(['shareType' => 'SHARE_TYPE_EMAIL', 'class' => 'mail']);
 
 		[$results, $moreResults] = $this->search->search($searchTerm, $shareTypes, false, $perPage, $perPage * ($page - 1));
 
@@ -132,7 +110,7 @@ class SearchTest extends TestCase {
 		$this->assertSame($expectedMoreResults, $moreResults);
 	}
 
-	public function dataSearchSharees() {
+	public static function dataSearchSharees(): array {
 		return [
 			// #0
 			[

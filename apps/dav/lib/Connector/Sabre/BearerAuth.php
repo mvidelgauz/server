@@ -1,63 +1,44 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Lukas Reschke <lukas@statuscode.ch>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Connector\Sabre;
 
+use Firebase\JWT\JWK;
+use Firebase\JWT\JWT;
+use OC\OCM\OCMSignatoryManager;
+use OCP\AppFramework\Http;
+use OCP\Defaults;
+use OCP\IConfig;
 use OCP\IRequest;
 use OCP\ISession;
 use OCP\IUserSession;
+use OCP\Security\Signature\Model\Signatory;
+use OCP\Server;
+use OCP\Share\IManager;
+use OCP\Share\IShare;
 use Sabre\DAV\Auth\Backend\AbstractBearer;
 use Sabre\HTTP\RequestInterface;
 use Sabre\HTTP\ResponseInterface;
 
 class BearerAuth extends AbstractBearer {
-	/** @var IUserSession */
-	private $userSession;
-	/** @var ISession */
-	private $session;
-	/** @var IRequest */
-	private $request;
-	/** @var string */
-	private $principalPrefix;
-
-	/**
-	 * @param IUserSession $userSession
-	 * @param ISession $session
-	 * @param string $principalPrefix
-	 * @param IRequest $request
-	 */
-	public function __construct(IUserSession $userSession,
-								ISession $session,
-								IRequest $request,
-								$principalPrefix = 'principals/users/') {
-		$this->userSession = $userSession;
-		$this->session = $session;
-		$this->request = $request;
-		$this->principalPrefix = $principalPrefix;
-
+	public function __construct(
+		private IUserSession $userSession,
+		private ISession $session,
+		private IRequest $request,
+		private IConfig $config,
+		private string $principalPrefix = 'principals/users/',
+		private string $token = '',
+		private bool $allowOcmAccessToken = false,
+		private ?IManager $shareManager = null,
+		private ?OCMSignatoryManager $ocmSignatoryManager = null,
+	) {
 		// setup realm
-		$defaults = new \OCP\Defaults();
-		$this->realm = $defaults->getName();
+		$defaults = new Defaults();
+		$this->realm = $defaults->getName() ?: 'Nextcloud';
 	}
 
 	private function setupUserFs($userId) {
@@ -69,17 +50,87 @@ class BearerAuth extends AbstractBearer {
 	/**
 	 * {@inheritdoc}
 	 */
+	#[\Override]
 	public function validateBearerToken($bearerToken) {
 		\OC_Util::setupFS();
-
-		if (!$this->userSession->isLoggedIn()) {
-			$this->userSession->tryTokenLogin($this->request);
+		$this->token = $bearerToken;
+		if ($this->allowOcmAccessToken) {
+			$sharedSecret = $this->resolveOcmSharedSecret($bearerToken);
+			if ($sharedSecret !== null) {
+				$this->token = $sharedSecret;
+				$this->userSession->setIncognitoMode(true);
+				return $this->principalPrefix . $sharedSecret;
+			}
 		}
-		if ($this->userSession->isLoggedIn()) {
+
+		// public.php sets incognito mode for anonymous share access, which makes
+		// Session::getUser() return null and consequently Session::isLoggedIn()
+		// return false even after a successful token login. Disable it here so
+		// the logged-in user is visible for the rest of the request. If the
+		// bearer token is invalid and Sabre falls back to one of the public
+		// auth backends, that backend will re-enable incognito mode itself.
+		$this->userSession->setIncognitoMode(false);
+
+		if ($this->userSession->tryTokenLogin($this->request)) {
 			return $this->setupUserFs($this->userSession->getUser()->getUID());
 		}
 
 		return false;
+	}
+
+	private function resolveOcmSharedSecret(string $accessToken): ?string {
+		if ($this->shareManager === null || $this->ocmSignatoryManager === null) {
+			return null;
+		}
+
+		try {
+			$jwks = $this->ocmSignatoryManager->getLocalJwks();
+			$headers = new \stdClass();
+			$claims = JWT::decode($accessToken, JWK::parseKeySet(['keys' => $jwks]), $headers);
+			if (($headers->typ ?? null) !== 'at+jwt' || !is_string($headers->kid ?? null)) {
+				return null;
+			}
+
+			$issuer = parse_url($headers->kid, PHP_URL_SCHEME)
+				. '://' . Signatory::extractIdentityFromUri($headers->kid);
+			if (!is_string($claims->iss ?? null)
+				|| !hash_equals($issuer, $claims->iss)
+				|| !is_string($claims->sub ?? null)
+				|| !is_string($claims->aud ?? null)
+				|| !is_string($claims->client_id ?? null)
+				|| !isset($claims->iat, $claims->exp)
+			) {
+				return null;
+			}
+
+			$share = $this->shareManager->getShareById('ocFederatedSharing:' . $claims->client_id);
+			if (!in_array($share->getShareType(), [IShare::TYPE_REMOTE, IShare::TYPE_REMOTE_GROUP], true)
+				|| !hash_equals($share->getShareOwner(), $claims->sub)
+				|| !hash_equals((string)$share->getSharedWith(), $claims->aud)
+			) {
+				return null;
+			}
+
+			$sharedSecret = $share->getToken();
+			if ($sharedSecret === null || $sharedSecret === '') {
+				return null;
+			}
+
+			$shareByToken = $this->shareManager->getShareByToken($sharedSecret);
+			if (!hash_equals($share->getFullId(), $shareByToken->getFullId())) {
+				return null;
+			}
+
+			return $sharedSecret;
+		} catch (\Throwable) {
+			return null;
+		}
+	}
+
+	public function getShare(): IShare {
+		$shareManager = $this->shareManager ?? Server::get(IManager::class);
+		$share = $shareManager->getShareByToken($this->token);
+		return $share;
 	}
 
 	/**
@@ -90,7 +141,16 @@ class BearerAuth extends AbstractBearer {
 	 * @param RequestInterface $request
 	 * @param ResponseInterface $response
 	 */
-	public function challenge(RequestInterface $request, ResponseInterface $response) {
-		$response->setStatus(401);
+	#[\Override]
+	public function challenge(RequestInterface $request, ResponseInterface $response): void {
+		// Legacy ownCloud clients still authenticate via OAuth2
+		$enableOcClients = $this->config->getSystemValueBool('oauth2.enable_oc_clients', false);
+		$userAgent = $request->getHeader('User-Agent');
+		if ($enableOcClients && $userAgent !== null && str_contains($userAgent, 'mirall')) {
+			parent::challenge($request, $response);
+			return;
+		}
+
+		$response->setStatus(Http::STATUS_UNAUTHORIZED);
 	}
 }

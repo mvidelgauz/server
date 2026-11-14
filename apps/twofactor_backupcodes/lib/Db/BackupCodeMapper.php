@@ -3,75 +3,58 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2016 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author J0WI <J0WI@users.noreply.github.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\TwoFactorBackupCodes\Db;
 
-use OCP\AppFramework\Db\QBMapper;
+use OCP\AppFramework\Db\DoesNotExistException;
+use OCP\AppFramework\ORM\Repository;
 use OCP\DB\QueryBuilder\IQueryBuilder;
-use OCP\IDBConnection;
 use OCP\IUser;
 
 /**
- * @template-extends QBMapper<BackupCode>
+ * @template-extends Repository<BackupCode>
  */
-class BackupCodeMapper extends QBMapper {
-	public function __construct(IDBConnection $db) {
-		parent::__construct($db, 'twofactor_backupcodes');
+class BackupCodeMapper extends Repository {
+	public const string entityClass = BackupCode::class;
+
+	/**
+	 * @return \Generator<BackupCode>
+	 */
+	public function findByUser(IUser $user): \Generator {
+		return $this->findBy([
+			'userId' => $user->getUID(),
+		]);
+	}
+
+	public function deleteByUser(IUser $user): void {
+		$this->deleteBy([
+			'userId' => $user->getUID(),
+		]);
+	}
+
+	public function findOneByUser(IUser $user): ?BackupCode {
+		try {
+			return $this->findOneBy([
+				'userId' => $user->getUID(),
+			]);
+		} catch (DoesNotExistException) {
+			return null;
+		}
 	}
 
 	/**
-	 * @param IUser $user
-	 * @return BackupCode[]
+	 * Marks the backup code as used, if not already marked as used in DB.
+	 * @return int number of affected rows
 	 */
-	public function getBackupCodes(IUser $user): array {
-		/* @var IQueryBuilder $qb */
-		$qb = $this->db->getQueryBuilder();
-
-		$qb->select('id', 'user_id', 'code', 'used')
-			->from('twofactor_backupcodes')
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($user->getUID())));
-
-		return self::findEntities($qb);
-	}
-
-	/**
-	 * @param IUser $user
-	 */
-	public function deleteCodes(IUser $user): void {
-		$this->deleteCodesByUserId($user->getUID());
-	}
-
-	/**
-	 * @param string $uid
-	 */
-	public function deleteCodesByUserId(string $uid): void {
-		/* @var IQueryBuilder $qb */
-		$qb = $this->db->getQueryBuilder();
-
-		$qb->delete('twofactor_backupcodes')
-			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($uid)));
-		$qb->execute();
+	public function markUsedIfUnused(BackupCode $code): int {
+		$qb = $this->connection->getQueryBuilder();
+		$qb->update($this->getTableName())
+			->set('used', $qb->createNamedParameter(1, IQueryBuilder::PARAM_INT))
+			->where($qb->expr()->eq('id', $qb->createNamedParameter($code->id, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->eq('used', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT)));
+		return $qb->executeStatement();
 	}
 }

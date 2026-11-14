@@ -1,24 +1,8 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Joas Schilling
- *
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Collaboration\Collaborators;
@@ -27,24 +11,27 @@ use OC\Collaboration\Collaborators\Search;
 use OC\Collaboration\Collaborators\SearchResult;
 use OCP\Collaboration\Collaborators\ISearch;
 use OCP\Collaboration\Collaborators\SearchResultType;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\IConfig;
 use OCP\IContainer;
 use Test\TestCase;
 
 class SearchResultTest extends TestCase {
-	/** @var  IContainer|\PHPUnit\Framework\MockObject\MockObject */
+	/** @var IContainer|\PHPUnit\Framework\MockObject\MockObject */
 	protected $container;
-	/** @var  ISearch */
+	/** @var ISearch */
 	protected $search;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
 		$this->container = $this->createMock(IContainer::class);
 
-		$this->search = new Search($this->container);
+		$this->search = new Search($this->container, $this->createMock(IEventDispatcher::class), $this->createMock(IConfig::class));
 	}
 
-	public function dataAddResultSet() {
+	public static function dataAddResultSet(): array {
 		return [
 			[[], ['exact' => []]],
 			[['users' => ['exact' => null, 'loose' => []]], ['exact' => ['users' => []], 'users' => []]],
@@ -54,11 +41,11 @@ class SearchResultTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider dataAddResultSet
 	 * @param array $toAdd
 	 * @param array $expected
 	 */
-	public function testAddResultSet(array $toAdd, array $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataAddResultSet')]
+	public function testAddResultSet(array $toAdd, array $expected): void {
 		$result = new SearchResult();
 
 		foreach ($toAdd as $type => $results) {
@@ -68,7 +55,7 @@ class SearchResultTest extends TestCase {
 		$this->assertEquals($expected, $result->asArray());
 	}
 
-	public function dataHasResult() {
+	public static function dataHasResult(): array {
 		$result = ['value' => ['shareWith' => 'l1']];
 		return [
 			[[],'users', 'n1', false],
@@ -78,18 +65,17 @@ class SearchResultTest extends TestCase {
 			[['users' => ['exact' => [$result], 'loose' => []]],        'users',  'l1', true],
 			[['users' => ['exact' => [$result], 'loose' => []]],        'users',  'l2', false],
 			[['users' => ['exact' => [$result], 'loose' => []]],        'groups', 'l1', false],
-
 		];
 	}
 
 	/**
-	 * @dataProvider dataHasResult
 	 * @param array $toAdd
 	 * @param string $type
 	 * @param string $id
 	 * @param bool $expected
 	 */
-	public function testHasResult(array $toAdd, $type, $id, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataHasResult')]
+	public function testHasResult(array $toAdd, $type, $id, $expected): void {
 		$result = new SearchResult();
 
 		foreach ($toAdd as $addType => $results) {

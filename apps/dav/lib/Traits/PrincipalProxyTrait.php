@@ -1,30 +1,17 @@
 <?php
+
 /**
- * @copyright 2019, Georg Ehrke <oc.list@georgehrke.com>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Traits;
 
 use OCA\DAV\CalDAV\Proxy\Proxy;
 use OCA\DAV\CalDAV\Proxy\ProxyMapper;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
+use OCP\Server;
 use Sabre\DAV\Exception;
 
 /**
@@ -146,8 +133,12 @@ trait PrincipalProxyTrait {
 			foreach ($proxies as $proxy) {
 				if ($proxy->getProxyId() === $member) {
 					$found = true;
-					$proxy->setPermissions($proxy->getPermissions() | $permission);
+					$previousPermissions = $proxy->getPermissions();
+					$proxy->setPermissions($previousPermissions | $permission);
 					$this->proxyMapper->update($proxy);
+					if ($proxy->getPermissions() !== $previousPermissions) {
+						$this->logCalendarDelegation('granted', $principalUri, $member, $proxy->getPermissions());
+					}
 
 					$proxies = array_filter($proxies, function (Proxy $p) use ($proxy) {
 						return $p->getId() !== $proxy->getId();
@@ -162,6 +153,7 @@ trait PrincipalProxyTrait {
 				$proxy->setProxyId($member);
 				$proxy->setPermissions($permission);
 				$this->proxyMapper->insert($proxy);
+				$this->logCalendarDelegation('granted', $principalUri, $member, $permission);
 			}
 		}
 
@@ -171,8 +163,23 @@ trait PrincipalProxyTrait {
 			// so only delete proxies of this permission
 			if ($proxy->getPermissions() === $permission) {
 				$this->proxyMapper->delete($proxy);
+				$this->logCalendarDelegation('revoked', $principalUri, $proxy->getProxyId(), $permission);
 			}
 		}
+	}
+
+	/**
+	 * The classes using this trait are also constructed outside of the DI container,
+	 * so the event dispatcher is looked up here instead of being injected
+	 */
+	private function logCalendarDelegation(string $action, string $ownerPrincipal, string $delegatePrincipal, int $permissions): void {
+		$access = ($permissions & ProxyMapper::PERMISSION_WRITE) === ProxyMapper::PERMISSION_WRITE ? 'write' : 'read';
+		Server::get(IEventDispatcher::class)->dispatchTyped(new CriticalActionPerformedEvent(
+			'Calendar delegation of "%s" to "%s" with %s access was ' . $action,
+			['owner' => $ownerPrincipal, 'delegate' => $delegatePrincipal, 'access' => $access],
+			false,
+			'dav.calendar_delegation.' . $action,
+		));
 	}
 
 	/**

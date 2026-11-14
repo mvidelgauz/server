@@ -1,40 +1,56 @@
-
+<!--
+  - SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 <template>
-	<SharingEntrySimple
-		class="sharing-entry__internal"
-		:title="t('files_sharing', 'Internal link')"
-		:subtitle="internalLinkSubtitle">
-		<template #avatar>
-			<div class="avatar-external icon-external-white" />
-		</template>
+	<ul>
+		<SharingEntrySimple
+			ref="shareEntrySimple"
+			class="sharing-entry__internal"
+			:title="t('files_sharing', 'Internal link')"
+			:subtitle="internalLinkSubtitle">
+			<template #avatar>
+				<div class="avatar-external icon-external-white" />
+			</template>
 
-		<ActionLink ref="copyButton"
-			:href="internalLink"
-			target="_blank"
-			:icon="copied && copySuccess ? 'icon-checkmark-color' : 'icon-clippy'"
-			@click.prevent="copyLink">
-			{{ clipboardTooltip }}
-		</ActionLink>
-	</SharingEntrySimple>
+			<NcActionButton
+				:title="copyLinkTooltip"
+				:aria-label="copyLinkTooltip"
+				@click="copyLink">
+				<template #icon>
+					<CheckIcon
+						v-if="copied && copySuccess"
+						:size="20"
+						class="icon-checkmark-color" />
+					<ClipboardIcon v-else :size="20" />
+				</template>
+			</NcActionButton>
+		</SharingEntrySimple>
+	</ul>
 </template>
 
 <script>
-import { generateUrl } from '@nextcloud/router'
-import ActionLink from '@nextcloud/vue/dist/Components/ActionLink'
-import SharingEntrySimple from './SharingEntrySimple'
+import { showSuccess } from '@nextcloud/dialogs'
+import NcActionButton from '@nextcloud/vue/components/NcActionButton'
+import CheckIcon from 'vue-material-design-icons/Check.vue'
+import ClipboardIcon from 'vue-material-design-icons/ContentCopy.vue'
+import SharingEntrySimple from './SharingEntrySimple.vue'
+import logger from '../services/logger.ts'
+import { generateFileUrl } from '../utils/generateUrl.ts'
 
 export default {
 	name: 'SharingEntryInternal',
 
 	components: {
-		ActionLink,
+		NcActionButton,
 		SharingEntrySimple,
+		CheckIcon,
+		ClipboardIcon,
 	},
 
 	props: {
 		fileInfo: {
 			type: Object,
-			default: () => {},
 			required: true,
 		},
 	},
@@ -49,45 +65,45 @@ export default {
 	computed: {
 		/**
 		 * Get the internal link to this file id
-		 * @returns {string}
+		 *
+		 * @return {string}
 		 */
 		internalLink() {
-			return window.location.protocol + '//' + window.location.host + generateUrl('/f/') + this.fileInfo.id
+			return generateFileUrl(this.fileInfo.id)
 		},
 
 		/**
-		 * Clipboard v-tooltip message
-		 * @returns {string}
+		 * Tooltip message
+		 *
+		 * @return {string}
 		 */
-		clipboardTooltip() {
+		copyLinkTooltip() {
 			if (this.copied) {
-				return this.copySuccess
-					? t('files_sharing', 'Link copied')
-					: t('files_sharing', 'Cannot copy, please copy the link manually')
+				if (this.copySuccess) {
+					return ''
+				}
+				return t('files_sharing', 'Cannot copy, please copy the link manually')
 			}
-			return t('files_sharing', 'Copy to clipboard')
+			return t('files_sharing', 'Copy internal link')
 		},
 
 		internalLinkSubtitle() {
-			if (this.fileInfo.type === 'dir') {
-				return t('files_sharing', 'Only works for users with access to this folder')
-			}
-			return t('files_sharing', 'Only works for users with access to this file')
+			return t('files_sharing', 'For people who already have access')
 		},
 	},
 
 	methods: {
 		async copyLink() {
 			try {
-				await this.$copyText(this.internalLink)
-				// focus and show the tooltip
-				this.$refs.copyButton.$el.focus()
+				await navigator.clipboard.writeText(this.internalLink)
+				showSuccess(t('files_sharing', 'Link copied'))
+				this.$refs.shareEntrySimple.$refs.actionsComponent.$el.focus()
 				this.copySuccess = true
 				this.copied = true
 			} catch (error) {
 				this.copySuccess = false
 				this.copied = true
-				console.error(error)
+				logger.error(error)
 			} finally {
 				setTimeout(() => {
 					this.copySuccess = false
@@ -112,6 +128,7 @@ export default {
 	}
 	.icon-checkmark-color {
 		opacity: 1;
+		color: var(--color-border-success);
 	}
 }
 </style>

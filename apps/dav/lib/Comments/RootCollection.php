@@ -1,81 +1,36 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Comments;
 
 use OCP\Comments\CommentsEntityEvent;
 use OCP\Comments\ICommentsManager;
-use OCP\ILogger;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IUserManager;
 use OCP\IUserSession;
+use Psr\Log\LoggerInterface;
 use Sabre\DAV\Exception\Forbidden;
 use Sabre\DAV\Exception\NotAuthenticated;
 use Sabre\DAV\Exception\NotFound;
 use Sabre\DAV\ICollection;
-use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 
 class RootCollection implements ICollection {
-
 	/** @var EntityTypeCollection[]|null */
-	private $entityTypeCollections;
+	private ?array $entityTypeCollections = null;
+	protected string $name = 'comments';
 
-	/** @var ICommentsManager */
-	protected $commentsManager;
-
-	/** @var string */
-	protected $name = 'comments';
-
-	/** @var ILogger */
-	protected $logger;
-
-	/** @var IUserManager */
-	protected $userManager;
-
-	/** @var IUserSession */
-	protected $userSession;
-
-	/** @var EventDispatcherInterface */
-	protected $dispatcher;
-
-	/**
-	 * @param ICommentsManager $commentsManager
-	 * @param IUserManager $userManager
-	 * @param IUserSession $userSession
-	 * @param EventDispatcherInterface $dispatcher
-	 * @param ILogger $logger
-	 */
 	public function __construct(
-		ICommentsManager $commentsManager,
-		IUserManager $userManager,
-		IUserSession $userSession,
-		EventDispatcherInterface $dispatcher,
-		ILogger $logger) {
-		$this->commentsManager = $commentsManager;
-		$this->logger = $logger;
-		$this->userManager = $userManager;
-		$this->userSession = $userSession;
-		$this->dispatcher = $dispatcher;
+		protected ICommentsManager $commentsManager,
+		protected IUserManager $userManager,
+		protected IUserSession $userSession,
+		protected IEventDispatcher $dispatcher,
+		protected LoggerInterface $logger,
+	) {
 	}
 
 	/**
@@ -94,7 +49,8 @@ class RootCollection implements ICollection {
 			throw new NotAuthenticated();
 		}
 
-		$event = new CommentsEntityEvent(CommentsEntityEvent::EVENT_ENTITY);
+		$event = new CommentsEntityEvent();
+		$this->dispatcher->dispatchTyped($event);
 		$this->dispatcher->dispatch(CommentsEntityEvent::EVENT_ENTITY, $event);
 
 		$this->entityTypeCollections = [];
@@ -118,6 +74,7 @@ class RootCollection implements ICollection {
 	 * @return null|string
 	 * @throws Forbidden
 	 */
+	#[\Override]
 	public function createFile($name, $data = null) {
 		throw new Forbidden('Cannot create comments by id');
 	}
@@ -128,6 +85,7 @@ class RootCollection implements ICollection {
 	 * @param string $name
 	 * @throws Forbidden
 	 */
+	#[\Override]
 	public function createDirectory($name) {
 		throw new Forbidden('Permission denied to create collections');
 	}
@@ -142,6 +100,7 @@ class RootCollection implements ICollection {
 	 * @return \Sabre\DAV\INode
 	 * @throws NotFound
 	 */
+	#[\Override]
 	public function getChild($name) {
 		$this->initCollections();
 		if (isset($this->entityTypeCollections[$name])) {
@@ -155,8 +114,10 @@ class RootCollection implements ICollection {
 	 *
 	 * @return \Sabre\DAV\INode[]
 	 */
+	#[\Override]
 	public function getChildren() {
 		$this->initCollections();
+		assert(!is_null($this->entityTypeCollections));
 		return $this->entityTypeCollections;
 	}
 
@@ -166,8 +127,10 @@ class RootCollection implements ICollection {
 	 * @param string $name
 	 * @return bool
 	 */
+	#[\Override]
 	public function childExists($name) {
 		$this->initCollections();
+		assert(!is_null($this->entityTypeCollections));
 		return isset($this->entityTypeCollections[$name]);
 	}
 
@@ -176,6 +139,7 @@ class RootCollection implements ICollection {
 	 *
 	 * @throws Forbidden
 	 */
+	#[\Override]
 	public function delete() {
 		throw new Forbidden('Permission denied to delete this collection');
 	}
@@ -187,6 +151,7 @@ class RootCollection implements ICollection {
 	 *
 	 * @return string
 	 */
+	#[\Override]
 	public function getName() {
 		return $this->name;
 	}
@@ -197,6 +162,7 @@ class RootCollection implements ICollection {
 	 * @param string $name The new name
 	 * @throws Forbidden
 	 */
+	#[\Override]
 	public function setName($name) {
 		throw new Forbidden('Permission denied to rename this collection');
 	}
@@ -204,8 +170,9 @@ class RootCollection implements ICollection {
 	/**
 	 * Returns the last modification time, as a unix timestamp
 	 *
-	 * @return int
+	 * @return ?int
 	 */
+	#[\Override]
 	public function getLastModified() {
 		return null;
 	}

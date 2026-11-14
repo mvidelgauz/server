@@ -1,109 +1,77 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author adrien <adrien.waksberg@believedigital.com>
- * @author Aldo "xoen" Giambelluca <xoen@xoen.org>
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Bart Visscher <bartv@thisnet.nl>
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Calviño Sánchez <danxuliu@gmail.com>
- * @author fabian <fabian@web2.0-apps.de>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Jakob Sack <mail@jakobsack.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Loki3000 <github@labcms.ru>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author nishiki <nishiki@yaegashi.fr>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\User;
 
-use OC\Cache\CappedMemoryCache;
+use InvalidArgumentException;
+use OCP\AppFramework\Db\TTransactional;
+use OCP\Cache\CappedMemoryCache;
 use OCP\EventDispatcher\IEventDispatcher;
+use OCP\IConfig;
 use OCP\IDBConnection;
 use OCP\Security\Events\ValidatePasswordPolicyEvent;
+use OCP\Security\IHasher;
+use OCP\Server;
 use OCP\User\Backend\ABackend;
 use OCP\User\Backend\ICheckPasswordBackend;
-use OCP\User\Backend\ICountUsersBackend;
 use OCP\User\Backend\ICreateUserBackend;
 use OCP\User\Backend\IGetDisplayNameBackend;
 use OCP\User\Backend\IGetHomeBackend;
 use OCP\User\Backend\IGetRealUIDBackend;
+use OCP\User\Backend\IGetUserNameFromLoginNameBackend;
+use OCP\User\Backend\ILimitAwareCountUsersBackend;
+use OCP\User\Backend\IPasswordHashBackend;
 use OCP\User\Backend\ISearchKnownUsersBackend;
 use OCP\User\Backend\ISetDisplayNameBackend;
 use OCP\User\Backend\ISetPasswordBackend;
+use Override;
 
 /**
  * Class for user management in a SQL Database (e.g. MySQL, SQLite)
  */
 class Database extends ABackend implements
 	ICreateUserBackend,
-			   ISetPasswordBackend,
-			   ISetDisplayNameBackend,
-			   IGetDisplayNameBackend,
-			   ICheckPasswordBackend,
-			   IGetHomeBackend,
-			   ICountUsersBackend,
-			   ISearchKnownUsersBackend,
-			   IGetRealUIDBackend {
-	/** @var CappedMemoryCache */
-	private $cache;
+	ISetPasswordBackend,
+	ISetDisplayNameBackend,
+	IGetDisplayNameBackend,
+	ICheckPasswordBackend,
+	IGetHomeBackend,
+	ILimitAwareCountUsersBackend,
+	ISearchKnownUsersBackend,
+	IGetRealUIDBackend,
+	IPasswordHashBackend,
+	IGetUserNameFromLoginNameBackend {
+	private CappedMemoryCache $cache;
+	private IConfig $config;
+	private ?IDBConnection $dbConnection;
+	private IEventDispatcher $eventDispatcher;
 
-	/** @var IEventDispatcher */
-	private $eventDispatcher;
+	use TTransactional;
 
-	/** @var IDBConnection */
-	private $dbConn;
-
-	/** @var string */
-	private $table;
-
-	/**
-	 * \OC\User\Database constructor.
-	 *
-	 * @param IEventDispatcher $eventDispatcher
-	 * @param string $table
-	 */
-	public function __construct($eventDispatcher = null, $table = 'users') {
+	public function __construct(
+		?IEventDispatcher $eventDispatcher = null,
+		private string $table = 'users',
+	) {
 		$this->cache = new CappedMemoryCache();
-		$this->table = $table;
-		$this->eventDispatcher = $eventDispatcher ? $eventDispatcher : \OC::$server->query(IEventDispatcher::class);
+		$this->eventDispatcher = $eventDispatcher ?? Server::get(IEventDispatcher::class);
+		$this->config = Server::get(IConfig::class);
+		$this->dbConnection = null;
 	}
 
 	/**
 	 * FIXME: This function should not be required!
 	 */
-	private function fixDI() {
-		if ($this->dbConn === null) {
-			$this->dbConn = \OC::$server->getDatabaseConnection();
+	private function getDbConnection() {
+		if ($this->dbConnection === null) {
+			$this->dbConnection = Server::get(IDBConnection::class);
 		}
+		return $this->dbConnection;
 	}
 
 	/**
@@ -116,49 +84,57 @@ class Database extends ABackend implements
 	 * Creates a new user. Basic checking of username is done in OC_User
 	 * itself, not in its subclasses.
 	 */
+	#[\Override]
 	public function createUser(string $uid, string $password): bool {
-		$this->fixDI();
+		if ($this->userExists($uid)) {
+			return false;
+		}
 
-		if (!$this->userExists($uid)) {
-			$this->eventDispatcher->dispatchTyped(new ValidatePasswordPolicyEvent($password));
+		$this->eventDispatcher->dispatchTyped(new ValidatePasswordPolicyEvent($password));
 
-			$qb = $this->dbConn->getQueryBuilder();
+		$dbConn = $this->getDbConnection();
+		return $this->atomic(function () use ($uid, $password, $dbConn) {
+			$qb = $dbConn->getQueryBuilder();
 			$qb->insert($this->table)
 				->values([
 					'uid' => $qb->createNamedParameter($uid),
-					'password' => $qb->createNamedParameter(\OC::$server->getHasher()->hash($password)),
+					'password' => $qb->createNamedParameter(Server::get(IHasher::class)->hash($password)),
 					'uid_lower' => $qb->createNamedParameter(mb_strtolower($uid)),
 				]);
 
-			$result = $qb->execute();
+			$result = $qb->executeStatement();
 
 			// Clear cache
 			unset($this->cache[$uid]);
+			// Repopulate the cache
+			$this->loadUser($uid);
 
-			return $result ? true : false;
-		}
-
-		return false;
+			return (bool)$result;
+		}, $dbConn);
 	}
 
 	/**
-	 * delete a user
+	 * Deletes a user
 	 *
 	 * @param string $uid The username of the user to delete
 	 * @return bool
-	 *
-	 * Deletes a user
 	 */
+	#[\Override]
 	public function deleteUser($uid) {
-		$this->fixDI();
-
 		// Delete user-group-relation
-		$query = $this->dbConn->getQueryBuilder();
+		$dbConn = $this->getDbConnection();
+		$query = $dbConn->getQueryBuilder();
 		$query->delete($this->table)
 			->where($query->expr()->eq('uid_lower', $query->createNamedParameter(mb_strtolower($uid))));
-		$result = $query->execute();
+		$result = $query->executeStatement();
 
 		if (isset($this->cache[$uid])) {
+			// If the user logged in through email there is a second cache entry, also unset that.
+			$email = $this->cache[$uid]['email'] ?? null;
+			if ($email !== null) {
+				unset($this->cache[$email]);
+			}
+			// Unset the cache entry
 			unset($this->cache[$uid]);
 		}
 
@@ -166,11 +142,12 @@ class Database extends ABackend implements
 	}
 
 	private function updatePassword(string $uid, string $passwordHash): bool {
-		$query = $this->dbConn->getQueryBuilder();
+		$dbConn = $this->getDbConnection();
+		$query = $dbConn->getQueryBuilder();
 		$query->update($this->table)
 			->set('password', $query->createNamedParameter($passwordHash))
 			->where($query->expr()->eq('uid_lower', $query->createNamedParameter(mb_strtolower($uid))));
-		$result = $query->execute();
+		$result = $query->executeStatement();
 
 		return $result ? true : false;
 	}
@@ -184,19 +161,63 @@ class Database extends ABackend implements
 	 *
 	 * Change the password of a user
 	 */
+	#[\Override]
 	public function setPassword(string $uid, string $password): bool {
-		$this->fixDI();
-
-		if ($this->userExists($uid)) {
-			$this->eventDispatcher->dispatchTyped(new ValidatePasswordPolicyEvent($password));
-
-			$hasher = \OC::$server->getHasher();
-			$hashedPassword = $hasher->hash($password);
-
-			return $this->updatePassword($uid, $hashedPassword);
+		if (!$this->userExists($uid)) {
+			return false;
 		}
 
-		return false;
+		$this->eventDispatcher->dispatchTyped(new ValidatePasswordPolicyEvent($password));
+
+		$hasher = Server::get(IHasher::class);
+		$hashedPassword = $hasher->hash($password);
+
+		$return = $this->updatePassword($uid, $hashedPassword);
+
+		if ($return) {
+			$this->cache[$uid]['password'] = $hashedPassword;
+		}
+
+		return $return;
+	}
+
+	#[\Override]
+	public function getPasswordHash(string $userId): ?string {
+		if (!$this->userExists($userId)) {
+			return null;
+		}
+		if (!empty($this->cache[$userId]['password'])) {
+			return $this->cache[$userId]['password'];
+		}
+
+		$dbConn = $this->getDbConnection();
+		$qb = $dbConn->getQueryBuilder();
+		$qb->select('password')
+			->from($this->table)
+			->where($qb->expr()->eq('uid_lower', $qb->createNamedParameter(mb_strtolower($userId))));
+		/** @var false|string $hash */
+		$hash = $qb->executeQuery()->fetchOne();
+		if ($hash === false) {
+			return null;
+		}
+
+		$this->cache[$userId]['password'] = $hash;
+		return $hash;
+	}
+
+	#[\Override]
+	public function setPasswordHash(string $userId, string $passwordHash): bool {
+		if (!Server::get(IHasher::class)->validate($passwordHash)) {
+			throw new InvalidArgumentException();
+		}
+
+		$result = $this->updatePassword($userId, $passwordHash);
+		if (!$result) {
+			return false;
+		}
+
+		$this->cache[$userId]['password'] = $passwordHash;
+		return true;
 	}
 
 	/**
@@ -206,24 +227,30 @@ class Database extends ABackend implements
 	 * @param string $displayName The new display name
 	 * @return bool
 	 *
+	 * @throws \InvalidArgumentException
+	 *
 	 * Change the display name of a user
 	 */
+	#[\Override]
 	public function setDisplayName(string $uid, string $displayName): bool {
-		$this->fixDI();
-
-		if ($this->userExists($uid)) {
-			$query = $this->dbConn->getQueryBuilder();
-			$query->update($this->table)
-				->set('displayname', $query->createNamedParameter($displayName))
-				->where($query->expr()->eq('uid_lower', $query->createNamedParameter(mb_strtolower($uid))));
-			$query->execute();
-
-			$this->cache[$uid]['displayname'] = $displayName;
-
-			return true;
+		if (mb_strlen($displayName) > 64) {
+			throw new \InvalidArgumentException('Invalid displayname');
 		}
 
-		return false;
+		if (!$this->userExists($uid)) {
+			return false;
+		}
+
+		$dbConn = $this->getDbConnection();
+		$query = $dbConn->getQueryBuilder();
+		$query->update($this->table)
+			->set('displayname', $query->createNamedParameter($displayName))
+			->where($query->expr()->eq('uid_lower', $query->createNamedParameter(mb_strtolower($uid))));
+		$query->executeStatement();
+
+		$this->cache[$uid]['displayname'] = $displayName;
+
+		return true;
 	}
 
 	/**
@@ -232,6 +259,7 @@ class Database extends ABackend implements
 	 * @param string $uid user ID of the user
 	 * @return string display name
 	 */
+	#[\Override]
 	public function getDisplayName($uid): string {
 		$uid = (string)$uid;
 		$this->loadUser($uid);
@@ -246,12 +274,12 @@ class Database extends ABackend implements
 	 * @param int|null $offset
 	 * @return array an array of all displayNames (value) and the corresponding uids (key)
 	 */
+	#[\Override]
 	public function getDisplayNames($search = '', $limit = null, $offset = null) {
 		$limit = $this->fixLimit($limit);
 
-		$this->fixDI();
-
-		$query = $this->dbConn->getQueryBuilder();
+		$dbConn = $this->getDbConnection();
+		$query = $dbConn->getQueryBuilder();
 
 		$query->select('uid', 'displayname')
 			->from($this->table, 'u')
@@ -261,17 +289,17 @@ class Database extends ABackend implements
 				$query->expr()->eq('configkey', $query->expr()->literal('email')))
 			)
 			// sqlite doesn't like re-using a single named parameter here
-			->where($query->expr()->iLike('uid', $query->createPositionalParameter('%' . $this->dbConn->escapeLikeParameter($search) . '%')))
-			->orWhere($query->expr()->iLike('displayname', $query->createPositionalParameter('%' . $this->dbConn->escapeLikeParameter($search) . '%')))
-			->orWhere($query->expr()->iLike('configvalue', $query->createPositionalParameter('%' . $this->dbConn->escapeLikeParameter($search) . '%')))
+			->where($query->expr()->iLike('uid', $query->createPositionalParameter('%' . $dbConn->escapeLikeParameter($search) . '%')))
+			->orWhere($query->expr()->iLike('displayname', $query->createPositionalParameter('%' . $dbConn->escapeLikeParameter($search) . '%')))
+			->orWhere($query->expr()->iLike('configvalue', $query->createPositionalParameter('%' . $dbConn->escapeLikeParameter($search) . '%')))
 			->orderBy($query->func()->lower('displayname'), 'ASC')
 			->addOrderBy('uid_lower', 'ASC')
 			->setMaxResults($limit)
 			->setFirstResult($offset);
 
-		$result = $query->execute();
+		$result = $query->executeQuery();
 		$displayNames = [];
-		while ($row = $result->fetch()) {
+		while ($row = $result->fetchAssociative()) {
 			$displayNames[(string)$row['uid']] = (string)$row['displayname'];
 		}
 
@@ -286,12 +314,12 @@ class Database extends ABackend implements
 	 * @return array
 	 * @since 21.0.1
 	 */
+	#[\Override]
 	public function searchKnownUsersByDisplayName(string $searcher, string $pattern, ?int $limit = null, ?int $offset = null): array {
 		$limit = $this->fixLimit($limit);
 
-		$this->fixDI();
-
-		$query = $this->dbConn->getQueryBuilder();
+		$dbConn = $this->getDbConnection();
+		$query = $dbConn->getQueryBuilder();
 
 		$query->select('u.uid', 'u.displayname')
 			->from($this->table, 'u')
@@ -301,17 +329,17 @@ class Database extends ABackend implements
 			))
 			->where($query->expr()->eq('k.known_to', $query->createNamedParameter($searcher)))
 			->andWhere($query->expr()->orX(
-				$query->expr()->iLike('u.uid', $query->createNamedParameter('%' . $this->dbConn->escapeLikeParameter($pattern) . '%')),
-				$query->expr()->iLike('u.displayname', $query->createNamedParameter('%' . $this->dbConn->escapeLikeParameter($pattern) . '%'))
+				$query->expr()->iLike('u.uid', $query->createNamedParameter('%' . $dbConn->escapeLikeParameter($pattern) . '%')),
+				$query->expr()->iLike('u.displayname', $query->createNamedParameter('%' . $dbConn->escapeLikeParameter($pattern) . '%'))
 			))
 			->orderBy('u.displayname', 'ASC')
 			->addOrderBy('u.uid_lower', 'ASC')
 			->setMaxResults($limit)
 			->setFirstResult($offset);
 
-		$result = $query->execute();
+		$result = $query->executeQuery();
 		$displayNames = [];
-		while ($row = $result->fetch()) {
+		while ($row = $result->fetchAssociative()) {
 			$displayNames[(string)$row['uid']] = (string)$row['displayname'];
 		}
 
@@ -321,36 +349,25 @@ class Database extends ABackend implements
 	/**
 	 * Check if the password is correct
 	 *
-	 * @param string $loginName The loginname
+	 * @param string $loginName The login name
 	 * @param string $password The password
 	 * @return string
 	 *
 	 * Check if the password is correct without logging in the user
 	 * returns the user id or false
 	 */
+	#[\Override]
 	public function checkPassword(string $loginName, string $password) {
-		$this->fixDI();
+		$found = $this->loadUser($loginName);
 
-		$qb = $this->dbConn->getQueryBuilder();
-		$qb->select('uid', 'password')
-			->from($this->table)
-			->where(
-				$qb->expr()->eq(
-					'uid_lower', $qb->createNamedParameter(mb_strtolower($loginName))
-				)
-			);
-		$result = $qb->execute();
-		$row = $result->fetch();
-		$result->closeCursor();
-
-		if ($row) {
-			$storedHash = $row['password'];
+		if ($found && is_array($this->cache[$loginName])) {
+			$storedHash = $this->cache[$loginName]['password'];
 			$newHash = '';
-			if (\OC::$server->getHasher()->verify($password, $storedHash, $newHash)) {
+			if (Server::get(IHasher::class)->verify($password, $storedHash, $newHash)) {
 				if (!empty($newHash)) {
 					$this->updatePassword($loginName, $newHash);
 				}
-				return (string)$row['uid'];
+				return (string)$this->cache[$loginName]['uid'];
 			}
 		}
 
@@ -360,44 +377,64 @@ class Database extends ABackend implements
 	/**
 	 * Load an user in the cache
 	 *
-	 * @param string $uid the username
+	 * @param string $loginName the username or email
 	 * @return boolean true if user was found, false otherwise
 	 */
-	private function loadUser($uid) {
-		$this->fixDI();
+	private function loadUser(string $loginName, bool $tryEmail = true): bool {
+		if (isset($this->cache[$loginName])) {
+			return $this->cache[$loginName] !== false;
+		}
 
-		$uid = (string)$uid;
-		if (!isset($this->cache[$uid])) {
-			//guests $uid could be NULL or ''
-			if ($uid === '') {
-				$this->cache[$uid] = false;
-				return true;
-			}
+		//guests $uid could be NULL or ''
+		if ($loginName === '') {
+			$this->cache[$loginName] = false;
+			return false;
+		}
 
-			$qb = $this->dbConn->getQueryBuilder();
-			$qb->select('uid', 'displayname')
-				->from($this->table)
-				->where(
-					$qb->expr()->eq(
-						'uid_lower', $qb->createNamedParameter(mb_strtolower($uid))
-					)
-				);
-			$result = $qb->execute();
-			$row = $result->fetch();
-			$result->closeCursor();
+		$dbConn = $this->getDbConnection();
+		$qb = $dbConn->getQueryBuilder();
+		$qb->select('uid', 'displayname', 'password')
+			->from($this->table)
+			->where(
+				$qb->expr()->eq(
+					'uid_lower', $qb->createNamedParameter(mb_strtolower($loginName))
+				)
+			);
+		$result = $qb->executeQuery();
+		$row = $result->fetchAssociative();
+		$result->closeCursor();
 
-			$this->cache[$uid] = false;
+		// "uid" is primary key, so there can only be a single result
+		if ($row !== false) {
+			$this->cache[$loginName] = [
+				'uid' => (string)$row['uid'],
+				'displayname' => (string)$row['displayname'],
+				'password' => (string)$row['password'],
+			];
+			return true;
+		}
 
-			// "uid" is primary key, so there can only be a single result
-			if ($row !== false) {
-				$this->cache[$uid]['uid'] = (string)$row['uid'];
-				$this->cache[$uid]['displayname'] = (string)$row['displayname'];
-			} else {
-				return false;
+		// Not found by UID so we try also for email, load uid for email.
+		if ($tryEmail) {
+			/** @var string|null $uid Psalm does not get the type correct here */
+			[$uid] = [...$this->config->getUsersForUserValue('settings', 'email', mb_strtolower($loginName)), null];
+
+			// If found, try loading it
+			if ($uid !== null && $uid !== $loginName) {
+				$result = $this->loadUser($uid, false);
+				if ($result) {
+					// Also add cache result for the email
+					$this->cache[$loginName] = $this->cache[$uid];
+					// Set a reference to the uid cache entry for also delete email entry on user delete
+					$this->cache[$uid]['email'] = $loginName;
+					return true;
+				}
 			}
 		}
 
-		return true;
+		// Not found by uid nor email, so cache as not existing
+		$this->cache[$loginName] = false;
+		return false;
 	}
 
 	/**
@@ -408,6 +445,7 @@ class Database extends ABackend implements
 	 * @param null|int $offset
 	 * @return string[] an array of all uids
 	 */
+	#[\Override]
 	public function getUsers($search = '', $limit = null, $offset = null) {
 		$limit = $this->fixLimit($limit);
 
@@ -425,9 +463,9 @@ class Database extends ABackend implements
 	 * @param string $uid the username
 	 * @return boolean
 	 */
+	#[\Override]
 	public function userExists($uid) {
-		$this->loadUser($uid);
-		return $this->cache[$uid] !== false;
+		return $this->loadUser($uid);
 	}
 
 	/**
@@ -436,9 +474,10 @@ class Database extends ABackend implements
 	 * @param string $uid the username
 	 * @return string|false
 	 */
+	#[\Override]
 	public function getHome(string $uid) {
 		if ($this->userExists($uid)) {
-			return \OC::$server->getConfig()->getSystemValue('datadirectory', \OC::$SERVERROOT . '/data') . '/' . $uid;
+			return $this->config->getSystemValueString('datadirectory', \OC::$SERVERROOT . '/data') . '/' . $uid;
 		}
 
 		return false;
@@ -447,33 +486,30 @@ class Database extends ABackend implements
 	/**
 	 * @return bool
 	 */
+	#[\Override]
 	public function hasUserListings() {
 		return true;
 	}
 
 	/**
 	 * counts the users in the database
-	 *
-	 * @return int|bool
 	 */
-	public function countUsers() {
-		$this->fixDI();
-
-		$query = $this->dbConn->getQueryBuilder();
+	#[\Override]
+	public function countUsers(int $limit = 0): int|false {
+		$dbConn = $this->getDbConnection();
+		$query = $dbConn->getQueryBuilder();
 		$query->select($query->func()->count('uid'))
 			->from($this->table);
-		$result = $query->execute();
+		$result = $query->executeQuery()->fetchOne();
+		if ($result === false) {
+			return false;
+		}
 
-		return $result->fetchOne();
+		return (int)$result;
 	}
 
-	/**
-	 * returns the username for the given login name in the correct casing
-	 *
-	 * @param string $loginName
-	 * @return string|false
-	 */
-	public function loginName2UserName($loginName) {
+	#[Override]
+	public function getUserNameFromLoginName(string $loginName): string|false {
 		if ($this->userExists($loginName)) {
 			return $this->cache[$loginName]['uid'];
 		}
@@ -486,28 +522,12 @@ class Database extends ABackend implements
 	 *
 	 * @return string the name of the backend to be shown
 	 */
-	public function getBackendName() {
+	#[\Override]
+	public function getBackendName(): string {
 		return 'Database';
 	}
 
-	public static function preLoginNameUsedAsUserName($param) {
-		if (!isset($param['uid'])) {
-			throw new \Exception('key uid is expected to be set in $param');
-		}
-
-		$backends = \OC::$server->getUserManager()->getBackends();
-		foreach ($backends as $backend) {
-			if ($backend instanceof Database) {
-				/** @var \OC\User\Database $backend */
-				$uid = $backend->loginName2UserName($param['uid']);
-				if ($uid !== false) {
-					$param['uid'] = $uid;
-					return;
-				}
-			}
-		}
-	}
-
+	#[\Override]
 	public function getRealUID(string $uid): string {
 		if (!$this->userExists($uid)) {
 			throw new \RuntimeException($uid . ' does not exist');

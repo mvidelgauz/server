@@ -1,28 +1,11 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright 2018
- *
- * @author Maxence Lange <maxence@artificial-owl.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\FullTextSearch\Model;
 
 use OCP\FullTextSearch\IFullTextSearchProvider;
@@ -38,7 +21,7 @@ use OCP\FullTextSearch\IFullTextSearchProvider;
  * search and fill the SearchResult object with results.
  *
  * Then, the object will be passed to the targeted Content Provider that will
- * improve the Search Results with detailed informations.
+ * improve the Search Results with detailed information.
  *
  * Finally, the SearchResult is returned to the original search request.
  *
@@ -46,8 +29,6 @@ use OCP\FullTextSearch\IFullTextSearchProvider;
  *
  */
 interface ISearchResult {
-
-
 	/**
 	 * Get the original SearchRequest.
 	 *
@@ -67,7 +48,6 @@ interface ISearchResult {
 	 * @return IFullTextSearchProvider
 	 */
 	public function getProvider(): IFullTextSearchProvider;
-
 
 	/**
 	 * Add an IIndexDocument as one of the result of the search request.
@@ -100,7 +80,6 @@ interface ISearchResult {
 	 */
 	public function setDocuments(array $documents): ISearchResult;
 
-
 	/**
 	 * Add an aggregation to the result.
 	 *
@@ -125,7 +104,6 @@ interface ISearchResult {
 	 */
 	public function getAggregations(string $category): array;
 
-
 	/**
 	 * Set the raw result of the request.
 	 *
@@ -136,7 +114,6 @@ interface ISearchResult {
 	 * @return ISearchResult
 	 */
 	public function setRawResult(string $result): ISearchResult;
-
 
 	/**
 	 * Set the total number of results for the search request.
@@ -150,7 +127,6 @@ interface ISearchResult {
 	 */
 	public function setTotal(int $total): ISearchResult;
 
-
 	/**
 	 * Set the top score for the search request.
 	 *
@@ -162,7 +138,6 @@ interface ISearchResult {
 	 */
 	public function setMaxScore(int $score): ISearchResult;
 
-
 	/**
 	 * Set the time spent by the request to perform the search.
 	 *
@@ -173,7 +148,6 @@ interface ISearchResult {
 	 * @return ISearchResult
 	 */
 	public function setTime(int $time): ISearchResult;
-
 
 	/**
 	 * Set to true if the request timed out.

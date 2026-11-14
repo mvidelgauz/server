@@ -1,4 +1,9 @@
 <?php
+/**
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
 $noProviders = empty($_['providers']);
 ?>
 <div class="body-login-container update two-factor">
@@ -19,7 +24,7 @@ $noProviders = empty($_['providers']);
 				<strong><?php p($l->t('Two-factor authentication is enforced but has not been configured on your account. Contact your admin for assistance.')) ?></strong>
 			<?php } else { ?>
 				<strong><?php p($l->t('Two-factor authentication is enforced but has not been configured on your account. Please continue to setup two-factor authentication.')) ?></strong>
-				<a class="button primary two-factor-primary" href="<?php p(\OC::$server->getURLGenerator()->linkToRoute('core.TwoFactorChallenge.setupProviders',
+				<a class="button primary two-factor-primary" href="<?php p(\OCP\Server::get(\OCP\IURLGenerator::class)->linkToRoute('core.TwoFactorChallenge.setupProviders',
 					[
 						'redirect_url' => $_['redirect_url'],
 					]
@@ -32,24 +37,24 @@ $noProviders = empty($_['providers']);
 		<?php endif; ?>
 	</p>
 	<?php else: ?>
-	<ul>
+	<ul class="two-factor-providers">
 	<?php foreach ($_['providers'] as $provider): ?>
 		<li>
 			<a class="two-factor-provider"
-			   href="<?php p(\OC::$server->getURLGenerator()->linkToRoute('core.TwoFactorChallenge.showChallenge',
-								[
-									'challengeProviderId' => $provider->getId(),
-									'redirect_url' => $_['redirect_url'],
-								]
-							)) ?>">
+			   href="<?php p(\OCP\Server::get(\OCP\IURLGenerator::class)->linkToRoute('core.TwoFactorChallenge.showChallenge',
+			   	[
+			   		'challengeProviderId' => $provider->getId(),
+			   		'redirect_url' => $_['redirect_url'],
+			   	]
+			   )) ?>">
 				<?php
 				if ($provider instanceof \OCP\Authentication\TwoFactorAuth\IProvidesIcons) {
 					$icon = $provider->getLightIcon();
 				} else {
 					$icon = image_path('core', 'actions/password-white.svg');
 				}
-				?>
-				<img src="<?php p($icon) ?>" alt="" />
+		?>
+				<span class="two-factor-provider-icon"><img src="<?php p($icon) ?>" alt="" /></span>
 				<div>
 					<h3><?php p($provider->getDisplayName()) ?></h3>
 					<p><?php p($provider->getDescription()) ?></p>
@@ -59,9 +64,19 @@ $noProviders = empty($_['providers']);
 	<?php endforeach; ?>
 	</ul>
 	<?php endif ?>
-	<?php if (!is_null($_['backupProvider'])): ?>
-	<p>
-		<a class="<?php if ($noProviders): ?>button primary two-factor-primary<?php else: ?>two-factor-secondary<?php endif ?>" href="<?php p(\OC::$server->getURLGenerator()->linkToRoute('core.TwoFactorChallenge.showChallenge',
+	<?php if (!is_null($_['backupProvider']) && $noProviders): ?>
+	<a class="button primary two-factor-primary" href="<?php p(\OCP\Server::get(\OCP\IURLGenerator::class)->linkToRoute('core.TwoFactorChallenge.showChallenge',
+		[
+			'challengeProviderId' => $_['backupProvider']->getId(),
+			'redirect_url' => $_['redirect_url'],
+		]
+	)) ?>">
+		<?php p($l->t('Use backup code')) ?>
+	</a>
+	<?php endif; ?>
+	<div class="two-factor-actions">
+		<?php if (!is_null($_['backupProvider']) && !$noProviders): ?>
+		<a class="two-factor-action-backup" href="<?php p(\OCP\Server::get(\OCP\IURLGenerator::class)->linkToRoute('core.TwoFactorChallenge.showChallenge',
 			[
 				'challengeProviderId' => $_['backupProvider']->getId(),
 				'redirect_url' => $_['redirect_url'],
@@ -69,9 +84,9 @@ $noProviders = empty($_['providers']);
 		)) ?>">
 			<?php p($l->t('Use backup code')) ?>
 		</a>
-	</p>
-	<?php endif; ?>
-	<p><a class="two-factor-secondary" href="<?php print_unescaped($_['logout_url']); ?>">
-		<?php p($l->t('Cancel login')) ?>
-	</a></p>
+		<?php endif; ?>
+		<a id="cancel-login" href="<?php print_unescaped($_['logout_url']); ?>">
+			<?php p($l->t('Cancel login')) ?>
+		</a>
+	</div>
 </div>

@@ -3,27 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020 Robin Appelman <robin@icewind.nl>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Files\SimpleFS;
 
 use Icewind\Streams\CallbackWrapper;
@@ -34,36 +17,27 @@ use OCP\Files\NotPermittedException;
 use OCP\Files\SimpleFS\ISimpleFile;
 
 class NewSimpleFile implements ISimpleFile {
-	private $parentFolder;
-	private $name;
-	/** @var File|null */
-	private $file = null;
+	private ?File $file = null;
 
-	/**
-	 * File constructor.
-	 *
-	 * @param File $file
-	 */
-	public function __construct(Folder $parentFolder, string $name) {
-		$this->parentFolder = $parentFolder;
-		$this->name = $name;
+	public function __construct(
+		private Folder $parentFolder,
+		private string $name,
+	) {
 	}
 
 	/**
 	 * Get the name
-	 *
-	 * @return string
 	 */
-	public function getName() {
+	#[\Override]
+	public function getName(): string {
 		return $this->name;
 	}
 
 	/**
 	 * Get the size in bytes
-	 *
-	 * @return int
 	 */
-	public function getSize() {
+	#[\Override]
+	public function getSize(): int|float {
 		if ($this->file) {
 			return $this->file->getSize();
 		} else {
@@ -73,10 +47,9 @@ class NewSimpleFile implements ISimpleFile {
 
 	/**
 	 * Get the ETag
-	 *
-	 * @return string
 	 */
-	public function getETag() {
+	#[\Override]
+	public function getETag(): string {
 		if ($this->file) {
 			return $this->file->getEtag();
 		} else {
@@ -86,10 +59,9 @@ class NewSimpleFile implements ISimpleFile {
 
 	/**
 	 * Get the last modification time
-	 *
-	 * @return int
 	 */
-	public function getMTime() {
+	#[\Override]
+	public function getMTime(): int {
 		if ($this->file) {
 			return $this->file->getMTime();
 		} else {
@@ -100,11 +72,11 @@ class NewSimpleFile implements ISimpleFile {
 	/**
 	 * Get the content
 	 *
-	 * @return string
 	 * @throws NotFoundException
 	 * @throws NotPermittedException
 	 */
-	public function getContent() {
+	#[\Override]
+	public function getContent(): string {
 		if ($this->file) {
 			$result = $this->file->getContent();
 
@@ -125,7 +97,8 @@ class NewSimpleFile implements ISimpleFile {
 	 * @throws NotPermittedException
 	 * @throws NotFoundException
 	 */
-	public function putContent($data) {
+	#[\Override]
+	public function putContent($data): void {
 		try {
 			if ($this->file) {
 				$this->file->putContent($data);
@@ -139,7 +112,7 @@ class NewSimpleFile implements ISimpleFile {
 
 	/**
 	 * Sometimes there are some issues with the AppData. Most of them are from
-	 * user error. But we should handle them gracefull anyway.
+	 * user error. But we should handle them gracefully anyway.
 	 *
 	 * If for some reason the current file can't be found. We remove it.
 	 * Then traverse up and check all folders if they exists. This so that the
@@ -147,7 +120,11 @@ class NewSimpleFile implements ISimpleFile {
 	 *
 	 * @throws NotFoundException
 	 */
-	private function checkFile() {
+	private function checkFile(): void {
+		if (!$this->file) {
+			throw new NotFoundException('File not set');
+		}
+
 		$cur = $this->file;
 
 		while ($cur->stat() === false) {
@@ -165,13 +142,13 @@ class NewSimpleFile implements ISimpleFile {
 		}
 	}
 
-
 	/**
 	 * Delete the file
 	 *
 	 * @throws NotPermittedException
 	 */
-	public function delete() {
+	#[\Override]
+	public function delete(): void {
 		if ($this->file) {
 			$this->file->delete();
 		}
@@ -182,7 +159,8 @@ class NewSimpleFile implements ISimpleFile {
 	 *
 	 * @return string
 	 */
-	public function getMimeType() {
+	#[\Override]
+	public function getMimeType(): string {
 		if ($this->file) {
 			return $this->file->getMimeType();
 		} else {
@@ -191,12 +169,25 @@ class NewSimpleFile implements ISimpleFile {
 	}
 
 	/**
+	 * {@inheritDoc}
+	 */
+	#[\Override]
+	public function getExtension(): string {
+		if ($this->file) {
+			return $this->file->getExtension();
+		} else {
+			return \pathinfo($this->name, PATHINFO_EXTENSION);
+		}
+	}
+
+	/**
 	 * Open the file as stream for reading, resulting resource can be operated as stream like the result from php's own fopen
 	 *
-	 * @return resource
-	 * @throws \OCP\Files\NotPermittedException
+	 * @return resource|false
+	 * @throws NotPermittedException
 	 * @since 14.0.0
 	 */
+	#[\Override]
 	public function read() {
 		if ($this->file) {
 			return $this->file->fopen('r');
@@ -209,15 +200,16 @@ class NewSimpleFile implements ISimpleFile {
 	 * Open the file as stream for writing, resulting resource can be operated as stream like the result from php's own fopen
 	 *
 	 * @return resource|bool
-	 * @throws \OCP\Files\NotPermittedException
+	 * @throws NotPermittedException
 	 * @since 14.0.0
 	 */
+	#[\Override]
 	public function write() {
 		if ($this->file) {
 			return $this->file->fopen('w');
 		} else {
 			$source = fopen('php://temp', 'w+');
-			return CallbackWrapper::wrap($source, null, null, null, null, function () use ($source) {
+			return CallbackWrapper::wrap($source, null, null, null, null, function () use ($source): void {
 				rewind($source);
 				$this->putContent($source);
 			});

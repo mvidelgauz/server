@@ -1,34 +1,21 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 EITA Cooperative (eita.org.br)
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Vinicius Cubas Brand <vinicius@eita.org.br>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\User_LDAP;
 
 use OCP\GroupInterface;
+use OCP\Server;
+use Psr\Log\LoggerInterface;
 
 class GroupPluginManager {
-	private $respondToActions = 0;
+	private int $respondToActions = 0;
 
-	private $which = [
+	/** @var array<int, ?ILDAPGroupPlugin> */
+	private array $which = [
 		GroupInterface::CREATE_GROUP => null,
 		GroupInterface::DELETE_GROUP => null,
 		GroupInterface::ADD_TO_GROUP => null,
@@ -36,6 +23,8 @@ class GroupPluginManager {
 		GroupInterface::COUNT_USERS => null,
 		GroupInterface::GROUP_DETAILS => null
 	];
+
+	private bool $suppressDeletion = false;
 
 	/**
 	 * @return int All implemented actions
@@ -55,7 +44,7 @@ class GroupPluginManager {
 		foreach ($this->which as $action => $v) {
 			if ((bool)($respondToActions & $action)) {
 				$this->which[$action] = $plugin;
-				\OC::$server->getLogger()->debug("Registered action ".$action." to plugin ".get_class($plugin), ['app' => 'user_ldap']);
+				Server::get(LoggerInterface::class)->debug('Registered action ' . $action . ' to plugin ' . get_class($plugin), ['app' => 'user_ldap']);
 			}
 		}
 	}
@@ -66,7 +55,7 @@ class GroupPluginManager {
 	 * @return bool
 	 */
 	public function implementsActions($actions) {
-		return ($actions & $this->respondToActions) == $actions;
+		return ($actions & $this->respondToActions) === $actions;
 	}
 
 	/**
@@ -84,16 +73,31 @@ class GroupPluginManager {
 		throw new \Exception('No plugin implements createGroup in this LDAP Backend.');
 	}
 
+	public function canDeleteGroup(): bool {
+		return !$this->suppressDeletion && $this->implementsActions(GroupInterface::DELETE_GROUP);
+	}
+
+	/**
+	 * @return bool – the value before the change
+	 */
+	public function setSuppressDeletion(bool $value): bool {
+		$old = $this->suppressDeletion;
+		$this->suppressDeletion = $value;
+		return $old;
+	}
+
 	/**
 	 * Delete a group
-	 * @param string $gid Group Id of the group to delete
-	 * @return bool
+	 *
 	 * @throws \Exception
 	 */
-	public function deleteGroup($gid) {
+	public function deleteGroup(string $gid): bool {
 		$plugin = $this->which[GroupInterface::DELETE_GROUP];
 
 		if ($plugin) {
+			if ($this->suppressDeletion) {
+				return false;
+			}
 			return $plugin->deleteGroup($gid);
 		}
 		throw new \Exception('No plugin implements deleteGroup in this LDAP Backend.');
@@ -146,7 +150,7 @@ class GroupPluginManager {
 		$plugin = $this->which[GroupInterface::COUNT_USERS];
 
 		if ($plugin) {
-			return $plugin->countUsersInGroup($gid,$search);
+			return $plugin->countUsersInGroup($gid, $search);
 		}
 		throw new \Exception('No plugin implements countUsersInGroup in this LDAP Backend.');
 	}

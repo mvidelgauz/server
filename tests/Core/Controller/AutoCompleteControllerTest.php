@@ -1,24 +1,8 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Tests\Core\Controller;
@@ -26,40 +10,42 @@ namespace Tests\Core\Controller;
 use OC\Core\Controller\AutoCompleteController;
 use OCP\Collaboration\AutoComplete\IManager;
 use OCP\Collaboration\Collaborators\ISearch;
-use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IRequest;
+use OCP\IURLGenerator;
 use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class AutoCompleteControllerTest extends TestCase {
-	/** @var  ISearch|MockObject */
+	/** @var ISearch|MockObject */
 	protected $collaboratorSearch;
-	/** @var  IManager|MockObject */
+	/** @var IManager|MockObject */
 	protected $autoCompleteManager;
-	/** @var  IEventDispatcher|MockObject */
-	protected $dispatcher;
-	/** @var  AutoCompleteController */
+	/** @var IRequest|MockObject */
+	protected $request;
+	/** @var IURLGenerator|MockObject */
+	protected $urlGenerator;
+	/** @var AutoCompleteController */
 	protected $controller;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		/** @var IRequest $request */
-		$request = $this->createMock(IRequest::class);
+		$this->request = $this->createMock(IRequest::class);
 		$this->collaboratorSearch = $this->createMock(ISearch::class);
 		$this->autoCompleteManager = $this->createMock(IManager::class);
-		$this->dispatcher = $this->createMock(IEventDispatcher::class);
+		$this->urlGenerator = $this->createMock(IURLGenerator::class);
 
 		$this->controller = new AutoCompleteController(
 			'core',
-			$request,
+			$this->request,
 			$this->collaboratorSearch,
 			$this->autoCompleteManager,
-			$this->dispatcher
+			$this->urlGenerator,
 		);
 	}
 
-	public function searchDataProvider() {
+	public static function searchDataProvider(): array {
 		return [
 			[ #0 – regular search
 				// searchResults
@@ -75,8 +61,8 @@ class AutoCompleteControllerTest extends TestCase {
 				],
 				// expected
 				[
-					[ 'id' => 'alice', 'label' => 'Alice A.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => ''],
-					[ 'id' => 'bob', 'label' => 'Bob Y.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => ''],
+					[ 'id' => 'alice', 'label' => 'Alice A.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => '', 'shareWithDisplayNameUnique' => ''],
+					[ 'id' => 'bob', 'label' => 'Bob Y.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => '', 'shareWithDisplayNameUnique' => ''],
 				],
 				'',
 				'files',
@@ -96,8 +82,8 @@ class AutoCompleteControllerTest extends TestCase {
 				],
 				// expected
 				[
-					[ 'id' => 'alice', 'label' => 'Alice A.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => ''],
-					[ 'id' => 'bob', 'label' => 'Bob Y.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => ''],
+					[ 'id' => 'alice', 'label' => 'Alice A.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => '', 'shareWithDisplayNameUnique' => ''],
+					[ 'id' => 'bob', 'label' => 'Bob Y.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => '', 'shareWithDisplayNameUnique' => ''],
 				],
 				'',
 				null,
@@ -117,8 +103,8 @@ class AutoCompleteControllerTest extends TestCase {
 				],
 				// expected
 				[
-					[ 'id' => 'alice', 'label' => 'Alice A.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => ''],
-					[ 'id' => 'bob', 'label' => 'Bob Y.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => ''],
+					[ 'id' => 'alice', 'label' => 'Alice A.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => '', 'shareWithDisplayNameUnique' => ''],
+					[ 'id' => 'bob', 'label' => 'Bob Y.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => '', 'shareWithDisplayNameUnique' => ''],
 				],
 				'',
 				'files',
@@ -138,29 +124,42 @@ class AutoCompleteControllerTest extends TestCase {
 					],
 				],
 				[
-					[ 'id' => 'bob', 'label' => 'Bob Y.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => ''],
-					[ 'id' => 'bobby', 'label' => 'Robert R.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => ''],
+					[ 'id' => 'bob', 'label' => 'Bob Y.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => '', 'shareWithDisplayNameUnique' => ''],
+					[ 'id' => 'bobby', 'label' => 'Robert R.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => '', 'shareWithDisplayNameUnique' => ''],
 				],
 				'bob',
 				'files',
 				'42',
 				null
-			]
+			],
+			[ #4 – with unique name
+				[
+					'exact' => [
+						'users' => [],
+						'robots' => [],
+					],
+					'users' => [
+						['label' => 'Alice A.', 'value' => ['shareWith' => 'alice'], 'shareWithDisplayNameUnique' => 'alica@nextcloud.com'],
+						['label' => 'Alice A.', 'value' => ['shareWith' => 'alicea'], 'shareWithDisplayNameUnique' => 'alicaa@nextcloud.com'],
+					],
+				],
+				// expected
+				[
+					[ 'id' => 'alice', 'label' => 'Alice A.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => '', 'shareWithDisplayNameUnique' => 'alica@nextcloud.com'],
+					[ 'id' => 'alicea', 'label' => 'Alice A.', 'icon' => '', 'source' => 'users', 'status' => '', 'subline' => '', 'shareWithDisplayNameUnique' => 'alicaa@nextcloud.com'],
+				],
+				'',
+				'files',
+				'42',
+				'karma|bus-factor'
+			],
 		];
 	}
 
-	/**
-	 * @param $searchResults
-	 * @param $expected
-	 * @param $searchTerm
-	 * @param $itemType
-	 * @param $itemId
-	 * @param $sorter
-	 * @dataProvider searchDataProvider
-	 */
-	public function testGet($searchResults, $expected, $searchTerm, $itemType, $itemId, $sorter) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('searchDataProvider')]
+	public function testGet(array $searchResults, array $expected, string $searchTerm, ?string $itemType, ?string $itemId, ?string $sorter): void {
 		$this->collaboratorSearch->expects($this->once())
-			->method('search')
+			->method('filteredSearch')
 			->willReturn([$searchResults, false]);
 
 		$runSorterFrequency = $sorter === null ? $this->never() : $this->once();
@@ -172,5 +171,33 @@ class AutoCompleteControllerTest extends TestCase {
 		$list = $response->getData();
 		$this->assertEquals($expected, $list);	// has better error output…
 		$this->assertSame($expected, $list);
+		$this->assertArrayNotHasKey('Link', $response->getHeaders());
+	}
+
+	public function testGetSetsLinkHeaderWhenMoreResultsExist(): void {
+		$this->collaboratorSearch->expects($this->once())
+			->method('filteredSearch')
+			->with('bob', [0], false, null, null, 2, 0)
+			->willReturn([[
+				'exact' => ['users' => [], 'robots' => []],
+				'users' => [
+					['label' => 'Bob Y.', 'value' => ['shareWith' => 'bob']],
+					['label' => 'Bobby R.', 'value' => ['shareWith' => 'bobby']],
+				],
+			], true]);
+
+		$this->request
+			->method('getRequestUri')
+			->willReturn('/ocs/v2.php/core/autocomplete/get?search=bob&limit=2');
+		$this->urlGenerator
+			->method('getAbsoluteURL')
+			->with('/ocs/v2.php/core/autocomplete/get')
+			->willReturn('https://cloud.example.com/ocs/v2.php/core/autocomplete/get');
+
+		$response = $this->controller->get('bob', null, null, null, [0], 2, 0);
+		$this->assertSame(
+			'<https://cloud.example.com/ocs/v2.php/core/autocomplete/get?search=bob&shareTypes%5B0%5D=0&limit=2&offset=2>; rel="next"',
+			$response->getHeaders()['Link']
+		);
 	}
 }

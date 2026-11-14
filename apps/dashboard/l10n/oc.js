@@ -2,10 +2,7 @@ OC.L10N.register(
     "dashboard",
     {
     "Dashboard" : "Tablèu de bòrd",
-    "Show something" : "Mostrar quicòm",
-    "Customize" : "Personalizar",
-    "Change background image" : "Cambiar l’imatge de fons",
-    "Weather service" : "Servici de metèo",
+    "Dashboard app" : "Aplicacion de tablèu de bòrd",
     "Weather" : "Metèo",
     "Status" : "Estat",
     "Good morning" : "Bonjorn",
@@ -16,8 +13,11 @@ OC.L10N.register(
     "Good evening, {name}" : "Bonser, {name}",
     "Hello" : "Adieu",
     "Hello, {name}" : "Adieu, {name}",
-    "Default images" : "Imatges per defaut",
-    "Good night, {name}" : "Bona nuèch, {name}",
-    "Good night" : "Bona nuèch"
+    "Customize" : "Personalizar",
+    "Edit widgets" : "Editar widgets",
+    "Get more widgets from the App Store" : "Obténer mai de widgets sus l’App Store",
+    "Weather service" : "Servici de metèo",
+    "Weather data from Met.no" : "Donadas meteorologica de Met.no",
+    "geocoding with Nominatim" : "geocoding amb Nominatim"
 },
 "nplurals=2; plural=(n > 1);");

@@ -1,42 +1,91 @@
 <?php
-/**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Alexander Bergolth <leo@strike.wu.ac.at>
- * @author Alex Weirig <alex.weirig@technolink.lu>
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Lennart Rosam <hello@takuto.de>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Roger Szabo <roger.szabo@web.de>
- * @author Victor Dubiniuk <dubiniuk@owncloud.com>
- * @author Xuanwo <xuanwo@yunify.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
- */
-namespace OCA\User_LDAP;
 
 /**
- * @property int ldapPagingSize holds an integer
- * @property string ldapUserAvatarRule
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+namespace OCA\User_LDAP;
+
+use OCP\IConfig;
+use OCP\Server;
+use Psr\Log\LoggerInterface;
+
+/**
+ * @property string $ldapHost
+ * @property string $ldapPort
+ * @property string $ldapBackupHost
+ * @property string $ldapBackupPort
+ * @property string $ldapBackgroundHost
+ * @property string $ldapBackgroundPort
+ * @property array|'' $ldapBase
+ * @property array|'' $ldapBaseUsers
+ * @property array|'' $ldapBaseGroups
+ * @property string $ldapAgentName
+ * @property string $ldapAgentPassword
+ * @property string $ldapTLS
+ * @property string $turnOffCertCheck
+ * @property string $ldapIgnoreNamingRules
+ * @property string $ldapUserActiveState
+ * @property string $ldapUserDisplayName
+ * @property string $ldapUserDisplayName2
+ * @property string $ldapUserAvatarRule
+ * @property string $ldapGidNumber
+ * @property array|'' $ldapUserFilterObjectclass
+ * @property array|'' $ldapUserFilterGroups
+ * @property string $ldapUserFilter
+ * @property string $ldapUserFilterMode
+ * @property string $ldapGroupFilter
+ * @property string $ldapGroupFilterMode
+ * @property array|'' $ldapGroupFilterObjectclass
+ * @property array|'' $ldapGroupFilterGroups
+ * @property string $ldapGroupDisplayName
+ * @property string $ldapGroupMemberAssocAttr
+ * @property string $ldapLoginFilter
+ * @property string $ldapLoginFilterMode
+ * @property string $ldapLoginFilterEmail
+ * @property string $ldapLoginFilterUsername
+ * @property array|'' $ldapLoginFilterAttributes
+ * @property string $ldapQuotaAttribute
+ * @property string $ldapQuotaDefault
+ * @property string $ldapEmailAttribute
+ * @property string $ldapCacheTTL
+ * @property string $ldapUuidUserAttribute
+ * @property string $ldapUuidGroupAttribute
+ * @property string $ldapOverrideMainServer
+ * @property string $ldapConfigurationActive
+ * @property array|'' $ldapAttributesForUserSearch
+ * @property array|'' $ldapAttributesForGroupSearch
+ * @property string $ldapExperiencedAdmin
+ * @property string $homeFolderNamingRule
+ * @property string $hasMemberOfFilterSupport
+ * @property string $useMemberOfToDetectMembership
+ * @property string $ldapExpertUsernameAttr
+ * @property string $ldapExpertUUIDUserAttr
+ * @property string $ldapExpertUUIDGroupAttr
+ * @property string $markRemnantsAsDisabled
+ * @property string $lastJpegPhotoLookup
+ * @property string $ldapNestedGroups
+ * @property string $ldapPagingSize
+ * @property string $turnOnPasswordChange
+ * @property string $ldapDynamicGroupMemberURL
+ * @property string $ldapDefaultPPolicyDN
+ * @property string $ldapExtStorageHomeAttribute
+ * @property string $ldapMatchingRuleInChainState
+ * @property string $ldapConnectionTimeout
+ * @property string $ldapAttributePhone
+ * @property string $ldapAttributeWebsite
+ * @property string $ldapAttributeAddress
+ * @property string $ldapAttributeTwitter
+ * @property string $ldapAttributeFediverse
+ * @property string $ldapAttributeOrganisation
+ * @property string $ldapAttributeRole
+ * @property string $ldapAttributeHeadline
+ * @property string $ldapAttributeBiography
+ * @property string $ldapAdminGroup
+ * @property string $ldapAttributeBirthDate
+ * @property string $ldapAttributePronouns
  */
 class Configuration {
 	public const AVATAR_PREFIX_DEFAULT = 'default';
@@ -46,21 +95,25 @@ class Configuration {
 	public const LDAP_SERVER_FEATURE_UNKNOWN = 'unknown';
 	public const LDAP_SERVER_FEATURE_AVAILABLE = 'available';
 	public const LDAP_SERVER_FEATURE_UNAVAILABLE = 'unavailable';
-
-	protected $configPrefix = null;
+	/**
+	 * @var bool
+	 */
 	protected $configRead = false;
 	/**
-	 * @var string[] pre-filled with one reference key so that at least one entry is written on save request and
-	 *               the config ID is registered
+	 * @var string[]
 	 */
-	protected $unsavedChanges = ['ldapConfigurationActive' => 'ldapConfigurationActive'];
+	protected array $unsavedChanges = [];
 
-	//settings
+	/**
+	 * @var array<string, mixed> settings
+	 */
 	protected $config = [
 		'ldapHost' => null,
 		'ldapPort' => null,
 		'ldapBackupHost' => null,
 		'ldapBackupPort' => null,
+		'ldapBackgroundHost' => null,
+		'ldapBackgroundPort' => null,
 		'ldapBase' => null,
 		'ldapBaseUsers' => null,
 		'ldapBaseGroups' => null,
@@ -69,6 +122,7 @@ class Configuration {
 		'ldapTLS' => null,
 		'turnOffCertCheck' => null,
 		'ldapIgnoreNamingRules' => null,
+		'ldapUserActiveState' => null,
 		'ldapUserDisplayName' => null,
 		'ldapUserDisplayName2' => null,
 		'ldapUserAvatarRule' => null,
@@ -105,6 +159,7 @@ class Configuration {
 		'ldapExpertUsernameAttr' => null,
 		'ldapExpertUUIDUserAttr' => null,
 		'ldapExpertUUIDGroupAttr' => null,
+		'markRemnantsAsDisabled' => false,
 		'lastJpegPhotoLookup' => null,
 		'ldapNestedGroups' => false,
 		'ldapPagingSize' => null,
@@ -113,14 +168,26 @@ class Configuration {
 		'ldapDefaultPPolicyDN' => null,
 		'ldapExtStorageHomeAttribute' => null,
 		'ldapMatchingRuleInChainState' => self::LDAP_SERVER_FEATURE_UNKNOWN,
+		'ldapConnectionTimeout' => 15,
+		'ldapAttributePhone' => null,
+		'ldapAttributeWebsite' => null,
+		'ldapAttributeAddress' => null,
+		'ldapAttributeTwitter' => null,
+		'ldapAttributeFediverse' => null,
+		'ldapAttributeOrganisation' => null,
+		'ldapAttributeRole' => null,
+		'ldapAttributeHeadline' => null,
+		'ldapAttributeBiography' => null,
+		'ldapAdminGroup' => '',
+		'ldapAttributeBirthDate' => null,
+		'ldapAttributeAnniversaryDate' => null,
+		'ldapAttributePronouns' => null,
 	];
 
-	/**
-	 * @param string $configPrefix
-	 * @param bool $autoRead
-	 */
-	public function __construct($configPrefix, $autoRead = true) {
-		$this->configPrefix = $configPrefix;
+	public function __construct(
+		protected string $configPrefix,
+		bool $autoRead = true,
+	) {
 		if ($autoRead) {
 			$this->readConfiguration();
 		}
@@ -145,10 +212,7 @@ class Configuration {
 		$this->setConfiguration([$name => $value]);
 	}
 
-	/**
-	 * @return array
-	 */
-	public function getConfiguration() {
+	public function getConfiguration(): array {
 		return $this->config;
 	}
 
@@ -157,18 +221,13 @@ class Configuration {
 	 * from configuration. It does not save the configuration! To do so, you
 	 * must call saveConfiguration afterwards.
 	 * @param array $config array that holds the config parameters in an associated
-	 * array
+	 *                      array
 	 * @param array &$applied optional; array where the set fields will be given to
-	 * @return false|null
 	 */
-	public function setConfiguration($config, &$applied = null) {
-		if (!is_array($config)) {
-			return false;
-		}
-
+	public function setConfiguration(array $config, ?array &$applied = null): void {
 		$cta = $this->getConfigTranslationArray();
 		foreach ($config as $inputKey => $val) {
-			if (strpos($inputKey, '_') !== false && array_key_exists($inputKey, $cta)) {
+			if (str_contains($inputKey, '_') && array_key_exists($inputKey, $cta)) {
 				$key = $cta[$inputKey];
 			} elseif (array_key_exists($inputKey, $this->config)) {
 				$key = $inputKey;
@@ -178,13 +237,15 @@ class Configuration {
 
 			$setMethod = 'setValue';
 			switch ($key) {
+				case 'ldapAgentName':
 				case 'ldapAgentPassword':
+					$val = \filter_var($val, FILTER_UNSAFE_RAW, FILTER_FLAG_STRIP_LOW);
 					$setMethod = 'setRawValue';
 					break;
 				case 'homeFolderNamingRule':
 					$trimmedVal = trim($val);
-					if ($trimmedVal !== '' && strpos($val, 'attr:') === false) {
-						$val = 'attr:'.$trimmedVal;
+					if ($trimmedVal !== '' && !str_contains($val, 'attr:')) {
+						$val = 'attr:' . $trimmedVal;
 					}
 					break;
 				case 'ldapBase':
@@ -207,11 +268,10 @@ class Configuration {
 			}
 			$this->unsavedChanges[$key] = $key;
 		}
-		return null;
 	}
 
-	public function readConfiguration() {
-		if (!$this->configRead && !is_null($this->configPrefix)) {
+	public function readConfiguration(): void {
+		if (!$this->configRead) {
 			$cta = array_flip($this->getConfigTranslationArray());
 			foreach ($this->config as $key => $val) {
 				if (!isset($cta[$key])) {
@@ -241,6 +301,28 @@ class Configuration {
 						break;
 					case 'ldapUserDisplayName2':
 					case 'ldapGroupDisplayName':
+					case 'ldapGidNumber':
+					case 'ldapGroupMemberAssocAttr':
+					case 'ldapQuotaAttribute':
+					case 'ldapEmailAttribute':
+					case 'ldapUuidUserAttribute':
+					case 'ldapUuidGroupAttribute':
+					case 'ldapExpertUsernameAttr':
+					case 'ldapExpertUUIDUserAttr':
+					case 'ldapExpertUUIDGroupAttr':
+					case 'ldapExtStorageHomeAttribute':
+					case 'ldapAttributePhone':
+					case 'ldapAttributeWebsite':
+					case 'ldapAttributeAddress':
+					case 'ldapAttributeTwitter':
+					case 'ldapAttributeFediverse':
+					case 'ldapAttributeOrganisation':
+					case 'ldapAttributeRole':
+					case 'ldapAttributeHeadline':
+					case 'ldapAttributeBiography':
+					case 'ldapAttributeBirthDate':
+					case 'ldapAttributeAnniversaryDate':
+					case 'ldapAttributePronouns':
 						$readMethod = 'getLcValue';
 						break;
 					case 'ldapUserDisplayName':
@@ -260,8 +342,9 @@ class Configuration {
 	/**
 	 * saves the current config changes in the database
 	 */
-	public function saveConfiguration() {
+	public function saveConfiguration(): void {
 		$cta = array_flip($this->getConfigTranslationArray());
+		$changed = false;
 		foreach ($this->unsavedChanges as $key) {
 			$value = $this->config[$key];
 			switch ($key) {
@@ -282,7 +365,7 @@ class Configuration {
 						$value = implode("\n", $value);
 					}
 					break;
-				//following options are not stored but detected, skip them
+					//following options are not stored but detected, skip them
 				case 'ldapIgnoreNamingRules':
 				case 'ldapUuidUserAttribute':
 				case 'ldapUuidGroupAttribute':
@@ -291,9 +374,12 @@ class Configuration {
 			if (is_null($value)) {
 				$value = '';
 			}
+			$changed = true;
 			$this->saveValue($cta[$key], $value);
 		}
-		$this->saveValue('_lastChange', time());
+		if ($changed) {
+			$this->saveValue('_lastChange', (string)time());
+		}
 		$this->unsavedChanges = [];
 	}
 
@@ -318,7 +404,7 @@ class Configuration {
 	 * @param string $varName name of config-key
 	 * @param array|string $value to set
 	 */
-	protected function setMultiLine($varName, $value) {
+	protected function setMultiLine(string $varName, $value): void {
 		if (empty($value)) {
 			$value = '';
 		} elseif (!is_array($value)) {
@@ -349,43 +435,23 @@ class Configuration {
 		$this->setRawValue($varName, $finalValue);
 	}
 
-	/**
-	 * @param string $varName
-	 * @return string
-	 */
-	protected function getPwd($varName) {
+	protected function getPwd(string $varName): string {
 		return base64_decode($this->getValue($varName));
 	}
 
-	/**
-	 * @param string $varName
-	 * @return string
-	 */
-	protected function getLcValue($varName) {
+	protected function getLcValue(string $varName): string {
 		return mb_strtolower($this->getValue($varName), 'UTF-8');
 	}
 
-	/**
-	 * @param string $varName
-	 * @return string
-	 */
-	protected function getSystemValue($varName) {
+	protected function getSystemValue(string $varName): string {
 		//FIXME: if another system value is added, softcode the default value
-		return \OC::$server->getConfig()->getSystemValue($varName, false);
+		return Server::get(IConfig::class)->getSystemValue($varName, false);
 	}
 
-	/**
-	 * @param string $varName
-	 * @return string
-	 */
-	protected function getValue($varName) {
-		static $defaults;
-		if (is_null($defaults)) {
-			$defaults = $this->getDefaults();
-		}
-		return \OC::$server->getConfig()->getAppValue('user_ldap',
-										$this->configPrefix.$varName,
-										$defaults[$varName]);
+	protected function getValue(string $varName): string {
+		return Server::get(IConfig::class)->getAppValue('user_ldap',
+			$this->configPrefix . $varName,
+			$this->getDefaults()[$varName]);
 	}
 
 	/**
@@ -394,7 +460,7 @@ class Configuration {
 	 * @param string $varName name of config key
 	 * @param mixed $value to set
 	 */
-	protected function setValue($varName, $value) {
+	protected function setValue(string $varName, $value): void {
 		if (is_string($value)) {
 			$value = trim($value);
 		}
@@ -407,19 +473,14 @@ class Configuration {
 	 * @param string $varName name of config key
 	 * @param mixed $value to set
 	 */
-	protected function setRawValue($varName, $value) {
+	protected function setRawValue(string $varName, $value): void {
 		$this->config[$varName] = $value;
 	}
 
-	/**
-	 * @param string $varName
-	 * @param string $value
-	 * @return bool
-	 */
-	protected function saveValue($varName, $value) {
-		\OC::$server->getConfig()->setAppValue(
+	protected function saveValue(string $varName, string $value): bool {
+		Server::get(IConfig::class)->setAppValue(
 			'user_ldap',
-			$this->configPrefix.$varName,
+			$this->configPrefix . $varName,
 			$value
 		);
 		return true;
@@ -427,14 +488,16 @@ class Configuration {
 
 	/**
 	 * @return array an associative array with the default values. Keys are correspond
-	 * to config-value entries in the database table
+	 *               to config-value entries in the database table
 	 */
-	public function getDefaults() {
+	public function getDefaults(): array {
 		return [
 			'ldap_host' => '',
 			'ldap_port' => '',
 			'ldap_backup_host' => '',
 			'ldap_backup_port' => '',
+			'ldap_background_host' => '',
+			'ldap_background_port' => '',
 			'ldap_override_main_server' => '',
 			'ldap_dn' => '',
 			'ldap_agent_password' => '',
@@ -442,6 +505,7 @@ class Configuration {
 			'ldap_base_users' => '',
 			'ldap_base_groups' => '',
 			'ldap_userlist_filter' => '',
+			'ldap_user_active_state' => '',
 			'ldap_user_filter_mode' => 0,
 			'ldap_userfilter_objectclass' => '',
 			'ldap_userfilter_groups' => '',
@@ -476,6 +540,7 @@ class Configuration {
 			'ldap_expert_uuid_group_attr' => '',
 			'has_memberof_filter_support' => 0,
 			'use_memberof_to_detect_membership' => 1,
+			'ldap_mark_remnants_as_disabled' => 0,
 			'last_jpegPhoto_lookup' => 0,
 			'ldap_nested_groups' => 0,
 			'ldap_paging_size' => 500,
@@ -486,19 +551,35 @@ class Configuration {
 			'ldap_user_avatar_rule' => 'default',
 			'ldap_ext_storage_home_attribute' => '',
 			'ldap_matching_rule_in_chain_state' => self::LDAP_SERVER_FEATURE_UNKNOWN,
+			'ldap_connection_timeout' => 15,
+			'ldap_attr_phone' => '',
+			'ldap_attr_website' => '',
+			'ldap_attr_address' => '',
+			'ldap_attr_twitter' => '',
+			'ldap_attr_fediverse' => '',
+			'ldap_attr_organisation' => '',
+			'ldap_attr_role' => '',
+			'ldap_attr_headline' => '',
+			'ldap_attr_biography' => '',
+			'ldap_admin_group' => '',
+			'ldap_attr_birthdate' => '',
+			'ldap_attr_anniversarydate' => '',
+			'ldap_attr_pronouns' => '',
 		];
 	}
 
 	/**
 	 * @return array that maps internal variable names to database fields
 	 */
-	public function getConfigTranslationArray() {
+	public function getConfigTranslationArray(): array {
 		//TODO: merge them into one representation
-		static $array = [
+		return [
 			'ldap_host' => 'ldapHost',
 			'ldap_port' => 'ldapPort',
 			'ldap_backup_host' => 'ldapBackupHost',
 			'ldap_backup_port' => 'ldapBackupPort',
+			'ldap_background_host' => 'ldapBackgroundHost',
+			'ldap_background_port' => 'ldapBackgroundPort',
 			'ldap_override_main_server' => 'ldapOverrideMainServer',
 			'ldap_dn' => 'ldapAgentName',
 			'ldap_agent_password' => 'ldapAgentPassword',
@@ -508,6 +589,7 @@ class Configuration {
 			'ldap_userfilter_objectclass' => 'ldapUserFilterObjectclass',
 			'ldap_userfilter_groups' => 'ldapUserFilterGroups',
 			'ldap_userlist_filter' => 'ldapUserFilter',
+			'ldap_user_active_state' => 'ldapUserActiveState',
 			'ldap_user_filter_mode' => 'ldapUserFilterMode',
 			'ldap_user_avatar_rule' => 'ldapUserAvatarRule',
 			'ldap_login_filter' => 'ldapLoginFilter',
@@ -539,6 +621,7 @@ class Configuration {
 			'ldap_expert_uuid_group_attr' => 'ldapExpertUUIDGroupAttr',
 			'has_memberof_filter_support' => 'hasMemberOfFilterSupport',
 			'use_memberof_to_detect_membership' => 'useMemberOfToDetectMembership',
+			'ldap_mark_remnants_as_disabled' => 'markRemnantsAsDisabled',
 			'last_jpegPhoto_lookup' => 'lastJpegPhotoLookup',
 			'ldap_nested_groups' => 'ldapNestedGroups',
 			'ldap_paging_size' => 'ldapPagingSize',
@@ -549,30 +632,41 @@ class Configuration {
 			'ldap_ext_storage_home_attribute' => 'ldapExtStorageHomeAttribute',
 			'ldap_matching_rule_in_chain_state' => 'ldapMatchingRuleInChainState',
 			'ldapIgnoreNamingRules' => 'ldapIgnoreNamingRules',	// sysconfig
+			'ldap_connection_timeout' => 'ldapConnectionTimeout',
+			'ldap_attr_phone' => 'ldapAttributePhone',
+			'ldap_attr_website' => 'ldapAttributeWebsite',
+			'ldap_attr_address' => 'ldapAttributeAddress',
+			'ldap_attr_twitter' => 'ldapAttributeTwitter',
+			'ldap_attr_fediverse' => 'ldapAttributeFediverse',
+			'ldap_attr_organisation' => 'ldapAttributeOrganisation',
+			'ldap_attr_role' => 'ldapAttributeRole',
+			'ldap_attr_headline' => 'ldapAttributeHeadline',
+			'ldap_attr_biography' => 'ldapAttributeBiography',
+			'ldap_admin_group' => 'ldapAdminGroup',
+			'ldap_attr_birthdate' => 'ldapAttributeBirthDate',
+			'ldap_attr_anniversarydate' => 'ldapAttributeAnniversaryDate',
+			'ldap_attr_pronouns' => 'ldapAttributePronouns',
 		];
-		return $array;
 	}
 
 	/**
-	 * @param string $rule
-	 * @return array
 	 * @throws \RuntimeException
 	 */
-	public function resolveRule($rule) {
+	public function resolveRule(string $rule): array {
 		if ($rule === 'avatar') {
 			return $this->getAvatarAttributes();
 		}
 		throw new \RuntimeException('Invalid rule');
 	}
 
-	public function getAvatarAttributes() {
+	public function getAvatarAttributes(): array {
 		$value = $this->ldapUserAvatarRule ?: self::AVATAR_PREFIX_DEFAULT;
 		$defaultAttributes = ['jpegphoto', 'thumbnailphoto'];
 
 		if ($value === self::AVATAR_PREFIX_NONE) {
 			return [];
 		}
-		if (strpos($value, self::AVATAR_PREFIX_DATA_ATTRIBUTE) === 0) {
+		if (str_starts_with($value, self::AVATAR_PREFIX_DATA_ATTRIBUTE)) {
 			$attribute = trim(substr($value, strlen(self::AVATAR_PREFIX_DATA_ATTRIBUTE)));
 			if ($attribute === '') {
 				return $defaultAttributes;
@@ -580,8 +674,16 @@ class Configuration {
 			return [strtolower($attribute)];
 		}
 		if ($value !== self::AVATAR_PREFIX_DEFAULT) {
-			\OC::$server->getLogger()->warning('Invalid config value to ldapUserAvatarRule; falling back to default.');
+			Server::get(LoggerInterface::class)->warning('Invalid config value to ldapUserAvatarRule; falling back to default.');
 		}
 		return $defaultAttributes;
+	}
+
+	/**
+	 * Returns TRUE if the ldapHost variable starts with 'ldapi://'
+	 */
+	public function usesLdapi(): bool {
+		$host = $this->config['ldapHost'];
+		return is_string($host) && (substr($host, 0, strlen('ldapi://')) === 'ldapi://');
 	}
 }

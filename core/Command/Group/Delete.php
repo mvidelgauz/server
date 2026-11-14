@@ -3,47 +3,28 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2018 Denis Mosolov <denismosolov@gmail.com>
- *
- * @author Denis Mosolov <denismosolov@gmail.com>
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Core\Command\Group;
 
 use OC\Core\Command\Base;
+use OCP\IGroup;
 use OCP\IGroupManager;
+use Stecman\Component\Symfony\Console\BashCompletion\CompletionContext;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class Delete extends Base {
-	/** @var IGroupManager */
-	protected $groupManager;
-
-	/**
-	 * @param IGroupManager $groupManager
-	 */
-	public function __construct(IGroupManager $groupManager) {
-		$this->groupManager = $groupManager;
+	public function __construct(
+		protected IGroupManager $groupManager,
+	) {
 		parent::__construct();
 	}
 
+	#[\Override]
 	protected function configure() {
 		$this
 			->setName('group:delete')
@@ -55,13 +36,14 @@ class Delete extends Base {
 			);
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$gid = $input->getArgument('groupid');
 		if ($gid === 'admin') {
 			$output->writeln('<error>Group "' . $gid . '" could not be deleted.</error>');
 			return 1;
 		}
-		if (! $this->groupManager->groupExists($gid)) {
+		if (!$this->groupManager->groupExists($gid)) {
 			$output->writeln('<error>Group "' . $gid . '" does not exist.</error>');
 			return 1;
 		}
@@ -73,5 +55,18 @@ class Delete extends Base {
 			return 1;
 		}
 		return 0;
+	}
+
+	/**
+	 * @param string $argumentName
+	 * @param CompletionContext $context
+	 * @return string[]
+	 */
+	#[\Override]
+	public function completeArgumentValues($argumentName, CompletionContext $context) {
+		if ($argumentName === 'groupid') {
+			return array_map(static fn (IGroup $group) => $group->getGID(), $this->groupManager->search($context->getCurrentWord()));
+		}
+		return [];
 	}
 }

@@ -3,27 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2018 Julius Härtl <jus@bitgrid.net>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Julius Härtl <jus@bitgrid.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\Accounts;
 
 use Generator;
@@ -35,13 +18,12 @@ use OCP\IUser;
  * @since 15.0.0
  */
 interface IAccount extends \JsonSerializable {
-
 	/**
 	 * Set a property with data
 	 *
 	 * @since 15.0.0
 	 *
-	 * @param string $property  Must be one of the PROPERTY_ prefixed constants of \OCP\Accounts\IAccountManager
+	 * @param string $property Must be one of the PROPERTY_ prefixed constants of \OCP\Accounts\IAccountManager
 	 * @param string $value
 	 * @param string $scope Must be one of the VISIBILITY_ prefixed constants of \OCP\Accounts\IAccountManager
 	 * @param string $verified \OCP\Accounts\IAccountManager::NOT_VERIFIED | \OCP\Accounts\IAccountManager::VERIFICATION_IN_PROGRESS | \OCP\Accounts\IAccountManager::VERIFIED
@@ -72,6 +54,49 @@ interface IAccount extends \JsonSerializable {
 	public function getProperties(): array;
 
 	/**
+	 * Set all properties of an account
+	 *
+	 * @param array<string, array<string, string>>|array<string, array<int, array<string, string>>> $properties
+	 *
+	 * e.g. `[
+	 *   'displayname' => [
+	 *     'name' => 'displayname',
+	 *     'value' => 'Jonathan Smith',
+	 *     'scope' => 'v2-federated',
+	 *     'verified' => '0',
+	 *     'verificationData' => '',
+	 *   ],
+	 *   'email' => [
+	 *     'name' => 'email',
+	 *     'value' => 'jonathan@example.org',
+	 *     'scope' => 'v2-federated',
+	 *     'verified' => '0',
+	 *     'verificationData' => '',
+	 *   ],
+	 *   // ...
+	 *   'additional_mail' => [
+	 *     [
+	 *       'name' => 'additional_mail',
+	 *       'value' => 'jon@example.org',
+	 *       'scope' => 'v2-local',
+	 *       'verified' => '0',
+	 *       'verificationData' => '',
+	 *     ],
+	 *     [
+	 *       'name' => 'additional_mail',
+	 *       'value' => 'jon@earth.org',
+	 *       'scope' => 'v2-local',
+	 *       'verified' => '0',
+	 *       'verificationData' => '',
+	 *     ],
+	 *   ],
+	 * ]`
+	 *
+	 * @since 24.0.0
+	 */
+	public function setAllPropertiesFromJson(array $properties): IAccount;
+
+	/**
 	 * Get all properties of an account. Array indices are numeric. To get
 	 * the property name, call getName() against the value.
 	 *
@@ -92,7 +117,7 @@ interface IAccount extends \JsonSerializable {
 	public function setPropertyCollection(IAccountPropertyCollection $propertyCollection): IAccount;
 
 	/**
-	 * Returns the requestes propery collection (multi-value properties)
+	 * Returns the requested property collection (multi-value properties)
 	 *
 	 * @throws PropertyDoesNotExistException against invalid collection name
 	 * @since 22.0.0
@@ -112,7 +137,7 @@ interface IAccount extends \JsonSerializable {
 	 * @param string $verified \OCP\Accounts\IAccountManager::NOT_VERIFIED | \OCP\Accounts\IAccountManager::VERIFICATION_IN_PROGRESS | \OCP\Accounts\IAccountManager::VERIFIED
 	 * @return IAccountProperty[]
 	 */
-	public function getFilteredProperties(string $scope = null, string $verified = null): array;
+	public function getFilteredProperties(?string $scope = null, ?string $verified = null): array;
 
 	/**
 	 * Get the related user for the account data

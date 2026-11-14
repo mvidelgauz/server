@@ -1,25 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files\ObjectStore;
 
 use OCP\IUser;
@@ -32,25 +18,25 @@ use OCP\IUser;
  * Map a user to a bucket.
  */
 class Mapper {
-	/** @var IUser */
-	private $user;
-
-	/**
-	 * Mapper constructor.
-	 *
-	 * @param IUser $user
-	 */
-	public function __construct(IUser $user) {
-		$this->user = $user;
+	public function __construct(
+		private readonly IUser $user,
+		private readonly array $config,
+	) {
 	}
 
-	/**
-	 * @param int $numBuckets
-	 * @return string
-	 */
-	public function getBucket($numBuckets = 64) {
+	public function getBucket(int $numBuckets = 64): string {
+		// Get the bucket config and shift if provided.
+		// Allow us to prevent writing in old filled buckets
+		$minBucket = isset($this->config['arguments']['min_bucket'])
+			? (int)$this->config['arguments']['min_bucket']
+			: 0;
+
+		if ($minBucket === $numBuckets) {
+			return (string)$minBucket;
+		}
+
 		$hash = md5($this->user->getUID());
 		$num = hexdec(substr($hash, 0, 4));
-		return (string)($num % $numBuckets);
+		return (string)(($num % ($numBuckets - $minBucket)) + $minBucket);
 	}
 }

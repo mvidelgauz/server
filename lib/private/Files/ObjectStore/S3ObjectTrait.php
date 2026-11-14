@@ -1,40 +1,29 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Robin Appelman <robin@icewind.nl>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Florent <florent@coppint.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Files\ObjectStore;
 
+use Aws\Command;
+use Aws\Exception\AwsException;
+use Aws\Exception\MultipartUploadException;
+use Aws\S3\Exception\S3Exception;
 use Aws\S3\Exception\S3MultipartUploadException;
+use Aws\S3\MultipartCopy;
 use Aws\S3\MultipartUploader;
 use Aws\S3\S3Client;
+use GuzzleHttp\Psr7;
 use GuzzleHttp\Psr7\Utils;
 use OC\Files\Stream\SeekableHttpStream;
-use GuzzleHttp\Psr7;
+use OCA\DAV\Connector\Sabre\Exception\BadGateway;
 use Psr\Http\Message\StreamInterface;
 
 trait S3ObjectTrait {
+	use S3ConfigTrait;
+
 	/**
 	 * Returns the connection
 	 *
@@ -43,19 +32,24 @@ trait S3ObjectTrait {
 	 */
 	abstract protected function getConnection();
 
+	abstract protected function getCertificateBundlePath(): ?string;
+	abstract protected function getSSECParameters(bool $copy = false): array;
+	abstract protected function getServerSideEncryptionParameters(bool $copy = false): array;
+
 	/**
 	 * @param string $urn the unified resource name used to identify the object
+	 *
 	 * @return resource stream with the read data
 	 * @throws \Exception when something goes wrong, message will be logged
 	 * @since 7.0.0
 	 */
 	public function readObject($urn) {
-		return SeekableHttpStream::open(function ($range) use ($urn) {
+		$fh = SeekableHttpStream::open(function ($range) use ($urn) {
 			$command = $this->getConnection()->getCommand('GetObject', [
 				'Bucket' => $this->bucket,
 				'Key' => $urn,
 				'Range' => 'bytes=' . $range,
-			]);
+			] + $this->getServerSideEncryptionParameters());
 			$request = \Aws\serialize($command);
 			$headers = [];
 			foreach ($request->getHeaders() as $key => $values) {
@@ -65,10 +59,16 @@ trait S3ObjectTrait {
 			}
 			$opts = [
 				'http' => [
-					'protocol_version' => 1.1,
+					'protocol_version' => $request->getProtocolVersion(),
 					'header' => $headers,
-				],
+				]
 			];
+			$bundle = $this->getCertificateBundlePath();
+			if ($bundle) {
+				$opts['ssl'] = [
+					'cafile' => $bundle
+				];
+			}
 
 			if ($this->getProxy()) {
 				$opts['http']['proxy'] = $this->getProxy();
@@ -78,6 +78,22 @@ trait S3ObjectTrait {
 			$context = stream_context_create($opts);
 			return fopen($request->getUri(), 'r', false, $context);
 		});
+		if (!$fh) {
+			throw new \Exception("Failed to read object $urn");
+		}
+		return $fh;
+	}
+
+	private function buildS3Metadata(array $metadata): array {
+		$result = [];
+		foreach ($metadata as $key => $value) {
+			if (mb_check_encoding($value, 'ASCII')) {
+				$result['x-amz-meta-' . $key] = $value;
+			} else {
+				$result['x-amz-meta-' . $key] = 'base64:' . base64_encode($value);
+			}
+		}
+		return $result;
 	}
 
 	/**
@@ -85,74 +101,157 @@ trait S3ObjectTrait {
 	 *
 	 * @param string $urn the unified resource name used to identify the object
 	 * @param StreamInterface $stream stream with the data to write
-	 * @param string|null $mimetype the mimetype to set for the remove object @since 22.0.0
+	 * @param array $metaData the metadata to set for the object
 	 * @throws \Exception when something goes wrong, message will be logged
 	 */
-	protected function writeSingle(string $urn, StreamInterface $stream, string $mimetype = null): void {
-		$this->getConnection()->putObject([
+	protected function writeSingle(string $urn, StreamInterface $stream, array $metaData): void {
+		$mimetype = $metaData['mimetype'] ?? null;
+		unset($metaData['mimetype']);
+		unset($metaData['size']);
+
+		$args = [
 			'Bucket' => $this->bucket,
 			'Key' => $urn,
 			'Body' => $stream,
 			'ACL' => 'private',
 			'ContentType' => $mimetype,
-		]);
-	}
+			'Metadata' => $this->buildS3Metadata($metaData),
+			'StorageClass' => $this->storageClass,
+		] + $this->getServerSideEncryptionParameters();
 
+		if ($size = $stream->getSize()) {
+			$args['ContentLength'] = $size;
+		}
+
+		$this->getConnection()->putObject($args);
+	}
 
 	/**
 	 * Multipart upload helper that tries to avoid orphaned fragments in S3
 	 *
 	 * @param string $urn the unified resource name used to identify the object
 	 * @param StreamInterface $stream stream with the data to write
-	 * @param string|null $mimetype the mimetype to set for the remove object
+	 * @param array $metaData the metadata to set for the object
 	 * @throws \Exception when something goes wrong, message will be logged
 	 */
-	protected function writeMultiPart(string $urn, StreamInterface $stream, string $mimetype = null): void {
-		$uploader = new MultipartUploader($this->getConnection(), $stream, [
-			'bucket' => $this->bucket,
-			'key' => $urn,
-			'part_size' => $this->uploadPartSize,
-			'params' => [
-				'ContentType' => $mimetype
-			],
-		]);
+	protected function writeMultiPart(string $urn, StreamInterface $stream, array $metaData): void {
+		$mimetype = $metaData['mimetype'] ?? null;
+		unset($metaData['mimetype']);
+		unset($metaData['size']);
 
-		try {
-			$uploader->upload();
-		} catch (S3MultipartUploadException $e) {
+		$attempts = 0;
+		$uploaded = false;
+		$concurrency = $this->concurrency;
+		$exception = null;
+		$state = null;
+		$size = $stream->getSize();
+
+		// retry multipart upload once with concurrency at half on failure
+		while (!$uploaded && $attempts <= 1) {
+			$totalWritten = 0;
+			$uploader = new MultipartUploader($this->getConnection(), $stream, [
+				'bucket' => $this->bucket,
+				'concurrency' => $concurrency,
+				'key' => $urn,
+				'part_size' => $this->uploadPartSize,
+				'state' => $state,
+				'params' => [
+					'ContentType' => $mimetype,
+					'Metadata' => $this->buildS3Metadata($metaData),
+					'StorageClass' => $this->storageClass,
+				] + $this->getServerSideEncryptionParameters(),
+				'before_upload' => function (Command $command) use (&$totalWritten): void {
+					$totalWritten += $command['ContentLength'];
+				},
+				'before_complete' => function ($_command) use (&$totalWritten, $size, &$uploader, &$attempts): void {
+					if ($size !== null && $totalWritten !== $size) {
+						$e = new \Exception('Incomplete multi part upload, expected ' . $size . ' bytes, wrote ' . $totalWritten);
+						throw new MultipartUploadException($uploader->getState(), $e);
+					}
+				},
+			]);
+
+			try {
+				$uploader->upload();
+				$uploaded = true;
+			} catch (S3MultipartUploadException $e) {
+				$exception = $e;
+				$attempts++;
+
+				if ($concurrency > 1) {
+					$concurrency = round($concurrency / 2);
+				}
+
+				if ($stream->isSeekable()) {
+					$stream->rewind();
+				}
+			} catch (MultipartUploadException $e) {
+				$exception = $e;
+				break;
+			}
+		}
+
+		if (!$uploaded) {
 			// if anything goes wrong with multipart, make sure that you don´t poison and
 			// slow down s3 bucket with orphaned fragments
-			$uploadInfo = $e->getState()->getId();
-			if ($e->getState()->isInitiated() && (array_key_exists('UploadId', $uploadInfo))) {
+			$uploadInfo = $exception->getState()->getId();
+			if ($exception->getState()->isInitiated() && (array_key_exists('UploadId', $uploadInfo))) {
 				$this->getConnection()->abortMultipartUpload($uploadInfo);
 			}
-			throw $e;
+
+			throw new BadGateway('Error while uploading to S3 bucket', 0, $exception);
 		}
 	}
 
-
-	/**
-	 * @param string $urn the unified resource name used to identify the object
-	 * @param resource $stream stream with the data to write
-	 * @param string|null $mimetype the mimetype to set for the remove object @since 22.0.0
-	 * @throws \Exception when something goes wrong, message will be logged
-	 * @since 7.0.0
-	 */
-	public function writeObject($urn, $stream, string $mimetype = null) {
-		$psrStream = Utils::streamFor($stream);
-
-		// ($psrStream->isSeekable() && $psrStream->getSize() !== null) evaluates to true for a On-Seekable stream
-		// so the optimisation does not apply
-		$buffer = new Psr7\Stream(fopen("php://memory", 'rwb+'));
-		Utils::copyToStream($psrStream, $buffer, MultipartUploader::PART_MIN_SIZE);
-		$buffer->seek(0);
-		if ($buffer->getSize() < MultipartUploader::PART_MIN_SIZE) {
-			// buffer is fully seekable, so use it directly for the small upload
-			$this->writeSingle($urn, $buffer, $mimetype);
-		} else {
-			$loadStream = new Psr7\AppendStream([$buffer, $psrStream]);
-			$this->writeMultiPart($urn, $loadStream, $mimetype);
+	public function writeObject($urn, $stream, ?string $mimetype = null) {
+		$metaData = [];
+		if ($mimetype) {
+			$metaData['mimetype'] = $mimetype;
 		}
+		$this->writeObjectWithMetaData($urn, $stream, $metaData);
+	}
+
+	public function writeObjectWithMetaData(string $urn, $stream, array $metaData): void {
+		$canSeek = fseek($stream, 0, SEEK_CUR) === 0;
+		$psrStream = Utils::streamFor($stream, [
+			'size' => $metaData['size'] ?? null,
+		]);
+
+		$size = $psrStream->getSize();
+		if ($size === null || !$canSeek) {
+			// The s3 single-part upload requires the size to be known for the stream.
+			// So for input streams that don't have a known size, we need to copy (part of)
+			// the input into a temporary stream so the size can be determined
+			$buffer = new Psr7\Stream(fopen('php://temp', 'rw+'));
+			Utils::copyToStream($psrStream, $buffer, $this->putSizeLimit);
+			$buffer->seek(0);
+			if ($buffer->getSize() < $this->putSizeLimit) {
+				// buffer is fully seekable, so use it directly for the small upload
+				$this->writeSingle($urn, $buffer, $metaData);
+			} else {
+				if ($psrStream->isSeekable()) {
+					// If the body is seekable, just rewind the body.
+					$psrStream->rewind();
+					$loadStream = $psrStream;
+				} else {
+					// If the body is non-seekable, stitch the rewind the buffer and
+					// the partially read body together into one stream. This avoids
+					// unnecessary disk usage and does not require seeking on the
+					// original stream.
+					$buffer->rewind();
+					$loadStream = new Psr7\AppendStream([$buffer, $psrStream]);
+				}
+
+				$this->writeMultiPart($urn, $loadStream, $metaData);
+			}
+		} else {
+			if ($size < $this->putSizeLimit) {
+				$this->writeSingle($urn, $psrStream, $metaData);
+			} else {
+				$this->writeMultiPart($urn, $psrStream, $metaData);
+			}
+		}
+		$psrStream->close();
 	}
 
 	/**
@@ -168,11 +267,72 @@ trait S3ObjectTrait {
 		]);
 	}
 
+	/**
+	 * @throws S3Exception|\Exception if there is an unhandled exception
+	 */
 	public function objectExists($urn) {
-		return $this->getConnection()->doesObjectExist($this->bucket, $urn);
+		return $this->getConnection()->doesObjectExistV2($this->bucket, $urn, false, $this->getServerSideEncryptionParameters());
 	}
 
-	public function copyObject($from, $to) {
-		$this->getConnection()->copy($this->getBucket(), $from, $this->getBucket(), $to);
+	public function copyObject($from, $to, array $options = []) {
+		$sourceMetadata = $this->getConnection()->headObject([
+			'Bucket' => $this->getBucket(),
+			'Key' => $from,
+		] + $this->getServerSideEncryptionParameters());
+
+		$size = (int)($sourceMetadata->get('Size') ?? $sourceMetadata->get('ContentLength'));
+
+		if ($this->useMultipartCopy && $size > $this->copySizeLimit) {
+			$copy = new MultipartCopy($this->getConnection(), [
+				'source_bucket' => $this->getBucket(),
+				'source_key' => $from
+			], array_merge([
+				'bucket' => $this->getBucket(),
+				'key' => $to,
+				'acl' => 'private',
+				'params' => $this->getServerSideEncryptionParameters() + $this->getServerSideEncryptionParameters(true),
+				'source_metadata' => $sourceMetadata
+			], $options));
+			$copy->copy();
+		} else {
+			$this->getConnection()->copy($this->getBucket(), $from, $this->getBucket(), $to, 'private', array_merge([
+				'params' => $this->getServerSideEncryptionParameters() + $this->getServerSideEncryptionParameters(true),
+				'mup_threshold' => PHP_INT_MAX,
+			], $options));
+		}
+	}
+
+	public function preSignedUrl(string $urn, \DateTimeInterface $expiration, ?string $filename = null): ?string {
+		if (!$this->isUsePresignedUrl()) {
+			return null;
+		}
+
+		// A cross-origin anchor click saves the file only when this header is part of the signed response.
+		$command = $this->getConnection()->getCommand('GetObject', [
+			'Bucket' => $this->getBucket(),
+			'Key' => $urn,
+			'ResponseContentDisposition' => $this->attachmentContentDisposition($filename),
+		]);
+
+		try {
+			return (string)$this->getConnection()->createPresignedRequest($command, $expiration, [
+				'signPayload' => true,
+			])->getUri();
+		} catch (AwsException) {
+			return null;
+		}
+	}
+
+	/**
+	 * Content-Disposition for a direct download. The name is percent-encoded so it cannot break the header.
+	 */
+	protected function attachmentContentDisposition(?string $filename): string {
+		$filename = str_replace(["\r", "\n"], '', (string)$filename);
+		if ($filename === '' || $filename === '.' || $filename === '..') {
+			return 'attachment';
+		}
+
+		$encoded = rawurlencode($filename);
+		return 'attachment; filename="' . $encoded . '"; filename*=UTF-8\'\'' . $encoded;
 	}
 }

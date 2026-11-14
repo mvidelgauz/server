@@ -1,48 +1,39 @@
 <?php
 
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2021 Carl Schwan <carl@carlschwan.eu>
- *
- * @author Carl Schwan <carl@carlschwan.eu>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace OC\Settings;
 
+use JsonSerializable;
 use OCP\AppFramework\Db\Entity;
 
 /**
  * @method setGroupId(string $groupId)
  * @method setClass(string $class)
- * @method getGroupId(): string
- * @method getClass(): string
+ * @method string getGroupId()
+ * @method string getClass()
+ *
+ * @psalm-api - we cannot use final as this will break unit tests
  */
-class AuthorizedGroup extends Entity implements \JsonSerializable {
+class AuthorizedGroup extends Entity implements JsonSerializable {
+	public $id;
 
-	/** @var string $group_id */
-	protected $groupId;
+	protected ?string $groupId = null;
 
-	/** @var string $class */
-	protected $class;
+	protected ?string $class = null;
 
+	/**
+	 * @return array<string, mixed>
+	 */
+	#[\Override]
 	public function jsonSerialize(): array {
 		return [
-			'id' => $this->id,
+			'id' => $this->getId(),
 			'group_id' => $this->groupId,
 			'class' => $this->class
 		];

@@ -1,41 +1,30 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2019 Julius Härtl <jus@bitgrid.net>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Julius Härtl <jus@bitgrid.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Log;
 
 use OC\SystemConfig;
+use OCP\IRequest;
+use OCP\IUserManager;
+use OCP\IUserSession;
+use OCP\Server;
 
 abstract class LogDetails {
+	/** Prevents recursion when looking up the display name causes another log entry */
+	private bool $resolvingDisplayName = false;
 
-	/** @var SystemConfig */
-	private $config;
-
-	public function __construct(SystemConfig $config) {
-		$this->config = $config;
+	public function __construct(
+		private SystemConfig $config,
+	) {
 	}
 
-	public function logDetails(string $app, $message, int $level): array {
+	public function logDetails(string $app, string|array $message, int $level): array {
 		// default to ISO8601
 		$format = $this->config->getValue('logdateformat', \DateTimeInterface::ATOM);
 		$logTimeZone = $this->config->getValue('logtimezone', 'UTC');
@@ -44,22 +33,16 @@ abstract class LogDetails {
 		} catch (\Exception $e) {
 			$timezone = new \DateTimeZone('UTC');
 		}
-		$time = \DateTime::createFromFormat("U.u", number_format(microtime(true), 4, ".", ""));
-		if ($time === false) {
-			$time = new \DateTime(null, $timezone);
-		} else {
-			// apply timezone if $time is created from UNIX timestamp
-			$time->setTimezone($timezone);
-		}
-		$request = \OC::$server->getRequest();
+		$time = new \DateTime('now', $timezone);
+		$request = Server::get(IRequest::class);
 		$reqId = $request->getId();
 		$remoteAddr = $request->getRemoteAddress();
 		// remove username/passwords from URLs before writing the to the log file
 		$time = $time->format($format);
 		$url = ($request->getRequestUri() !== '') ? $request->getRequestUri() : '--';
-		$method = is_string($request->getMethod()) ? $request->getMethod() : '--';
+		$method = $request->getMethod();
 		if ($this->config->getValue('installed', false)) {
-			$user = \OC_User::getUser() ? \OC_User::getUser() : '--';
+			$user = Server::get(IUserSession::class)->getUser()?->getUID() ?? '--';
 		} else {
 			$user = '--';
 		}
@@ -68,19 +51,34 @@ abstract class LogDetails {
 			$userAgent = '--';
 		}
 		$version = $this->config->getValue('version', '');
+		$scriptName = $request->getScriptName();
+		$userDisplayName = $user !== '--' ? $this->getUserDisplayName($user) : null;
 		$entry = compact(
 			'reqId',
 			'level',
 			'time',
 			'remoteAddr',
 			'user',
+			'userDisplayName',
 			'app',
 			'method',
 			'url',
+			'scriptName',
 			'message',
 			'userAgent',
-			'version'
+			'version',
 		);
+		if ($userDisplayName === null) {
+			unset($entry['userDisplayName']);
+		}
+		$clientReqId = $request->getHeader('X-Request-Id');
+		if ($clientReqId !== '') {
+			$entry['clientReqId'] = $clientReqId;
+		}
+		if (\OC::$CLI) {
+			/* Only logging the command, not the parameters */
+			$entry['occ_command'] = array_slice($_SERVER['argv'] ?? [], 0, 2);
+		}
 
 		if (is_array($message)) {
 			// Exception messages are extracted and the exception is put into a separate field
@@ -90,15 +88,31 @@ abstract class LogDetails {
 				$entry['exception'] = $message;
 				$entry['message'] = $message['CustomMessage'] !== '--' ? $message['CustomMessage'] : $message['Message'];
 			} else {
-				$entry['data'] = $message;
 				$entry['message'] = $message['message'] ?? '(no message provided)';
+				unset($message['message']);
+				$entry['data'] = $message;
 			}
 		}
 
 		return $entry;
 	}
 
-	public function logDetailsAsJSON(string $app, $message, int $level): string {
+	private function getUserDisplayName(string $userId): ?string {
+		if ($this->resolvingDisplayName) {
+			return null;
+		}
+
+		$this->resolvingDisplayName = true;
+		try {
+			return Server::get(IUserManager::class)->getDisplayName($userId);
+		} catch (\Throwable) {
+			return null;
+		} finally {
+			$this->resolvingDisplayName = false;
+		}
+	}
+
+	public function logDetailsAsJSON(string $app, string|array $message, int $level): string {
 		$entry = $this->logDetails($app, $message, $level);
 		// PHP's json_encode only accept proper UTF-8 strings, loop over all
 		// elements to ensure that they are properly UTF-8 compliant or convert
@@ -107,7 +121,7 @@ abstract class LogDetails {
 			if (is_string($value)) {
 				$testEncode = json_encode($value, JSON_UNESCAPED_SLASHES);
 				if ($testEncode === false) {
-					$entry[$key] = utf8_encode($value);
+					$entry[$key] = mb_convert_encoding($value, 'UTF-8', mb_detect_encoding($value));
 				}
 			}
 		}

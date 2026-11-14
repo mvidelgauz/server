@@ -1,32 +1,15 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Pulzer <t.pulzer@kniel.de>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Core\Command\Log;
 
 use OCP\IConfig;
-
+use OCP\Util;
 use Stecman\Component\Symfony\Console\BashCompletion\Completion;
 use Stecman\Component\Symfony\Console\BashCompletion\Completion\ShellPathCompletion;
 use Stecman\Component\Symfony\Console\BashCompletion\CompletionContext;
@@ -36,15 +19,13 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class File extends Command implements Completion\CompletionAwareInterface {
-
-	/** @var IConfig */
-	protected $config;
-
-	public function __construct(IConfig $config) {
-		$this->config = $config;
+	public function __construct(
+		protected IConfig $config,
+	) {
 		parent::__construct();
 	}
 
+	#[\Override]
 	protected function configure() {
 		$this
 			->setName('log:file')
@@ -70,6 +51,7 @@ class File extends Command implements Completion\CompletionAwareInterface {
 		;
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$toBeSet = [];
 
@@ -82,7 +64,7 @@ class File extends Command implements Completion\CompletionAwareInterface {
 		}
 
 		if (($rotateSize = $input->getOption('rotate-size')) !== null) {
-			$rotateSize = \OCP\Util::computerFileSize($rotateSize);
+			$rotateSize = Util::computerFileSize($rotateSize);
 			$this->validateRotateSize($rotateSize);
 			$toBeSet['log_rotate_size'] = $rotateSize;
 		}
@@ -100,31 +82,29 @@ class File extends Command implements Completion\CompletionAwareInterface {
 		} else {
 			$enabledText = 'disabled';
 		}
-		$output->writeln('Log backend file: '.$enabledText);
+		$output->writeln('Log backend file: ' . $enabledText);
 
-		$dataDir = $this->config->getSystemValue('datadirectory', \OC::$SERVERROOT.'/data');
-		$defaultLogFile = rtrim($dataDir, '/').'/nextcloud.log';
-		$output->writeln('Log file: '.$this->config->getSystemValue('logfile', $defaultLogFile));
+		$dataDir = $this->config->getSystemValue('datadirectory', \OC::$SERVERROOT . '/data');
+		$defaultLogFile = rtrim($dataDir, '/') . '/nextcloud.log';
+		$output->writeln('Log file: ' . $this->config->getSystemValue('logfile', $defaultLogFile));
 
 		$rotateSize = $this->config->getSystemValue('log_rotate_size', 100 * 1024 * 1024);
 		if ($rotateSize) {
-			$rotateString = \OCP\Util::humanFileSize($rotateSize);
+			$rotateString = Util::humanFileSize($rotateSize);
 		} else {
 			$rotateString = 'disabled';
 		}
-		$output->writeln('Rotate at: '.$rotateString);
+		$output->writeln('Rotate at: ' . $rotateString);
 		return 0;
 	}
 
 	/**
-	 * @param mixed $rotateSize
 	 * @throws \InvalidArgumentException
 	 */
-	protected function validateRotateSize(&$rotateSize) {
+	protected function validateRotateSize(false|int|float $rotateSize): void {
 		if ($rotateSize === false) {
 			throw new \InvalidArgumentException('Error parsing log rotation file size');
 		}
-		$rotateSize = (int) $rotateSize;
 		if ($rotateSize < 0) {
 			throw new \InvalidArgumentException('Log rotation file size must be non-negative');
 		}
@@ -135,6 +115,7 @@ class File extends Command implements Completion\CompletionAwareInterface {
 	 * @param CompletionContext $context
 	 * @return string[]
 	 */
+	#[\Override]
 	public function completeOptionValues($optionName, CompletionContext $context) {
 		if ($optionName === 'file') {
 			$helper = new ShellPathCompletion(
@@ -154,6 +135,7 @@ class File extends Command implements Completion\CompletionAwareInterface {
 	 * @param CompletionContext $context
 	 * @return string[]
 	 */
+	#[\Override]
 	public function completeArgumentValues($argumentName, CompletionContext $context) {
 		return [];
 	}

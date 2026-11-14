@@ -1,66 +1,76 @@
 <?php
-/**
- * @copyright Copyright (c) 2016 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+
+declare(strict_types=1);
+
+/*!
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Federation\Settings;
 
+use OCA\Federation\AppInfo\Application;
 use OCA\Federation\TrustedServers;
 use OCP\AppFramework\Http\TemplateResponse;
-use OCP\Settings\ISettings;
+use OCP\AppFramework\Services\IInitialState;
+use OCP\IL10N;
+use OCP\IURLGenerator;
+use OCP\Settings\IDelegatedSettings;
+use OCP\Util;
 
-class Admin implements ISettings {
-
-	/** @var TrustedServers */
-	private $trustedServers;
-
-	public function __construct(TrustedServers $trustedServers) {
-		$this->trustedServers = $trustedServers;
+class Admin implements IDelegatedSettings {
+	public function __construct(
+		private TrustedServers $trustedServers,
+		private IInitialState $initialState,
+		private IURLGenerator $urlGenerator,
+		private IL10N $l,
+	) {
 	}
 
 	/**
 	 * @return TemplateResponse
 	 */
+	#[\Override]
 	public function getForm() {
 		$parameters = [
 			'trustedServers' => $this->trustedServers->getServers(),
+			'docUrl' => $this->urlGenerator->linkToDocs('admin-sharing-federated') . '#configuring-trusted-nextcloud-servers',
 		];
 
-		return new TemplateResponse('federation', 'settings-admin', $parameters, '');
+		$this->initialState->provideInitialState('adminSettings', $parameters);
+
+		Util::addStyle(Application::APP_ID, 'settings-admin');
+		Util::addScript(Application::APP_ID, 'settings-admin');
+		return new TemplateResponse(Application::APP_ID, 'settings-admin', renderAs: '');
 	}
 
 	/**
 	 * @return string the section ID, e.g. 'sharing'
 	 */
+	#[\Override]
 	public function getSection() {
 		return 'sharing';
 	}
 
 	/**
 	 * @return int whether the form should be rather on the top or bottom of
-	 * the admin section. The forms are arranged in ascending order of the
-	 * priority values. It is required to return a value between 0 and 100.
+	 *             the admin section. The forms are arranged in ascending order of the
+	 *             priority values. It is required to return a value between 0 and 100.
 	 *
 	 * E.g.: 70
 	 */
+	#[\Override]
 	public function getPriority() {
 		return 30;
+	}
+
+	#[\Override]
+	public function getName(): ?string {
+		return $this->l->t('Trusted servers');
+	}
+
+	#[\Override]
+	public function getAuthorizedAppConfig(): array {
+		return []; // Handled by custom controller
 	}
 }

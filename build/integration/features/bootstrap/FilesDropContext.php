@@ -1,41 +1,20 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 use Behat\Behat\Context\Context;
-use Behat\Behat\Context\SnippetAcceptingContext;
+use Behat\Step\When;
 use GuzzleHttp\Client;
 
-require __DIR__ . '/../../vendor/autoload.php';
+require __DIR__ . '/autoload.php';
 
-class FilesDropContext implements Context, SnippetAcceptingContext {
+class FilesDropContext implements Context {
 	use WebDav;
 
-	/**
-	 * @When Dropping file :path with :content
-	 */
-	public function droppingFileWith($path, $content) {
+	#[When('Dropping file :path with :content')]
+	public function droppingFileWith($path, $content, $nickname = null) {
 		$client = new Client();
 		$options = [];
 		if (count($this->lastShareData->data->element) > 0) {
@@ -44,14 +23,18 @@ class FilesDropContext implements Context, SnippetAcceptingContext {
 			$token = $this->lastShareData->data[0]->token;
 		}
 
-		$base = substr($this->baseUrl, 0, -4);
-		$fullUrl = $base . '/public.php/webdav' . $path;
+		$base = rtrim(substr($this->baseUrl, 0, -4), '/');
+		$fullUrl = $base . str_replace('//', '/', "/public.php/dav/files/$token/$path");
 
-		$options['auth'] = [$token, ''];
 		$options['headers'] = [
-			'X-REQUESTED-WITH' => 'XMLHttpRequest'
+			'X-REQUESTED-WITH' => 'XMLHttpRequest',
 		];
-		$options['body'] = \GuzzleHttp\Psr7\stream_for($content);
+
+		if ($nickname) {
+			$options['headers']['X-NC-NICKNAME'] = $nickname;
+		}
+
+		$options['body'] = \GuzzleHttp\Psr7\Utils::streamFor($content);
 
 		try {
 			$this->response = $client->request('PUT', $fullUrl, $options);
@@ -60,10 +43,13 @@ class FilesDropContext implements Context, SnippetAcceptingContext {
 		}
 	}
 
-	/**
-	 * @When Creating folder :folder in drop
-	 */
-	public function creatingFolderInDrop($folder) {
+	#[When('Dropping file :path with :content as :nickName')]
+	public function droppingFileWithAs($path, $content, $nickname) {
+		$this->droppingFileWith($path, $content, $nickname);
+	}
+
+	#[When('Creating folder :folder in drop')]
+	public function creatingFolderInDrop($folder, $nickname = null) {
 		$client = new Client();
 		$options = [];
 		if (count($this->lastShareData->data->element) > 0) {
@@ -72,18 +58,26 @@ class FilesDropContext implements Context, SnippetAcceptingContext {
 			$token = $this->lastShareData->data[0]->token;
 		}
 
-		$base = substr($this->baseUrl, 0, -4);
-		$fullUrl = $base . '/public.php/webdav/' . $folder;
+		$base = rtrim(substr($this->baseUrl, 0, -4), '/');
+		$fullUrl = $base . str_replace('//', '/', "/public.php/dav/files/$token/$folder");
 
-		$options['auth'] = [$token, ''];
 		$options['headers'] = [
-			'X-REQUESTED-WITH' => 'XMLHttpRequest'
+			'X-REQUESTED-WITH' => 'XMLHttpRequest',
 		];
+
+		if ($nickname) {
+			$options['headers']['X-NC-NICKNAME'] = $nickname;
+		}
 
 		try {
 			$this->response = $client->request('MKCOL', $fullUrl, $options);
 		} catch (\GuzzleHttp\Exception\ClientException $e) {
 			$this->response = $e->getResponse();
 		}
+	}
+
+	#[When('Creating folder :folder in drop as :nickName')]
+	public function creatingFolderInDropWithNickname($folder, $nickname) {
+		return $this->creatingFolderInDrop($folder, $nickname);
 	}
 }

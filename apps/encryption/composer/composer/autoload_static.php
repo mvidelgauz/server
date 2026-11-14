@@ -7,14 +7,14 @@ namespace Composer\Autoload;
 class ComposerStaticInitEncryption
 {
     public static $prefixLengthsPsr4 = array (
-        'O' => 
+        'O' =>
         array (
             'OCA\\Encryption\\' => 15,
         ),
     );
 
     public static $prefixDirsPsr4 = array (
-        'OCA\\Encryption\\' => 
+        'OCA\\Encryption\\' =>
         array (
             0 => __DIR__ . '/..' . '/../lib',
         ),
@@ -23,9 +23,12 @@ class ComposerStaticInitEncryption
     public static $classMap = array (
         'Composer\\InstalledVersions' => __DIR__ . '/..' . '/composer/InstalledVersions.php',
         'OCA\\Encryption\\AppInfo\\Application' => __DIR__ . '/..' . '/../lib/AppInfo/Application.php',
+        'OCA\\Encryption\\Command\\CleanOrphanedKeys' => __DIR__ . '/..' . '/../lib/Command/CleanOrphanedKeys.php',
         'OCA\\Encryption\\Command\\DisableMasterKey' => __DIR__ . '/..' . '/../lib/Command/DisableMasterKey.php',
+        'OCA\\Encryption\\Command\\DropLegacyFileKey' => __DIR__ . '/..' . '/../lib/Command/DropLegacyFileKey.php',
         'OCA\\Encryption\\Command\\EnableMasterKey' => __DIR__ . '/..' . '/../lib/Command/EnableMasterKey.php',
         'OCA\\Encryption\\Command\\FixEncryptedVersion' => __DIR__ . '/..' . '/../lib/Command/FixEncryptedVersion.php',
+        'OCA\\Encryption\\Command\\FixKeyLocation' => __DIR__ . '/..' . '/../lib/Command/FixKeyLocation.php',
         'OCA\\Encryption\\Command\\RecoverUser' => __DIR__ . '/..' . '/../lib/Command/RecoverUser.php',
         'OCA\\Encryption\\Command\\ScanLegacyFormat' => __DIR__ . '/..' . '/../lib/Command/ScanLegacyFormat.php',
         'OCA\\Encryption\\Controller\\RecoveryController' => __DIR__ . '/..' . '/../lib/Controller/RecoveryController.php',
@@ -39,12 +42,12 @@ class ComposerStaticInitEncryption
         'OCA\\Encryption\\Exceptions\\MultiKeyEncryptException' => __DIR__ . '/..' . '/../lib/Exceptions/MultiKeyEncryptException.php',
         'OCA\\Encryption\\Exceptions\\PrivateKeyMissingException' => __DIR__ . '/..' . '/../lib/Exceptions/PrivateKeyMissingException.php',
         'OCA\\Encryption\\Exceptions\\PublicKeyMissingException' => __DIR__ . '/..' . '/../lib/Exceptions/PublicKeyMissingException.php',
-        'OCA\\Encryption\\HookManager' => __DIR__ . '/..' . '/../lib/HookManager.php',
-        'OCA\\Encryption\\Hooks\\Contracts\\IHook' => __DIR__ . '/..' . '/../lib/Hooks/Contracts/IHook.php',
-        'OCA\\Encryption\\Hooks\\UserHooks' => __DIR__ . '/..' . '/../lib/Hooks/UserHooks.php',
         'OCA\\Encryption\\KeyManager' => __DIR__ . '/..' . '/../lib/KeyManager.php',
+        'OCA\\Encryption\\Listeners\\BeforeTemplateRenderedListener' => __DIR__ . '/..' . '/../lib/Listeners/BeforeTemplateRenderedListener.php',
+        'OCA\\Encryption\\Listeners\\UserEventsListener' => __DIR__ . '/..' . '/../lib/Listeners/UserEventsListener.php',
         'OCA\\Encryption\\Migration\\SetMasterKeyStatus' => __DIR__ . '/..' . '/../lib/Migration/SetMasterKeyStatus.php',
         'OCA\\Encryption\\Recovery' => __DIR__ . '/..' . '/../lib/Recovery.php',
+        'OCA\\Encryption\\Services\\PassphraseService' => __DIR__ . '/..' . '/../lib/Services/PassphraseService.php',
         'OCA\\Encryption\\Session' => __DIR__ . '/..' . '/../lib/Session.php',
         'OCA\\Encryption\\Settings\\Admin' => __DIR__ . '/..' . '/../lib/Settings/Admin.php',
         'OCA\\Encryption\\Settings\\Personal' => __DIR__ . '/..' . '/../lib/Settings/Personal.php',

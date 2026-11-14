@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2021 Joas Schilling <coding@schilljs.com>
- *
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CardDAV\Activity;
 
 use OCA\DAV\CardDAV\Activity\Provider\Addressbook;
@@ -32,32 +16,20 @@ use OCP\App\IAppManager;
 use OCP\IGroup;
 use OCP\IGroupManager;
 use OCP\IUser;
+use OCP\IUserManager;
 use OCP\IUserSession;
 use Sabre\CardDAV\Plugin;
 use Sabre\VObject\Reader;
 
 class Backend {
 
-	/** @var IActivityManager */
-	protected $activityManager;
-
-	/** @var IGroupManager */
-	protected $groupManager;
-
-	/** @var IUserSession */
-	protected $userSession;
-
-	/** @var IAppManager */
-	protected $appManager;
-
-	public function __construct(IActivityManager $activityManager,
-								IGroupManager $groupManager,
-								IUserSession $userSession,
-								IAppManager $appManager) {
-		$this->activityManager = $activityManager;
-		$this->groupManager = $groupManager;
-		$this->userSession = $userSession;
-		$this->appManager = $appManager;
+	public function __construct(
+		protected IActivityManager $activityManager,
+		protected IGroupManager $groupManager,
+		protected IUserSession $userSession,
+		protected IAppManager $appManager,
+		protected IUserManager $userManager,
+	) {
 	}
 
 	/**
@@ -103,7 +75,14 @@ class Backend {
 			return;
 		}
 
-		$principal = explode('/', $addressbookData['principaluri']);
+		$principalUri = $addressbookData['principaluri'];
+
+		// We are not interested in changes from the system addressbook
+		if ($principalUri === 'principals/system/system') {
+			return;
+		}
+
+		$principal = explode('/', $principalUri);
 		$owner = array_pop($principal);
 
 		$currentUser = $this->userSession->getUser();
@@ -115,8 +94,8 @@ class Backend {
 
 		$event = $this->activityManager->generateEvent();
 		$event->setApp('dav')
-			->setObject('addressbook', (int) $addressbookData['id'])
-			->setType('addressbook')
+			->setObject('addressbook', (int)$addressbookData['id'])
+			->setType('contacts')
 			->setAuthor($currentUser);
 
 		$changedVisibleInformation = array_intersect([
@@ -132,13 +111,18 @@ class Backend {
 		}
 
 		foreach ($users as $user) {
+			if ($action === Addressbook::SUBJECT_DELETE && !$this->userManager->userExists($user)) {
+				// Avoid creating addressbook_delete activities for deleted users
+				continue;
+			}
+
 			$event->setAffectedUser($user)
 				->setSubject(
 					$user === $currentUser ? $action . '_self' : $action,
 					[
 						'actor' => $currentUser,
 						'addressbook' => [
-							'id' => (int) $addressbookData['id'],
+							'id' => (int)$addressbookData['id'],
 							'uri' => $addressbookData['uri'],
 							'name' => $addressbookData['{DAV:}displayname'],
 						],
@@ -169,8 +153,8 @@ class Backend {
 
 		$event = $this->activityManager->generateEvent();
 		$event->setApp('dav')
-			->setObject('addressbook', (int) $addressbookData['id'])
-			->setType('addressbook')
+			->setObject('addressbook', (int)$addressbookData['id'])
+			->setType('contacts')
 			->setAuthor($currentUser);
 
 		foreach ($remove as $principal) {
@@ -194,7 +178,7 @@ class Backend {
 					$parameters = [
 						'actor' => $event->getAuthor(),
 						'addressbook' => [
-							'id' => (int) $addressbookData['id'],
+							'id' => (int)$addressbookData['id'],
 							'uri' => $addressbookData['uri'],
 							'name' => $addressbookData['{DAV:}displayname'],
 						],
@@ -223,7 +207,7 @@ class Backend {
 				$parameters = [
 					'actor' => $event->getAuthor(),
 					'addressbook' => [
-						'id' => (int) $addressbookData['id'],
+						'id' => (int)$addressbookData['id'],
 						'uri' => $addressbookData['uri'],
 						'name' => $addressbookData['{DAV:}displayname'],
 					],
@@ -265,7 +249,7 @@ class Backend {
 					$parameters = [
 						'actor' => $event->getAuthor(),
 						'addressbook' => [
-							'id' => (int) $addressbookData['id'],
+							'id' => (int)$addressbookData['id'],
 							'uri' => $addressbookData['uri'],
 							'name' => $addressbookData['{DAV:}displayname'],
 						],
@@ -292,7 +276,7 @@ class Backend {
 				$parameters = [
 					'actor' => $event->getAuthor(),
 					'addressbook' => [
-						'id' => (int) $addressbookData['id'],
+						'id' => (int)$addressbookData['id'],
 						'uri' => $addressbookData['uri'],
 						'name' => $addressbookData['{DAV:}displayname'],
 					],
@@ -370,7 +354,7 @@ class Backend {
 				[
 					'actor' => $event->getAuthor(),
 					'addressbook' => [
-						'id' => (int) $properties['id'],
+						'id' => (int)$properties['id'],
 						'uri' => $properties['uri'],
 						'name' => $properties['{DAV:}displayname'],
 					],
@@ -393,7 +377,14 @@ class Backend {
 			return;
 		}
 
-		$principal = explode('/', $addressbookData['principaluri']);
+		$principalUri = $addressbookData['principaluri'];
+
+		// We are not interested in changes from the system addressbook
+		if ($principalUri === 'principals/system/system') {
+			return;
+		}
+
+		$principal = explode('/', $principalUri);
 		$owner = array_pop($principal);
 
 		$currentUser = $this->userSession->getUser();
@@ -407,8 +398,8 @@ class Backend {
 
 		$event = $this->activityManager->generateEvent();
 		$event->setApp('dav')
-			->setObject('addressbook', (int) $addressbookData['id'])
-			->setType('card')
+			->setObject('addressbook', (int)$addressbookData['id'])
+			->setType('contacts')
 			->setAuthor($currentUser);
 
 		$users = $this->getUsersForShares($shares);
@@ -419,7 +410,7 @@ class Backend {
 			$params = [
 				'actor' => $event->getAuthor(),
 				'addressbook' => [
-					'id' => (int) $addressbookData['id'],
+					'id' => (int)$addressbookData['id'],
 					'uri' => $addressbookData['uri'],
 					'name' => $addressbookData['{DAV:}displayname'],
 				],
@@ -428,7 +419,6 @@ class Backend {
 					'name' => $card['name'],
 				],
 			];
-
 
 			$event->setAffectedUser($user)
 				->setSubject(
@@ -446,7 +436,7 @@ class Backend {
 	 */
 	protected function getCardNameAndId(array $cardData): array {
 		$vObject = Reader::read($cardData['carddata']);
-		return ['id' => (string) $vObject->UID, 'name' => (string) ($vObject->FN ?? '')];
+		return ['id' => (string)$vObject->UID, 'name' => (string)($vObject->FN ?? '')];
 	}
 
 	/**

@@ -2,23 +2,8 @@
 
 declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2019 Daniel Kesselberg <mail@danielkesselberg.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Collaboration\Resources;
@@ -27,23 +12,23 @@ use OC\Collaboration\Resources\ProviderManager;
 use OCA\Files\Collaboration\Resources\ResourceProvider;
 use OCP\AppFramework\QueryException;
 use OCP\Collaboration\Resources\IProviderManager;
-use OCP\IServerContainer;
+use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use Test\TestCase;
 
 class ProviderManagerTest extends TestCase {
-
-	/** @var IServerContainer */
+	/** @var ContainerInterface */
 	protected $serverContainer;
 	/** @var LoggerInterface */
 	protected $logger;
 	/** @var IProviderManager */
 	protected $providerManager;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->serverContainer = $this->createMock(IServerContainer::class);
+		$this->serverContainer = $this->createMock(ContainerInterface::class);
 		$this->logger = $this->createMock(LoggerInterface::class);
 
 		$this->providerManager = new class($this->serverContainer, $this->logger) extends ProviderManager {
@@ -64,7 +49,7 @@ class ProviderManagerTest extends TestCase {
 
 	public function testGetResourceProvidersValidProvider(): void {
 		$this->serverContainer->expects($this->once())
-			->method('query')
+			->method('get')
 			->with($this->equalTo(ResourceProvider::class))
 			->willReturn($this->createMock(ResourceProvider::class));
 
@@ -77,7 +62,7 @@ class ProviderManagerTest extends TestCase {
 
 	public function testGetResourceProvidersInvalidProvider(): void {
 		$this->serverContainer->expects($this->once())
-			->method('query')
+			->method('get')
 			->with($this->equalTo('InvalidResourceProvider'))
 			->willThrowException(new QueryException('A meaningful error message'));
 
@@ -91,14 +76,16 @@ class ProviderManagerTest extends TestCase {
 	}
 
 	public function testGetResourceProvidersValidAndInvalidProvider(): void {
-		$this->serverContainer->expects($this->at(0))
-			->method('query')
-			->with($this->equalTo('InvalidResourceProvider'))
-			->willThrowException(new QueryException('A meaningful error message'));
-		$this->serverContainer->expects($this->at(1))
-			->method('query')
-			->with($this->equalTo(ResourceProvider::class))
-			->willReturn($this->createMock(ResourceProvider::class));
+		$this->serverContainer->expects($this->exactly(2))
+			->method('get')
+			->willReturnCallback(function (string $service) {
+				if ($service === 'InvalidResourceProvider') {
+					throw new QueryException('A meaningful error message');
+				}
+				if ($service === ResourceProvider::class) {
+					return $this->createMock(ResourceProvider::class);
+				}
+			});
 
 		$this->logger->expects($this->once())
 			->method('error');

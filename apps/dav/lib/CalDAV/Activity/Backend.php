@@ -1,28 +1,10 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Joas Schilling <coding@schilljs.com>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Citharel <nextcloud@tcit.fr>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV\Activity;
 
 use OCA\DAV\CalDAV\Activity\Provider\Calendar;
@@ -34,6 +16,7 @@ use OCP\App\IAppManager;
 use OCP\IGroup;
 use OCP\IGroupManager;
 use OCP\IUser;
+use OCP\IUserManager;
 use OCP\IUserSession;
 use Sabre\VObject\Reader;
 
@@ -44,23 +27,13 @@ use Sabre\VObject\Reader;
  */
 class Backend {
 
-	/** @var IActivityManager */
-	protected $activityManager;
-
-	/** @var IGroupManager */
-	protected $groupManager;
-
-	/** @var IUserSession */
-	protected $userSession;
-
-	/** @var IAppManager */
-	protected $appManager;
-
-	public function __construct(IActivityManager $activityManager, IGroupManager $groupManager, IUserSession $userSession, IAppManager $appManager) {
-		$this->activityManager = $activityManager;
-		$this->groupManager = $groupManager;
-		$this->userSession = $userSession;
-		$this->appManager = $appManager;
+	public function __construct(
+		protected IActivityManager $activityManager,
+		protected IGroupManager $groupManager,
+		protected IUserSession $userSession,
+		protected IAppManager $appManager,
+		protected IUserManager $userManager,
+	) {
 	}
 
 	/**
@@ -119,7 +92,7 @@ class Backend {
 	 * @param array $calendarData
 	 * @param bool $publishStatus
 	 */
-	public function onCalendarPublication(array $calendarData, $publishStatus) {
+	public function onCalendarPublication(array $calendarData, bool $publishStatus): void {
 		$this->triggerCalendarActivity($publishStatus ? Calendar::SUBJECT_PUBLISH : Calendar::SUBJECT_UNPUBLISH, $calendarData);
 	}
 
@@ -148,7 +121,7 @@ class Backend {
 
 		$event = $this->activityManager->generateEvent();
 		$event->setApp('dav')
-			->setObject('calendar', (int) $calendarData['id'])
+			->setObject('calendar', (int)$calendarData['id'])
 			->setType('calendar')
 			->setAuthor($currentUser);
 
@@ -165,13 +138,18 @@ class Backend {
 		}
 
 		foreach ($users as $user) {
+			if ($action === Calendar::SUBJECT_DELETE && !$this->userManager->userExists($user)) {
+				// Avoid creating calendar_delete activities for deleted users
+				continue;
+			}
+
 			$event->setAffectedUser($user)
 				->setSubject(
 					$user === $currentUser ? $action . '_self' : $action,
 					[
 						'actor' => $currentUser,
 						'calendar' => [
-							'id' => (int) $calendarData['id'],
+							'id' => (int)$calendarData['id'],
 							'uri' => $calendarData['uri'],
 							'name' => $calendarData['{DAV:}displayname'],
 						],
@@ -202,7 +180,7 @@ class Backend {
 
 		$event = $this->activityManager->generateEvent();
 		$event->setApp('dav')
-			->setObject('calendar', (int) $calendarData['id'])
+			->setObject('calendar', (int)$calendarData['id'])
 			->setType('calendar')
 			->setAuthor($currentUser);
 
@@ -227,7 +205,7 @@ class Backend {
 					$parameters = [
 						'actor' => $event->getAuthor(),
 						'calendar' => [
-							'id' => (int) $calendarData['id'],
+							'id' => (int)$calendarData['id'],
 							'uri' => $calendarData['uri'],
 							'name' => $calendarData['{DAV:}displayname'],
 						],
@@ -256,7 +234,7 @@ class Backend {
 				$parameters = [
 					'actor' => $event->getAuthor(),
 					'calendar' => [
-						'id' => (int) $calendarData['id'],
+						'id' => (int)$calendarData['id'],
 						'uri' => $calendarData['uri'],
 						'name' => $calendarData['{DAV:}displayname'],
 					],
@@ -298,7 +276,7 @@ class Backend {
 					$parameters = [
 						'actor' => $event->getAuthor(),
 						'calendar' => [
-							'id' => (int) $calendarData['id'],
+							'id' => (int)$calendarData['id'],
 							'uri' => $calendarData['uri'],
 							'name' => $calendarData['{DAV:}displayname'],
 						],
@@ -325,7 +303,7 @@ class Backend {
 				$parameters = [
 					'actor' => $event->getAuthor(),
 					'calendar' => [
-						'id' => (int) $calendarData['id'],
+						'id' => (int)$calendarData['id'],
 						'uri' => $calendarData['uri'],
 						'name' => $calendarData['{DAV:}displayname'],
 					],
@@ -403,7 +381,7 @@ class Backend {
 				[
 					'actor' => $event->getAuthor(),
 					'calendar' => [
-						'id' => (int) $properties['id'],
+						'id' => (int)$properties['id'],
 						'uri' => $properties['uri'],
 						'name' => $properties['{DAV:}displayname'],
 					],
@@ -438,17 +416,22 @@ class Backend {
 
 		$classification = $objectData['classification'] ?? CalDavBackend::CLASSIFICATION_PUBLIC;
 		$object = $this->getObjectNameAndType($objectData);
+
+		if (!$object) {
+			return;
+		}
+
 		$action = $action . '_' . $object['type'];
 
-		if ($object['type'] === 'todo' && strpos($action, Event::SUBJECT_OBJECT_UPDATE) === 0 && $object['status'] === 'COMPLETED') {
+		if ($object['type'] === 'todo' && str_starts_with($action, Event::SUBJECT_OBJECT_UPDATE) && $object['status'] === 'COMPLETED') {
 			$action .= '_completed';
-		} elseif ($object['type'] === 'todo' && strpos($action, Event::SUBJECT_OBJECT_UPDATE) === 0 && $object['status'] === 'NEEDS-ACTION') {
+		} elseif ($object['type'] === 'todo' && str_starts_with($action, Event::SUBJECT_OBJECT_UPDATE) && $object['status'] === 'NEEDS-ACTION') {
 			$action .= '_needs_action';
 		}
 
 		$event = $this->activityManager->generateEvent();
 		$event->setApp('dav')
-			->setObject('calendar', (int) $calendarData['id'])
+			->setObject('calendar', (int)$calendarData['id'])
 			->setType($object['type'] === 'event' ? 'calendar_event' : 'calendar_todo')
 			->setAuthor($currentUser);
 
@@ -465,7 +448,7 @@ class Backend {
 			$params = [
 				'actor' => $event->getAuthor(),
 				'calendar' => [
-					'id' => (int) $calendarData['id'],
+					'id' => (int)$calendarData['id'],
 					'uri' => $calendarData['uri'],
 					'name' => $calendarData['{DAV:}displayname'],
 				],
@@ -476,12 +459,11 @@ class Backend {
 				],
 			];
 
-			if ($object['type'] === 'event' && strpos($action, Event::SUBJECT_OBJECT_DELETE) === false && $this->appManager->isEnabledForUser('calendar')) {
+			if ($object['type'] === 'event' && !str_contains($action, Event::SUBJECT_OBJECT_DELETE) && $this->appManager->isEnabledForUser('calendar')) {
 				$params['object']['link']['object_uri'] = $objectData['uri'];
 				$params['object']['link']['calendar_uri'] = $calendarData['uri'];
 				$params['object']['link']['owner'] = $owner;
 			}
-
 
 			$event->setAffectedUser($user)
 				->setSubject(
@@ -494,14 +476,112 @@ class Backend {
 	}
 
 	/**
+	 * Creates activities when a calendar object was moved
+	 */
+	public function onMovedCalendarObject(array $sourceCalendarData, array $targetCalendarData, array $sourceShares, array $targetShares, array $objectData): void {
+		if (!isset($targetCalendarData['principaluri'])) {
+			return;
+		}
+
+		$sourcePrincipal = explode('/', $sourceCalendarData['principaluri']);
+		$sourceOwner = array_pop($sourcePrincipal);
+
+		$targetPrincipal = explode('/', $targetCalendarData['principaluri']);
+		$targetOwner = array_pop($targetPrincipal);
+
+		if ($sourceOwner !== $targetOwner) {
+			$this->onTouchCalendarObject(
+				Event::SUBJECT_OBJECT_DELETE,
+				$sourceCalendarData,
+				$sourceShares,
+				$objectData
+			);
+			$this->onTouchCalendarObject(
+				Event::SUBJECT_OBJECT_ADD,
+				$targetCalendarData,
+				$targetShares,
+				$objectData
+			);
+			return;
+		}
+
+		$currentUser = $this->userSession->getUser();
+		if ($currentUser instanceof IUser) {
+			$currentUser = $currentUser->getUID();
+		} else {
+			$currentUser = $targetOwner;
+		}
+
+		$classification = $objectData['classification'] ?? CalDavBackend::CLASSIFICATION_PUBLIC;
+		$object = $this->getObjectNameAndType($objectData);
+
+		if (!$object) {
+			return;
+		}
+
+		$event = $this->activityManager->generateEvent();
+		$event->setApp('dav')
+			->setObject('calendar', (int)$targetCalendarData['id'])
+			->setType($object['type'] === 'event' ? 'calendar_event' : 'calendar_todo')
+			->setAuthor($currentUser);
+
+		$users = array_intersect(
+			$this->getUsersForShares($sourceShares),
+			$this->getUsersForShares($targetShares),
+		);
+		$users[] = $targetOwner;
+
+		// Users for share can return the owner itself if the calendar is published
+		foreach (array_unique($users) as $user) {
+			if ($classification === CalDavBackend::CLASSIFICATION_PRIVATE && $user !== $targetOwner) {
+				// Private events are only shown to the owner
+				continue;
+			}
+
+			$params = [
+				'actor' => $event->getAuthor(),
+				'sourceCalendar' => [
+					'id' => (int)$sourceCalendarData['id'],
+					'uri' => $sourceCalendarData['uri'],
+					'name' => $sourceCalendarData['{DAV:}displayname'],
+				],
+				'targetCalendar' => [
+					'id' => (int)$targetCalendarData['id'],
+					'uri' => $targetCalendarData['uri'],
+					'name' => $targetCalendarData['{DAV:}displayname'],
+				],
+				'object' => [
+					'id' => $object['id'],
+					'name' => $classification === CalDavBackend::CLASSIFICATION_CONFIDENTIAL && $user !== $targetOwner ? 'Busy' : $object['name'],
+					'classified' => $classification === CalDavBackend::CLASSIFICATION_CONFIDENTIAL && $user !== $targetOwner,
+				],
+			];
+
+			if ($object['type'] === 'event' && $this->appManager->isEnabledForUser('calendar')) {
+				$params['object']['link']['object_uri'] = $objectData['uri'];
+				$params['object']['link']['calendar_uri'] = $targetCalendarData['uri'];
+				$params['object']['link']['owner'] = $targetOwner;
+			}
+
+			$event->setAffectedUser($user)
+				->setSubject(
+					$user === $currentUser ? Event::SUBJECT_OBJECT_MOVE . '_' . $object['type'] . '_self' : Event::SUBJECT_OBJECT_MOVE . '_' . $object['type'],
+					$params
+				);
+
+			$this->activityManager->publish($event);
+		}
+	}
+
+	/**
 	 * @param array $objectData
-	 * @return string[]|bool
+	 * @return string[]|false
 	 */
 	protected function getObjectNameAndType(array $objectData) {
 		$vObject = Reader::read($objectData['calendardata']);
 		$component = $componentType = null;
 		foreach ($vObject->getComponents() as $component) {
-			if (in_array($component->name, ['VEVENT', 'VTODO'])) {
+			if (in_array($component->name, ['VEVENT', 'VTODO'], true)) {
 				$componentType = $component->name;
 				break;
 			}
@@ -513,9 +593,9 @@ class Backend {
 		}
 
 		if ($componentType === 'VEVENT') {
-			return ['id' => (string) $component->UID, 'name' => (string) $component->SUMMARY, 'type' => 'event'];
+			return ['id' => (string)$component->UID, 'name' => (string)$component->SUMMARY, 'type' => 'event'];
 		}
-		return ['id' => (string) $component->UID, 'name' => (string) $component->SUMMARY, 'type' => 'todo', 'status' => (string) $component->STATUS];
+		return ['id' => (string)$component->UID, 'name' => (string)$component->SUMMARY, 'type' => 'todo', 'status' => (string)$component->STATUS];
 	}
 
 	/**

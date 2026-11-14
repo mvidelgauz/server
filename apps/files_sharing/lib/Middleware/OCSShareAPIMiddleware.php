@@ -1,27 +1,12 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016 Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Sharing\Middleware;
 
 use OCA\Files_Sharing\Controller\ShareAPIController;
@@ -33,24 +18,17 @@ use OCP\IL10N;
 use OCP\Share\IManager;
 
 class OCSShareAPIMiddleware extends Middleware {
-	/** @var IManager */
-	private $shareManager;
-	/** @var IL10N */
-	private $l;
-
-	public function __construct(IManager $shareManager,
-								IL10N $l) {
-		$this->shareManager = $shareManager;
-		$this->l = $l;
+	public function __construct(
+		private readonly IManager $shareManager,
+		private readonly IL10N $l,
+	) {
 	}
 
 	/**
-	 * @param Controller $controller
-	 * @param string $methodName
-	 *
 	 * @throws OCSNotFoundException
 	 */
-	public function beforeController($controller, $methodName) {
+	#[\Override]
+	public function beforeController(Controller $controller, string $methodName): void {
 		if ($controller instanceof ShareAPIController) {
 			if (!$this->shareManager->shareApiEnabled()) {
 				throw new OCSNotFoundException($this->l->t('Share API is disabled'));
@@ -58,13 +36,8 @@ class OCSShareAPIMiddleware extends Middleware {
 		}
 	}
 
-	/**
-	 * @param Controller $controller
-	 * @param string $methodName
-	 * @param Response $response
-	 * @return Response
-	 */
-	public function afterController($controller, $methodName, Response $response) {
+	#[\Override]
+	public function afterController(Controller $controller, string $methodName, Response $response): Response {
 		if ($controller instanceof ShareAPIController) {
 			/** @var ShareAPIController $controller */
 			$controller->cleanup();

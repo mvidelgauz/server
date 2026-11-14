@@ -1,27 +1,12 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Tests\unit\Connector\Sabre\RequestTest;
 
 use OCP\AppFramework\Http;
@@ -30,13 +15,13 @@ use OCP\Lock\ILockingProvider;
 /**
  * Class DownloadTest
  *
- * @group DB
  *
  * @package OCA\DAV\Tests\unit\Connector\Sabre\RequestTest
  */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class DownloadTest extends RequestTestCase {
-	public function testDownload() {
-		$user = $this->getUniqueID();
+	public function testDownload(): void {
+		$user = self::getUniqueID();
 		$view = $this->setupUser($user, 'pass');
 
 		$view->file_put_contents('foo.txt', 'bar');
@@ -46,8 +31,8 @@ class DownloadTest extends RequestTestCase {
 		$this->assertEquals(stream_get_contents($response->getBody()), 'bar');
 	}
 
-	public function testDownloadWriteLocked() {
-		$user = $this->getUniqueID();
+	public function testDownloadWriteLocked(): void {
+		$user = self::getUniqueID();
 		$view = $this->setupUser($user, 'pass');
 
 		$view->file_put_contents('foo.txt', 'bar');
@@ -58,8 +43,8 @@ class DownloadTest extends RequestTestCase {
 		$this->assertEquals(Http::STATUS_LOCKED, $result->getStatus());
 	}
 
-	public function testDownloadReadLocked() {
-		$user = $this->getUniqueID();
+	public function testDownloadReadLocked(): void {
+		$user = self::getUniqueID();
 		$view = $this->setupUser($user, 'pass');
 
 		$view->file_put_contents('foo.txt', 'bar');

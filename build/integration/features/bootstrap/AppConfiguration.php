@@ -1,36 +1,20 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Joas Schilling <coding@schilljs.com>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Calviño Sánchez <danxuliu@gmail.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Sergio Bertolin <sbertolin@solidgear.es>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 use Behat\Behat\Hook\Scope\AfterScenarioScope;
 use Behat\Behat\Hook\Scope\BeforeScenarioScope;
+use Behat\Gherkin\Node\TableNode;
+use Behat\Hook\AfterScenario;
+use Behat\Hook\BeforeScenario;
+use Behat\Step\Given;
 use PHPUnit\Framework\Assert;
 use Psr\Http\Message\ResponseInterface;
 
-require __DIR__ . '/../../vendor/autoload.php';
+require __DIR__ . '/autoload.php';
 
 trait AppConfiguration {
 	/** @var string */
@@ -39,17 +23,17 @@ trait AppConfiguration {
 	/** @var ResponseInterface */
 	private $response = null;
 
-	abstract public function sendingTo($verb, $url);
-	abstract public function sendingToWith($verb, $url, $body);
+	abstract public function sendingTo(string $verb, string $url);
+	abstract public function sendingToWith(string $verb, string $url, ?TableNode $body);
 	abstract public function theOCSStatusCodeShouldBe($statusCode);
 	abstract public function theHTTPStatusCodeShouldBe($statusCode);
 
 	/**
-	 * @Given /^parameter "([^"]*)" of app "([^"]*)" is set to "([^"]*)"$/
 	 * @param string $parameter
 	 * @param string $app
 	 * @param string $value
 	 */
+	#[Given('/^parameter "([^"]*)" of app "([^"]*)" is set to "([^"]*)"$/')]
 	public function serverParameterIsSetTo($parameter, $app, $value) {
 		$user = $this->currentUser;
 		$this->currentUser = 'admin';
@@ -96,21 +80,20 @@ trait AppConfiguration {
 		$this->sendingTo('get', '/cloud/apps?filter=enabled');
 		$this->theHTTPStatusCodeShouldBe('200');
 		if ($enabled) {
-			Assert::assertContains('testing', $this->response->getBody()->getContents());
+			Assert::assertStringContainsString('testing', $this->response->getBody()->getContents());
 		} else {
-			Assert::assertNotContains('testing', $this->response->getBody()->getContents());
+			Assert::assertStringNotContainsString('testing', $this->response->getBody()->getContents());
 		}
 	}
 
 	abstract protected function resetAppConfigs();
 
 	/**
-	 * @BeforeScenario
-	 *
 	 * Enable the testing app before the first scenario of the feature and
 	 * reset the configs before each scenario
 	 * @param BeforeScenarioScope $event
 	 */
+	#[BeforeScenario]
 	public function prepareParameters(BeforeScenarioScope $event) {
 		$user = $this->currentUser;
 		$this->currentUser = 'admin';
@@ -126,11 +109,10 @@ trait AppConfiguration {
 	}
 
 	/**
-	 * @AfterScenario
-	 *
 	 * Reset the values after the last scenario of the feature and disable the testing app
 	 * @param AfterScenarioScope $event
 	 */
+	#[AfterScenario]
 	public function undoChangingParameters(AfterScenarioScope $event) {
 		$scenarios = $event->getFeature()->getScenarios();
 		if ($event->getScenario() === end($scenarios)) {

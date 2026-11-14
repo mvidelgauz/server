@@ -1,43 +1,24 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Joas Schilling <coding@schilljs.com>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Activity;
 
 use OCP\Activity\IEvent;
 use OCP\Activity\IEventMerger;
 use OCP\IL10N;
+use OCP\L10N\IFactory;
 
 class EventMerger implements IEventMerger {
+	private readonly IL10N $l10n;
 
-	/** @var IL10N */
-	protected $l10n;
-
-	/**
-	 * @param IL10N $l10n
-	 */
-	public function __construct(IL10N $l10n) {
-		$this->l10n = $l10n;
+	public function __construct(
+		IFactory $factory,
+	) {
+		$this->l10n = $factory->get('lib');
 	}
 
 	/**
@@ -68,7 +49,8 @@ class EventMerger implements IEventMerger {
 	 * @param IEvent|null $previousEvent
 	 * @return IEvent
 	 */
-	public function mergeEvents($mergeParameter, IEvent $event, IEvent $previousEvent = null) {
+	#[\Override]
+	public function mergeEvents($mergeParameter, IEvent $event, ?IEvent $previousEvent = null) {
 		// No second event => can not combine
 		if (!$previousEvent instanceof IEvent) {
 			return $event;

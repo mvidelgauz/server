@@ -1,149 +1,132 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Piotr M <mrow4a@yahoo.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author tbartenstein <tbartenstein@users.noreply.github.com>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files;
 
+use OC\Files\Cache\CacheEntry;
+use OC\Files\Mount\HomeMountPoint;
+use OCP\Constants;
 use OCP\Files\Cache\ICacheEntry;
 use OCP\Files\Mount\IMountPoint;
+use OCP\Files\Mount\ISharedMountPoint;
 use OCP\IUser;
 
+/**
+ * @template-implements \ArrayAccess<string,mixed>
+ */
 class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
-	/**
-	 * @var array $data
-	 */
-	private $data;
-
-	/**
-	 * @var string $path
-	 */
-	private $path;
-
-	/**
-	 * @var \OC\Files\Storage\Storage $storage
-	 */
-	private $storage;
-
-	/**
-	 * @var string $internalPath
-	 */
-	private $internalPath;
-
 	/**
 	 * @var \OCP\Files\Mount\IMountPoint
 	 */
 	private $mount;
 
 	/**
-	 * @var IUser
-	 */
-	private $owner;
-
-	/**
 	 * @var string[]
 	 */
-	private $childEtags = [];
+	private array $childEtags = [];
 
 	/**
 	 * @var IMountPoint[]
 	 */
-	private $subMounts = [];
+	private array $subMounts = [];
 
-	private $subMountsUsed = false;
+	private bool $subMountsUsed = false;
 
 	/**
 	 * The size of the file/folder without any sub mount
-	 *
-	 * @var int
 	 */
-	private $rawSize = 0;
+	private int|float $rawSize = 0;
 
 	/**
-	 * @param string|boolean $path
+	 * @param string $path
 	 * @param Storage\Storage $storage
 	 * @param string $internalPath
 	 * @param array|ICacheEntry $data
-	 * @param \OCP\Files\Mount\IMountPoint $mount
-	 * @param \OCP\IUser|null $owner
+	 * @param IMountPoint $mount
+	 * @param ?IUser $owner
 	 */
-	public function __construct($path, $storage, $internalPath, $data, $mount, $owner = null) {
-		$this->path = $path;
-		$this->storage = $storage;
-		$this->internalPath = $internalPath;
-		$this->data = $data;
+	public function __construct(
+		private $path,
+		private $storage,
+		private $internalPath,
+		private array|ICacheEntry $data,
+		$mount,
+		private ?IUser $owner = null,
+	) {
 		$this->mount = $mount;
-		$this->owner = $owner;
-		$this->rawSize = $this->data['size'] ?? 0;
+		if (self::hasPlaintextSize($this->data)) {
+			$this->rawSize = $this->data['unencrypted_size'];
+		} else {
+			$this->rawSize = $this->data['size'] ?? 0;
+		}
 	}
 
-	public function offsetSet($offset, $value) {
+	/**
+	 * Whether `unencrypted_size` holds the plaintext size of a cache entry.
+	 *
+	 * Server side encryption only marks files as encrypted, so on a folder the `encrypted`
+	 * flag comes from end-to-end encryption, which does not maintain `unencrypted_size`.
+	 * There the propagated value is only meaningful once a child entry contributed one.
+	 *
+	 * @param array|ICacheEntry $data
+	 */
+	private static function hasPlaintextSize($data): bool {
+		if (empty($data['encrypted']) || !isset($data['unencrypted_size'])) {
+			return false;
+		}
+
+		if (($data['mimetype'] ?? null) === self::MIMETYPE_FOLDER) {
+			return $data['unencrypted_size'] > 0;
+		}
+
+		return true;
+	}
+
+	#[\Override]
+	public function offsetSet($offset, $value): void {
+		if (is_null($offset)) {
+			throw new \TypeError('Null offset not supported');
+		}
 		$this->data[$offset] = $value;
 	}
 
-	public function offsetExists($offset) {
+	#[\Override]
+	public function offsetExists($offset): bool {
 		return isset($this->data[$offset]);
 	}
 
-	public function offsetUnset($offset) {
+	#[\Override]
+	public function offsetUnset($offset): void {
 		unset($this->data[$offset]);
 	}
 
-	public function offsetGet($offset) {
-		if ($offset === 'type') {
-			return $this->getType();
-		} elseif ($offset === 'etag') {
-			return $this->getEtag();
-		} elseif ($offset === 'size') {
-			return $this->getSize();
-		} elseif ($offset === 'mtime') {
-			return $this->getMTime();
-		} elseif ($offset === 'permissions') {
-			return $this->getPermissions();
-		} elseif (isset($this->data[$offset])) {
-			return $this->data[$offset];
-		} else {
-			return null;
-		}
+	#[\Override]
+	public function offsetGet(mixed $offset): mixed {
+		return match ($offset) {
+			'path' => $this->getPath(),
+			'type' => $this->getType(),
+			'etag' => $this->getEtag(),
+			'size' => $this->getSize(),
+			'mtime' => $this->getMTime(),
+			'permissions' => $this->getPermissions(),
+			default => $this->data[$offset] ?? null,
+		};
 	}
 
 	/**
 	 * @return string
 	 */
+	#[\Override]
 	public function getPath() {
 		return $this->path;
 	}
 
-	/**
-	 * @return \OCP\Files\Storage
-	 */
+	#[\Override]
 	public function getStorage() {
 		return $this->storage;
 	}
@@ -151,6 +134,7 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	/**
 	 * @return string
 	 */
+	#[\Override]
 	public function getInternalPath() {
 		return $this->internalPath;
 	}
@@ -160,20 +144,20 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	 *
 	 * @return int|null
 	 */
+	#[\Override]
 	public function getId() {
-		return isset($this->data['fileid']) ? (int)  $this->data['fileid'] : null;
+		return isset($this->data['fileid']) ? (int)$this->data['fileid'] : null;
+	}
+
+	#[\Override]
+	public function getMimetype(): string {
+		return $this->data['mimetype'] ?? 'application/octet-stream';
 	}
 
 	/**
 	 * @return string
 	 */
-	public function getMimetype() {
-		return $this->data['mimetype'];
-	}
-
-	/**
-	 * @return string
-	 */
+	#[\Override]
 	public function getMimePart() {
 		return $this->data['mimepart'];
 	}
@@ -181,15 +165,19 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	/**
 	 * @return string
 	 */
+	#[\Override]
 	public function getName() {
-		return isset($this->data['name']) ? $this->data['name'] : basename($this->getPath());
+		return empty($this->data['name'])
+			? basename($this->getPath())
+			: $this->data['name'];
 	}
 
 	/**
 	 * @return string
 	 */
+	#[\Override]
 	public function getEtag() {
-		$this->updateEntryfromSubMounts();
+		$this->updateEntryFromSubMounts();
 		if (count($this->childEtags) > 0) {
 			$combinedEtag = $this->data['etag'] . '::' . implode('::', $this->childEtags);
 			return md5($combinedEtag);
@@ -199,12 +187,19 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	}
 
 	/**
-	 * @return int
+	 * @param bool $includeMounts
+	 * @return int|float
 	 */
+	#[\Override]
 	public function getSize($includeMounts = true) {
 		if ($includeMounts) {
-			$this->updateEntryfromSubMounts();
-			return isset($this->data['size']) ? 0 + $this->data['size'] : 0;
+			$this->updateEntryFromSubMounts();
+
+			if (self::hasPlaintextSize($this->data)) {
+				return $this->data['unencrypted_size'];
+			} else {
+				return isset($this->data['size']) ? 0 + $this->data['size'] : 0;
+			}
 		} else {
 			return $this->rawSize;
 		}
@@ -213,50 +208,53 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	/**
 	 * @return int
 	 */
+	#[\Override]
 	public function getMTime() {
-		$this->updateEntryfromSubMounts();
-		return (int) $this->data['mtime'];
+		$this->updateEntryFromSubMounts();
+		return (int)$this->data['mtime'];
 	}
 
 	/**
 	 * @return bool
 	 */
+	#[\Override]
 	public function isEncrypted() {
-		return $this->data['encrypted'];
+		return $this->data['encrypted'] ?? false;
 	}
 
 	/**
-	 * Return the currently version used for the HMAC in the encryption app
-	 *
-	 * @return int
+	 * Return the current version used for the HMAC in the encryption app
 	 */
-	public function getEncryptedVersion() {
-		return isset($this->data['encryptedVersion']) ? (int) $this->data['encryptedVersion'] : 1;
+	public function getEncryptedVersion(): int {
+		return isset($this->data['encryptedVersion']) ? (int)$this->data['encryptedVersion'] : 1;
 	}
 
 	/**
 	 * @return int
 	 */
+	#[\Override]
 	public function getPermissions() {
-		$perms = (int) $this->data['permissions'];
-		if (\OCP\Util::isSharingDisabledForUser() || ($this->isShared() && !\OC\Share\Share::isResharingAllowed())) {
-			$perms = $perms & ~\OCP\Constants::PERMISSION_SHARE;
-		}
-		return $perms;
+		return (int)$this->data['permissions'];
 	}
 
 	/**
 	 * @return string \OCP\Files\FileInfo::TYPE_FILE|\OCP\Files\FileInfo::TYPE_FOLDER
 	 */
+	#[\Override]
 	public function getType() {
 		if (!isset($this->data['type'])) {
-			$this->data['type'] = ($this->getMimetype() === 'httpd/unix-directory') ? self::TYPE_FOLDER : self::TYPE_FILE;
+			$this->data['type'] = ($this->getMimetype() === self::MIMETYPE_FOLDER) ? self::TYPE_FOLDER : self::TYPE_FILE;
 		}
 		return $this->data['type'];
 	}
 
-	public function getData() {
-		return $this->data;
+	#[\Override]
+	public function getData(): ICacheEntry {
+		if ($this->data instanceof ICacheEntry) {
+			return $this->data;
+		} else {
+			return new CacheEntry($this->data);
+		}
 	}
 
 	/**
@@ -270,15 +268,17 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	/**
 	 * @return bool
 	 */
+	#[\Override]
 	public function isReadable() {
-		return $this->checkPermissions(\OCP\Constants::PERMISSION_READ);
+		return $this->checkPermissions(Constants::PERMISSION_READ);
 	}
 
 	/**
 	 * @return bool
 	 */
+	#[\Override]
 	public function isUpdateable() {
-		return $this->checkPermissions(\OCP\Constants::PERMISSION_UPDATE);
+		return $this->checkPermissions(Constants::PERMISSION_UPDATE);
 	}
 
 	/**
@@ -286,51 +286,36 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	 *
 	 * @return bool
 	 */
+	#[\Override]
 	public function isCreatable() {
-		return $this->checkPermissions(\OCP\Constants::PERMISSION_CREATE);
+		return $this->checkPermissions(Constants::PERMISSION_CREATE);
 	}
 
 	/**
 	 * @return bool
 	 */
+	#[\Override]
 	public function isDeletable() {
-		return $this->checkPermissions(\OCP\Constants::PERMISSION_DELETE);
+		return $this->checkPermissions(Constants::PERMISSION_DELETE);
 	}
 
 	/**
 	 * @return bool
 	 */
+	#[\Override]
 	public function isShareable() {
-		return $this->checkPermissions(\OCP\Constants::PERMISSION_SHARE);
+		return $this->checkPermissions(Constants::PERMISSION_SHARE);
 	}
 
-	/**
-	 * Check if a file or folder is shared
-	 *
-	 * @return bool
-	 */
-	public function isShared() {
-		$sid = $this->getStorage()->getId();
-		if (!is_null($sid)) {
-			$sid = explode(':', $sid);
-			return ($sid[0] === 'shared');
-		}
-
-		return false;
+	#[\Override]
+	public function isShared(): bool {
+		return $this->mount instanceof ISharedMountPoint;
 	}
 
+	#[\Override]
 	public function isMounted() {
-		$storage = $this->getStorage();
-		if ($storage->instanceOfStorage('\OCP\Files\IHomeStorage')) {
-			return false;
-		}
-		$sid = $storage->getId();
-		if (!is_null($sid)) {
-			$sid = explode(':', $sid);
-			return ($sid[0] !== 'home' and $sid[0] !== 'shared');
-		}
-
-		return false;
+		$isHome = $this->mount instanceof HomeMountPoint;
+		return !$isHome && !$this->isShared();
 	}
 
 	/**
@@ -338,6 +323,7 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	 *
 	 * @return \OCP\Files\Mount\IMountPoint
 	 */
+	#[\Override]
 	public function getMountPoint() {
 		return $this->mount;
 	}
@@ -345,8 +331,9 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	/**
 	 * Get the owner of the file
 	 *
-	 * @return \OCP\IUser
+	 * @return ?IUser
 	 */
+	#[\Override]
 	public function getOwner() {
 		return $this->owner;
 	}
@@ -358,7 +345,7 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 		$this->subMounts = $mounts;
 	}
 
-	private function updateEntryfromSubMounts() {
+	private function updateEntryFromSubMounts(): void {
 		if ($this->subMountsUsed) {
 			return;
 		}
@@ -382,14 +369,26 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	 * @param string $entryPath full path of the child entry
 	 */
 	public function addSubEntry($data, $entryPath) {
-		$this->data['size'] += isset($data['size']) ? $data['size'] : 0;
+		if (!$data) {
+			return;
+		}
+		$hasUnencryptedSize = self::hasPlaintextSize($data);
+		if ($hasUnencryptedSize) {
+			$subSize = $data['unencrypted_size'];
+		} else {
+			$subSize = $data['size'] ?: 0;
+		}
+		$this->data['size'] += $subSize;
+		if ($hasUnencryptedSize) {
+			$this->data['unencrypted_size'] += $subSize;
+		}
 		if (isset($data['mtime'])) {
 			$this->data['mtime'] = max($this->data['mtime'], $data['mtime']);
 		}
 		if (isset($data['etag'])) {
 			// prefix the etag with the relative path of the subentry to propagate etag on mount moves
 			$relativeEntryPath = substr($entryPath, strlen($this->getPath()));
-			// attach the permissions to propagate etag on permision changes of submounts
+			// attach the permissions to propagate etag on permission changes of submounts
 			$permissions = isset($data['permissions']) ? $data['permissions'] : 0;
 			$this->childEtags[] = $relativeEntryPath . '/' . $data['etag'] . $permissions;
 		}
@@ -398,19 +397,42 @@ class FileInfo implements \OCP\Files\FileInfo, \ArrayAccess {
 	/**
 	 * @inheritdoc
 	 */
+	#[\Override]
 	public function getChecksum() {
-		return $this->data['checksum'];
+		return $this->data['checksum'] ?? '';
 	}
 
+	#[\Override]
 	public function getExtension(): string {
 		return pathinfo($this->getName(), PATHINFO_EXTENSION);
 	}
 
+	#[\Override]
 	public function getCreationTime(): int {
-		return (int) $this->data['creation_time'];
+		return (int)$this->data['creation_time'];
 	}
 
+	#[\Override]
 	public function getUploadTime(): int {
-		return (int) $this->data['upload_time'];
+		return (int)$this->data['upload_time'];
+	}
+
+	#[\Override]
+	public function getLastActivity(): int {
+		return max($this->getUploadTime(), $this->getMTime());
+	}
+
+	#[\Override]
+	public function getParentId(): int {
+		return $this->data['parent'] ?? -1;
+	}
+
+	/**
+	 * @inheritDoc
+	 * @return array<string, int|string|bool|float|string[]|int[]>
+	 */
+	#[\Override]
+	public function getMetadata(): array {
+		return $this->data['metadata'] ?? [];
 	}
 }

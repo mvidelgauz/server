@@ -1,32 +1,12 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_Sharing\Middleware;
 
 use OCA\Files_Sharing\Controller\ExternalSharesController;
@@ -50,32 +30,14 @@ use OCP\Share\IManager;
  */
 class SharingCheckMiddleware extends Middleware {
 
-	/** @var string */
-	protected $appName;
-	/** @var IConfig */
-	protected $config;
-	/** @var IAppManager */
-	protected $appManager;
-	/** @var IControllerMethodReflector */
-	protected $reflector;
-	/** @var IManager */
-	protected $shareManager;
-	/** @var IRequest */
-	protected $request;
-
-	public function __construct(string $appName,
-								IConfig $config,
-								IAppManager $appManager,
-								IControllerMethodReflector $reflector,
-								IManager $shareManager,
-								IRequest $request
-								) {
-		$this->appName = $appName;
-		$this->config = $config;
-		$this->appManager = $appManager;
-		$this->reflector = $reflector;
-		$this->shareManager = $shareManager;
-		$this->request = $request;
+	public function __construct(
+		protected string $appName,
+		protected IConfig $config,
+		protected IAppManager $appManager,
+		protected IControllerMethodReflector $reflector,
+		protected IManager $shareManager,
+		protected IRequest $request,
+	) {
 	}
 
 	/**
@@ -86,13 +48,14 @@ class SharingCheckMiddleware extends Middleware {
 	 * @throws NotFoundException
 	 * @throws S2SException
 	 */
-	public function beforeController($controller, $methodName): void {
+	#[\Override]
+	public function beforeController(Controller $controller, string $methodName): void {
 		if (!$this->isSharingEnabled()) {
 			throw new NotFoundException('Sharing is disabled.');
 		}
 
-		if ($controller instanceof ExternalSharesController &&
-			!$this->externalSharesChecks()) {
+		if ($controller instanceof ExternalSharesController
+			&& !$this->externalSharesChecks()) {
 			throw new S2SException('Federated sharing not allowed');
 		}
 	}
@@ -106,7 +69,8 @@ class SharingCheckMiddleware extends Middleware {
 	 * @return Response
 	 * @throws \Exception
 	 */
-	public function afterException($controller, $methodName, \Exception $exception): Response {
+	#[\Override]
+	public function afterException(Controller $controller, string $methodName, \Exception $exception): Response {
 		if (is_a($exception, NotFoundException::class)) {
 			return new NotFoundResponse();
 		}
@@ -123,13 +87,13 @@ class SharingCheckMiddleware extends Middleware {
 	 * @return bool
 	 */
 	private function externalSharesChecks(): bool {
-		if (!$this->reflector->hasAnnotation('NoIncomingFederatedSharingRequired') &&
-			$this->config->getAppValue('files_sharing', 'incoming_server2server_share_enabled', 'yes') !== 'yes') {
+		if (!$this->reflector->hasAnnotation('NoIncomingFederatedSharingRequired')
+			&& $this->config->getAppValue('files_sharing', 'incoming_server2server_share_enabled', 'yes') !== 'yes') {
 			return false;
 		}
 
-		if (!$this->reflector->hasAnnotation('NoOutgoingFederatedSharingRequired') &&
-			$this->config->getAppValue('files_sharing', 'outgoing_server2server_share_enabled', 'yes') !== 'yes') {
+		if (!$this->reflector->hasAnnotation('NoOutgoingFederatedSharingRequired')
+			&& $this->config->getAppValue('files_sharing', 'outgoing_server2server_share_enabled', 'yes') !== 'yes') {
 			return false;
 		}
 

@@ -1,51 +1,78 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Tests\unit\CardDAV;
 
 use OCA\DAV\CardDAV\CardDavBackend;
 use OCA\DAV\CardDAV\ContactsManager;
+use OCA\DAV\Db\PropertyMapper;
 use OCP\Contacts\IManager;
+use OCP\IAddressBook;
 use OCP\IL10N;
 use OCP\IURLGenerator;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class ContactsManagerTest extends TestCase {
-	public function test() {
-		/** @var IManager | \PHPUnit\Framework\MockObject\MockObject $cm */
-		$cm = $this->getMockBuilder(IManager::class)->disableOriginalConstructor()->getMock();
-		$cm->expects($this->exactly(2))->method('registerAddressBook');
-		$urlGenerator = $this->getMockBuilder(IURLGenerator::class)->disableOriginalConstructor()->getMock();
-		/** @var CardDavBackend | \PHPUnit\Framework\MockObject\MockObject $backEnd */
-		$backEnd = $this->getMockBuilder(CardDavBackend::class)->disableOriginalConstructor()->getMock();
-		$backEnd->method('getAddressBooksForUser')->willReturn([
-			['{DAV:}displayname' => 'Test address book', 'uri' => 'default'],
-		]);
+	private IManager&MockObject $contactsManager;
+	private IURLGenerator&MockObject $urlGenerator;
+	private CardDavBackend&MockObject $backend;
+	private PropertyMapper&MockObject $propertyMapper;
+	private IL10N&MockObject $l10n;
+	private ContactsManager $manager;
 
-		$l = $this->createMock(IL10N::class);
-		$app = new ContactsManager($backEnd, $l);
-		$app->setupContactsProvider($cm, 'user01', $urlGenerator);
+	protected function setUp(): void {
+		parent::setUp();
+
+		$this->contactsManager = $this->createMock(IManager::class);
+		$this->urlGenerator = $this->createMock(IURLGenerator::class);
+		$this->backend = $this->createMock(CardDavBackend::class);
+		$this->propertyMapper = $this->createMock(PropertyMapper::class);
+		$this->l10n = $this->createMock(IL10N::class);
+
+		$this->backend->method('getAddressBooksForUser')
+			->willReturnCallback(static fn (string $principalUri): array => match ($principalUri) {
+				'principals/users/user01' => [
+					['id' => 1, 'uri' => 'default', 'principaluri' => $principalUri, '{DAV:}displayname' => 'Test address book'],
+				],
+				'principals/system/system' => [
+					['id' => 2, 'uri' => 'system', 'principaluri' => $principalUri, '{DAV:}displayname' => 'System address book'],
+				],
+				default => [],
+			});
+
+		$this->manager = new ContactsManager($this->backend, $this->l10n, $this->propertyMapper);
+	}
+
+	public function testSetupContactsProvider(): void {
+		$registered = [];
+		$this->contactsManager->expects($this->exactly(2))
+			->method('registerAddressBook')
+			->willReturnCallback(function (IAddressBook $addressBook) use (&$registered): void {
+				$registered[] = $addressBook->getUri();
+			});
+
+		$this->manager->setupContactsProvider($this->contactsManager, 'user01', $this->urlGenerator);
+
+		$this->assertEquals(['default', 'system'], $registered);
+	}
+
+	public function testSetupSystemContactsProvider(): void {
+		$registered = [];
+		$this->contactsManager->expects($this->exactly(1))
+			->method('registerAddressBook')
+			->willReturnCallback(function (IAddressBook $addressBook) use (&$registered): void {
+				$registered[] = $addressBook->getUri();
+			});
+
+		$this->manager->setupSystemContactsProvider($this->contactsManager, 'user01', $this->urlGenerator);
+
+		$this->assertEquals(['system'], $registered);
 	}
 }

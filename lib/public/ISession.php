@@ -1,34 +1,13 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Thomas Tanghus <thomas@tanghus.net>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 // use OCP namespace for all classes that are considered public.
-// This means that they should be used by apps instead of the internal ownCloud classes
+// This means that they should be used by apps instead of the internal Nextcloud classes
 
 namespace OCP;
 
@@ -41,7 +20,6 @@ use OCP\Session\Exceptions\SessionNotAvailableException;
  * @since 6.0.0
  */
 interface ISession {
-
 	/**
 	 * Set a value in the session
 	 *
@@ -84,6 +62,14 @@ interface ISession {
 	public function clear();
 
 	/**
+	 * Reopen a session for writing again
+	 *
+	 * @return bool true if the session was actually reopened, otherwise false
+	 * @since 25.0.0
+	 */
+	public function reopen(): bool;
+
+	/**
 	 * Close the session and release the lock
 	 * @since 7.0.0
 	 */
@@ -93,7 +79,7 @@ interface ISession {
 	 * Wrapper around session_regenerate_id
 	 *
 	 * @param bool $deleteOldSession Whether to delete the old associated session file or not.
-	 * @param bool $updateToken Wheater to update the associated auth token
+	 * @param bool $updateToken Whether to update the associated auth token
 	 * @return void
 	 * @since 9.0.0, $updateToken added in 14.0.0
 	 */

@@ -3,76 +3,56 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2016 Lukas Reschke <lukas@statuscode.ch>
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Security\IdentityProof;
 
 use OC\Files\AppData\Factory;
 use OCP\Files\IAppData;
+use OCP\Files\NotFoundException;
+use OCP\ICache;
+use OCP\ICacheFactory;
 use OCP\IConfig;
-use OCP\ILogger;
 use OCP\IUser;
 use OCP\Security\ICrypto;
+use Psr\Log\LoggerInterface;
 
 class Manager {
-	/** @var IAppData */
-	private $appData;
-	/** @var ICrypto */
-	private $crypto;
-	/** @var IConfig */
-	private $config;
-	/** @var ILogger */
-	private $logger;
+	private IAppData $appData;
 
-	public function __construct(Factory $appDataFactory,
-								ICrypto $crypto,
-								IConfig $config,
-								ILogger $logger
+	protected ICache $cache;
+
+	public function __construct(
+		Factory $appDataFactory,
+		private ICrypto $crypto,
+		private IConfig $config,
+		private LoggerInterface $logger,
+		private ICacheFactory $cacheFactory,
 	) {
 		$this->appData = $appDataFactory->get('identityproof');
-		$this->crypto = $crypto;
-		$this->config = $config;
-		$this->logger = $logger;
+		$this->cache = $this->cacheFactory->createDistributed('identityproof::');
 	}
 
 	/**
 	 * Calls the openssl functions to generate a public and private key.
 	 * In a separate function for unit testing purposes.
 	 *
+	 * @param array $options config options to generate key {@see openssl_csr_new}
+	 *
 	 * @return array [$publicKey, $privateKey]
 	 * @throws \RuntimeException
 	 */
-	protected function generateKeyPair(): array {
+	protected function generateKeyPair(array $options = []): array {
 		$config = [
-			'digest_alg' => 'sha512',
-			'private_key_bits' => 2048,
+			'digest_alg' => $options['algorithm'] ?? 'sha512',
+			'private_key_bits' => $options['bits'] ?? 2048,
+			'private_key_type' => $options['type'] ?? OPENSSL_KEYTYPE_RSA,
 		];
 
 		// Generate new key
 		$res = openssl_pkey_new($config);
-
 		if ($res === false) {
 			$this->logOpensslError();
 			throw new \RuntimeException('OpenSSL reported a problem');
@@ -95,16 +75,17 @@ class Manager {
 	 * Note: If a key already exists it will be overwritten
 	 *
 	 * @param string $id key id
-	 * @return Key
+	 * @param array $options config options to generate key {@see openssl_csr_new}
+	 *
 	 * @throws \RuntimeException
 	 */
-	protected function generateKey(string $id): Key {
-		[$publicKey, $privateKey] = $this->generateKeyPair();
+	protected function generateKey(string $id, array $options = []): Key {
+		[$publicKey, $privateKey] = $this->generateKeyPair($options);
 
 		// Write the private and public key to the disk
 		try {
 			$this->appData->newFolder($id);
-		} catch (\Exception $e) {
+		} catch (\Exception) {
 		}
 		$folder = $this->appData->getFolder($id);
 		$folder->newFile('private')
@@ -118,18 +99,28 @@ class Manager {
 	/**
 	 * Get key for a specific id
 	 *
-	 * @param string $id
-	 * @return Key
 	 * @throws \RuntimeException
 	 */
 	protected function retrieveKey(string $id): Key {
 		try {
+			$cachedPublicKey = $this->cache->get($id . '-public');
+			$cachedPrivateKey = $this->cache->get($id . '-private');
+
+			if ($cachedPublicKey !== null && $cachedPrivateKey !== null) {
+				$decryptedPrivateKey = $this->crypto->decrypt($cachedPrivateKey);
+
+				return new Key($cachedPublicKey, $decryptedPrivateKey);
+			}
+
 			$folder = $this->appData->getFolder($id);
-			$privateKey = $this->crypto->decrypt(
-				$folder->getFile('private')->getContent()
-			);
+			$privateKey = $folder->getFile('private')->getContent();
 			$publicKey = $folder->getFile('public')->getContent();
-			return new Key($publicKey, $privateKey);
+
+			$this->cache->set($id . '-public', $publicKey);
+			$this->cache->set($id . '-private', $privateKey);
+
+			$decryptedPrivateKey = $this->crypto->decrypt($privateKey);
+			return new Key($publicKey, $decryptedPrivateKey);
 		} catch (\Exception $e) {
 			return $this->generateKey($id);
 		}
@@ -138,8 +129,6 @@ class Manager {
 	/**
 	 * Get public and private key for $user
 	 *
-	 * @param IUser $user
-	 * @return Key
 	 * @throws \RuntimeException
 	 */
 	public function getKey(IUser $user): Key {
@@ -148,9 +137,20 @@ class Manager {
 	}
 
 	/**
+	 * Set public key for $user
+	 */
+	public function setPublicKey(IUser $user, string $publicKey): void {
+		$id = 'user-' . $user->getUID();
+
+		$folder = $this->appData->getFolder($id);
+		$folder->newFile('public', $publicKey);
+
+		$this->cache->set($id . '-public', $publicKey);
+	}
+
+	/**
 	 * Get instance wide public and private key
 	 *
-	 * @return Key
 	 * @throws \RuntimeException
 	 */
 	public function getSystemKey(): Key {
@@ -159,6 +159,79 @@ class Manager {
 			throw new \RuntimeException('no instance id!');
 		}
 		return $this->retrieveKey('system-' . $instanceId);
+	}
+
+	public function hasAppKey(string $app, string $name): bool {
+		$id = $this->generateAppKeyId($app, $name);
+		try {
+			$folder = $this->appData->getFolder($id);
+			return ($folder->fileExists('public') && $folder->fileExists('private'));
+		} catch (NotFoundException) {
+			return false;
+		}
+	}
+
+	public function getAppKey(string $app, string $name): Key {
+		return $this->retrieveKey($this->generateAppKeyId($app, $name));
+	}
+
+	public function generateAppKey(string $app, string $name, array $options = []): Key {
+		return $this->generateKey($this->generateAppKeyId($app, $name), $options);
+	}
+
+	/**
+	 * Generate an ECDSA P-256 (prime256v1, SECG/JOSE ES256 curve) keypair via
+	 * openssl. Returns PEM private + PEM public. Overwrites if already
+	 * present. Private key is encrypted on disk.
+	 *
+	 * @throws \RuntimeException
+	 */
+	public function generateEcdsaP256AppKey(string $app, string $name): Key {
+		$res = openssl_pkey_new([
+			'private_key_type' => OPENSSL_KEYTYPE_EC,
+			'curve_name' => 'prime256v1',
+		]);
+		if ($res === false) {
+			$this->logOpensslError();
+			throw new \RuntimeException('OpenSSL reported a problem');
+		}
+		if (openssl_pkey_export($res, $privateKey) === false) {
+			$this->logOpensslError();
+			throw new \RuntimeException('OpenSSL reported a problem');
+		}
+		$details = openssl_pkey_get_details($res);
+		if ($details === false || !isset($details['key'])) {
+			$this->logOpensslError();
+			throw new \RuntimeException('OpenSSL reported a problem');
+		}
+		$publicKey = $details['key'];
+
+		$id = $this->generateAppKeyId($app, $name);
+		try {
+			$this->appData->newFolder($id);
+		} catch (\Exception) {
+		}
+		$folder = $this->appData->getFolder($id);
+		$folder->newFile('private')
+			->putContent($this->crypto->encrypt($privateKey));
+		$folder->newFile('public')
+			->putContent($publicKey);
+
+		return new Key($publicKey, $privateKey);
+	}
+
+	public function deleteAppKey(string $app, string $name): bool {
+		try {
+			$folder = $this->appData->getFolder($this->generateAppKeyId($app, $name));
+			$folder->delete();
+			return true;
+		} catch (NotFoundException) {
+			return false;
+		}
+	}
+
+	private function generateAppKeyId(string $app, string $name): string {
+		return 'app-' . $app . '-' . $name;
 	}
 
 	private function logOpensslError(): void {

@@ -1,6 +1,11 @@
 <?php
+/**
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
 /** @var \OCP\IL10N $l */
-/** @var array $_*/
+/** @var array $_ */
 /** @var boolean $error */
 $error = $_['error'];
 /* @var $error_message string */
@@ -21,9 +26,18 @@ $template = $_['template'];
 			<?php endif; ?>
 	<?php endif; ?>
 	<?php print_unescaped($template); ?>
-	<?php if (!is_null($_['backupProvider'])): ?>
-	<p>
-		<a class="two-factor-secondary" href="<?php p(\OC::$server->getURLGenerator()->linkToRoute('core.TwoFactorChallenge.showChallenge',
+	<div class="two-factor-actions">
+		<?php if ($_['hasOtherProviders']): ?>
+		<a class="two-factor-action-switch" href="<?php p(\OCP\Server::get(\OCP\IURLGenerator::class)->linkToRoute('core.TwoFactorChallenge.selectChallenge',
+			[
+				'redirect_url' => $_['redirect_url'],
+			]
+		)) ?>">
+			<?php p($l->t('Use another method')) ?>
+		</a>
+		<?php endif; ?>
+		<?php if (!is_null($_['backupProvider'])): ?>
+		<a class="two-factor-action-backup" href="<?php p(\OCP\Server::get(\OCP\IURLGenerator::class)->linkToRoute('core.TwoFactorChallenge.showChallenge',
 			[
 				'challengeProviderId' => $_['backupProvider']->getId(),
 				'redirect_url' => $_['redirect_url'],
@@ -31,9 +45,9 @@ $template = $_['template'];
 		)) ?>">
 			<?php p($l->t('Use backup code')) ?>
 		</a>
-	</p>
-	<?php endif; ?>
-	<p><a class="two-factor-secondary" href="<?php print_unescaped($_['logout_url']); ?>">
-		<?php p($l->t('Cancel login')) ?>
-	</a></p>
+		<?php endif; ?>
+		<a id="cancel-login" href="<?php print_unescaped($_['logout_url']); ?>">
+			<?php p($l->t('Cancel login')) ?>
+		</a>
+	</div>
 </div>

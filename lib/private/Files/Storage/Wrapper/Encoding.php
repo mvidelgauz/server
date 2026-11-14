@@ -1,36 +1,18 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author J0WI <J0WI@users.noreply.github.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Tigran Mkrtchyan <tigran.mkrtchyan@desy.de>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files\Storage\Wrapper;
 
-use OC\Cache\CappedMemoryCache;
+use OC\Files\Filesystem;
+use OCP\Cache\CappedMemoryCache;
+use OCP\Files\Cache\ICache;
+use OCP\Files\Cache\IScanner;
 use OCP\Files\Storage\IStorage;
-use OCP\ICache;
 
 /**
  * Encoding wrapper that deals with file names that use unsupported encodings like NFD.
@@ -39,28 +21,20 @@ use OCP\ICache;
  * the actual given name and then try its NFD form.
  */
 class Encoding extends Wrapper {
+	private CappedMemoryCache $namesCache;
 
 	/**
-	 * @var ICache
+	 * @param array{storage: IStorage, ...} $parameters
 	 */
-	private $namesCache;
-
-	/**
-	 * @param array $parameters
-	 */
-	public function __construct($parameters) {
-		$this->storage = $parameters['storage'];
+	public function __construct(array $parameters) {
 		$this->namesCache = new CappedMemoryCache();
+		parent::__construct($parameters);
 	}
 
 	/**
 	 * Returns whether the given string is only made of ASCII characters
-	 *
-	 * @param string $str string
-	 *
-	 * @return bool true if the string is all ASCII, false otherwise
 	 */
-	private function isAscii($str) {
+	private function isAscii(string $str): bool {
 		return !preg_match('/[\\x80-\\xff]+/', $str);
 	}
 
@@ -69,11 +43,9 @@ class Encoding extends Wrapper {
 	 * each form for each path section and returns the correct form.
 	 * If no existing path found, returns the path as it was given.
 	 *
-	 * @param string $fullPath path to check
-	 *
 	 * @return string original or converted path
 	 */
-	private function findPathToUse($fullPath) {
+	private function findPathToUse(string $fullPath): string {
 		$cachedPath = $this->namesCache[$fullPath];
 		if ($cachedPath !== null) {
 			return $cachedPath;
@@ -97,14 +69,13 @@ class Encoding extends Wrapper {
 	 * Checks whether the last path section of the given path exists in NFC or NFD form
 	 * and returns the correct form. If no existing path found, returns null.
 	 *
-	 * @param string $basePath base path to check
 	 * @param string $lastSection last section of the path to check for NFD/NFC variations
 	 *
 	 * @return string|null original or converted path, or null if none of the forms was found
 	 */
-	private function findPathToUseLastSection($basePath, $lastSection) {
+	private function findPathToUseLastSection(string $basePath, string $lastSection): ?string {
 		$fullPath = $basePath . $lastSection;
-		if ($lastSection === '' || $this->isAscii($lastSection) || $this->storage->file_exists($fullPath)) {
+		if ($lastSection === '' || $this->isAscii($lastSection) || $this->getWrapperStorage()->file_exists($fullPath)) {
 			$this->namesCache[$fullPath] = $fullPath;
 			return $fullPath;
 		}
@@ -116,7 +87,7 @@ class Encoding extends Wrapper {
 			$otherFormPath = \Normalizer::normalize($lastSection, \Normalizer::FORM_C);
 		}
 		$otherFullPath = $basePath . $otherFormPath;
-		if ($this->storage->file_exists($otherFullPath)) {
+		if ($this->getWrapperStorage()->file_exists($otherFullPath)) {
 			$this->namesCache[$fullPath] = $otherFullPath;
 			return $otherFullPath;
 		}
@@ -126,394 +97,201 @@ class Encoding extends Wrapper {
 		return null;
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.mkdir.php
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function mkdir($path) {
+	#[\Override]
+	public function mkdir(string $path): bool {
 		// note: no conversion here, method should not be called with non-NFC names!
-		$result = $this->storage->mkdir($path);
+		$result = $this->getWrapperStorage()->mkdir($path);
 		if ($result) {
 			$this->namesCache[$path] = $path;
 		}
 		return $result;
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.rmdir.php
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function rmdir($path) {
-		$result = $this->storage->rmdir($this->findPathToUse($path));
+	#[\Override]
+	public function rmdir(string $path): bool {
+		$result = $this->getWrapperStorage()->rmdir($this->findPathToUse($path));
 		if ($result) {
 			unset($this->namesCache[$path]);
 		}
 		return $result;
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.opendir.php
-	 *
-	 * @param string $path
-	 * @return resource|bool
-	 */
-	public function opendir($path) {
-		return $this->storage->opendir($this->findPathToUse($path));
+	#[\Override]
+	public function opendir(string $path) {
+		$handle = $this->getWrapperStorage()->opendir($this->findPathToUse($path));
+		return EncodingDirectoryWrapper::wrap($handle);
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.is_dir.php
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function is_dir($path) {
-		return $this->storage->is_dir($this->findPathToUse($path));
+	#[\Override]
+	public function is_dir(string $path): bool {
+		return $this->getWrapperStorage()->is_dir($this->findPathToUse($path));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.is_file.php
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function is_file($path) {
-		return $this->storage->is_file($this->findPathToUse($path));
+	#[\Override]
+	public function is_file(string $path): bool {
+		return $this->getWrapperStorage()->is_file($this->findPathToUse($path));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.stat.php
-	 * only the following keys are required in the result: size and mtime
-	 *
-	 * @param string $path
-	 * @return array|bool
-	 */
-	public function stat($path) {
-		return $this->storage->stat($this->findPathToUse($path));
+	#[\Override]
+	public function stat(string $path): array|false {
+		return $this->getWrapperStorage()->stat($this->findPathToUse($path));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.filetype.php
-	 *
-	 * @param string $path
-	 * @return string|bool
-	 */
-	public function filetype($path) {
-		return $this->storage->filetype($this->findPathToUse($path));
+	#[\Override]
+	public function filetype(string $path): string|false {
+		return $this->getWrapperStorage()->filetype($this->findPathToUse($path));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.filesize.php
-	 * The result for filesize when called on a folder is required to be 0
-	 *
-	 * @param string $path
-	 * @return int|bool
-	 */
-	public function filesize($path) {
-		return $this->storage->filesize($this->findPathToUse($path));
+	#[\Override]
+	public function filesize(string $path): int|float|false {
+		return $this->getWrapperStorage()->filesize($this->findPathToUse($path));
 	}
 
-	/**
-	 * check if a file can be created in $path
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function isCreatable($path) {
-		return $this->storage->isCreatable($this->findPathToUse($path));
+	#[\Override]
+	public function isCreatable(string $path): bool {
+		return $this->getWrapperStorage()->isCreatable($this->findPathToUse($path));
 	}
 
-	/**
-	 * check if a file can be read
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function isReadable($path) {
-		return $this->storage->isReadable($this->findPathToUse($path));
+	#[\Override]
+	public function isReadable(string $path): bool {
+		return $this->getWrapperStorage()->isReadable($this->findPathToUse($path));
 	}
 
-	/**
-	 * check if a file can be written to
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function isUpdatable($path) {
-		return $this->storage->isUpdatable($this->findPathToUse($path));
+	#[\Override]
+	public function isUpdatable(string $path): bool {
+		return $this->getWrapperStorage()->isUpdatable($this->findPathToUse($path));
 	}
 
-	/**
-	 * check if a file can be deleted
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function isDeletable($path) {
-		return $this->storage->isDeletable($this->findPathToUse($path));
+	#[\Override]
+	public function isDeletable(string $path): bool {
+		return $this->getWrapperStorage()->isDeletable($this->findPathToUse($path));
 	}
 
-	/**
-	 * check if a file can be shared
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function isSharable($path) {
-		return $this->storage->isSharable($this->findPathToUse($path));
+	#[\Override]
+	public function isSharable(string $path): bool {
+		return $this->getWrapperStorage()->isSharable($this->findPathToUse($path));
 	}
 
-	/**
-	 * get the full permissions of a path.
-	 * Should return a combination of the PERMISSION_ constants defined in lib/public/constants.php
-	 *
-	 * @param string $path
-	 * @return int
-	 */
-	public function getPermissions($path) {
-		return $this->storage->getPermissions($this->findPathToUse($path));
+	#[\Override]
+	public function getPermissions(string $path): int {
+		return $this->getWrapperStorage()->getPermissions($this->findPathToUse($path));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.file_exists.php
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function file_exists($path) {
-		return $this->storage->file_exists($this->findPathToUse($path));
+	#[\Override]
+	public function file_exists(string $path): bool {
+		return $this->getWrapperStorage()->file_exists($this->findPathToUse($path));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.filemtime.php
-	 *
-	 * @param string $path
-	 * @return int|bool
-	 */
-	public function filemtime($path) {
-		return $this->storage->filemtime($this->findPathToUse($path));
+	#[\Override]
+	public function filemtime(string $path): int|false {
+		return $this->getWrapperStorage()->filemtime($this->findPathToUse($path));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.file_get_contents.php
-	 *
-	 * @param string $path
-	 * @return string|bool
-	 */
-	public function file_get_contents($path) {
-		return $this->storage->file_get_contents($this->findPathToUse($path));
+	#[\Override]
+	public function file_get_contents(string $path): string|false {
+		return $this->getWrapperStorage()->file_get_contents($this->findPathToUse($path));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.file_put_contents.php
-	 *
-	 * @param string $path
-	 * @param mixed $data
-	 * @return int|false
-	 */
-	public function file_put_contents($path, $data) {
-		return $this->storage->file_put_contents($this->findPathToUse($path), $data);
+	#[\Override]
+	public function file_put_contents(string $path, mixed $data): int|float|false {
+		return $this->getWrapperStorage()->file_put_contents($this->findPathToUse($path), $data);
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.unlink.php
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	public function unlink($path) {
-		$result = $this->storage->unlink($this->findPathToUse($path));
+	#[\Override]
+	public function unlink(string $path): bool {
+		$result = $this->getWrapperStorage()->unlink($this->findPathToUse($path));
 		if ($result) {
 			unset($this->namesCache[$path]);
 		}
 		return $result;
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.rename.php
-	 *
-	 * @param string $path1
-	 * @param string $path2
-	 * @return bool
-	 */
-	public function rename($path1, $path2) {
+	#[\Override]
+	public function rename(string $source, string $target): bool {
 		// second name always NFC
-		return $this->storage->rename($this->findPathToUse($path1), $this->findPathToUse($path2));
+		return $this->getWrapperStorage()->rename($this->findPathToUse($source), $this->findPathToUse($target));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.copy.php
-	 *
-	 * @param string $path1
-	 * @param string $path2
-	 * @return bool
-	 */
-	public function copy($path1, $path2) {
-		return $this->storage->copy($this->findPathToUse($path1), $this->findPathToUse($path2));
+	#[\Override]
+	public function copy(string $source, string $target): bool {
+		return $this->getWrapperStorage()->copy($this->findPathToUse($source), $this->findPathToUse($target));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.fopen.php
-	 *
-	 * @param string $path
-	 * @param string $mode
-	 * @return resource|bool
-	 */
-	public function fopen($path, $mode) {
-		$result = $this->storage->fopen($this->findPathToUse($path), $mode);
+	#[\Override]
+	public function fopen(string $path, string $mode) {
+		$result = $this->getWrapperStorage()->fopen($this->findPathToUse($path), $mode);
 		if ($result && $mode !== 'r' && $mode !== 'rb') {
 			unset($this->namesCache[$path]);
 		}
 		return $result;
 	}
 
-	/**
-	 * get the mimetype for a file or folder
-	 * The mimetype for a folder is required to be "httpd/unix-directory"
-	 *
-	 * @param string $path
-	 * @return string|bool
-	 */
-	public function getMimeType($path) {
-		return $this->storage->getMimeType($this->findPathToUse($path));
+	#[\Override]
+	public function getMimeType(string $path): string|false {
+		return $this->getWrapperStorage()->getMimeType($this->findPathToUse($path));
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.hash.php
-	 *
-	 * @param string $type
-	 * @param string $path
-	 * @param bool $raw
-	 * @return string|bool
-	 */
-	public function hash($type, $path, $raw = false) {
-		return $this->storage->hash($type, $this->findPathToUse($path), $raw);
+	#[\Override]
+	public function hash(string $type, string $path, bool $raw = false): string|false {
+		return $this->getWrapperStorage()->hash($type, $this->findPathToUse($path), $raw);
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.free_space.php
-	 *
-	 * @param string $path
-	 * @return int|bool
-	 */
-	public function free_space($path) {
-		return $this->storage->free_space($this->findPathToUse($path));
+	#[\Override]
+	public function free_space(string $path): int|float|false {
+		return $this->getWrapperStorage()->free_space($this->findPathToUse($path));
 	}
 
-	/**
-	 * search for occurrences of $query in file names
-	 *
-	 * @param string $query
-	 * @return array|bool
-	 */
-	public function search($query) {
-		return $this->storage->search($query);
+	#[\Override]
+	public function touch(string $path, ?int $mtime = null): bool {
+		return $this->getWrapperStorage()->touch($this->findPathToUse($path), $mtime);
 	}
 
-	/**
-	 * see https://www.php.net/manual/en/function.touch.php
-	 * If the backend does not support the operation, false should be returned
-	 *
-	 * @param string $path
-	 * @param int $mtime
-	 * @return bool
-	 */
-	public function touch($path, $mtime = null) {
-		return $this->storage->touch($this->findPathToUse($path), $mtime);
+	#[\Override]
+	public function getLocalFile(string $path): string|false {
+		return $this->getWrapperStorage()->getLocalFile($this->findPathToUse($path));
 	}
 
-	/**
-	 * get the path to a local version of the file.
-	 * The local version of the file can be temporary and doesn't have to be persistent across requests
-	 *
-	 * @param string $path
-	 * @return string|bool
-	 */
-	public function getLocalFile($path) {
-		return $this->storage->getLocalFile($this->findPathToUse($path));
+	#[\Override]
+	public function hasUpdated(string $path, int $time): bool {
+		return $this->getWrapperStorage()->hasUpdated($this->findPathToUse($path), $time);
 	}
 
-	/**
-	 * check if a file or folder has been updated since $time
-	 *
-	 * @param string $path
-	 * @param int $time
-	 * @return bool
-	 *
-	 * hasUpdated for folders should return at least true if a file inside the folder is add, removed or renamed.
-	 * returning true for other changes in the folder is optional
-	 */
-	public function hasUpdated($path, $time) {
-		return $this->storage->hasUpdated($this->findPathToUse($path), $time);
-	}
-
-	/**
-	 * get a cache instance for the storage
-	 *
-	 * @param string $path
-	 * @param \OC\Files\Storage\Storage (optional) the storage to pass to the cache
-	 * @return \OC\Files\Cache\Cache
-	 */
-	public function getCache($path = '', $storage = null) {
+	#[\Override]
+	public function getCache(string $path = '', ?IStorage $storage = null): ICache {
 		if (!$storage) {
 			$storage = $this;
 		}
-		return $this->storage->getCache($this->findPathToUse($path), $storage);
+		return $this->getWrapperStorage()->getCache($this->findPathToUse($path), $storage);
 	}
 
-	/**
-	 * get a scanner instance for the storage
-	 *
-	 * @param string $path
-	 * @param \OC\Files\Storage\Storage (optional) the storage to pass to the scanner
-	 * @return \OC\Files\Cache\Scanner
-	 */
-	public function getScanner($path = '', $storage = null) {
+	#[\Override]
+	public function getScanner(string $path = '', ?IStorage $storage = null): IScanner {
 		if (!$storage) {
 			$storage = $this;
 		}
-		return $this->storage->getScanner($this->findPathToUse($path), $storage);
+		return $this->getWrapperStorage()->getScanner($this->findPathToUse($path), $storage);
 	}
 
-	/**
-	 * get the ETag for a file or folder
-	 *
-	 * @param string $path
-	 * @return string|bool
-	 */
-	public function getETag($path) {
-		return $this->storage->getETag($this->findPathToUse($path));
+	#[\Override]
+	public function getETag(string $path): string|false {
+		return $this->getWrapperStorage()->getETag($this->findPathToUse($path));
 	}
 
-	/**
-	 * @param IStorage $sourceStorage
-	 * @param string $sourceInternalPath
-	 * @param string $targetInternalPath
-	 * @return bool
-	 */
-	public function copyFromStorage(IStorage $sourceStorage, $sourceInternalPath, $targetInternalPath) {
+	#[\Override]
+	public function copyFromStorage(IStorage $sourceStorage, string $sourceInternalPath, string $targetInternalPath): bool {
 		if ($sourceStorage === $this) {
 			return $this->copy($sourceInternalPath, $this->findPathToUse($targetInternalPath));
 		}
 
-		$result = $this->storage->copyFromStorage($sourceStorage, $sourceInternalPath, $this->findPathToUse($targetInternalPath));
+		$result = $this->getWrapperStorage()->copyFromStorage($sourceStorage, $sourceInternalPath, $this->findPathToUse($targetInternalPath));
 		if ($result) {
 			unset($this->namesCache[$targetInternalPath]);
 		}
 		return $result;
 	}
 
-	/**
-	 * @param IStorage $sourceStorage
-	 * @param string $sourceInternalPath
-	 * @param string $targetInternalPath
-	 * @return bool
-	 */
-	public function moveFromStorage(IStorage $sourceStorage, $sourceInternalPath, $targetInternalPath) {
+	#[\Override]
+	public function moveFromStorage(IStorage $sourceStorage, string $sourceInternalPath, string $targetInternalPath): bool {
 		if ($sourceStorage === $this) {
 			$result = $this->rename($sourceInternalPath, $this->findPathToUse($targetInternalPath));
 			if ($result) {
@@ -523,7 +301,7 @@ class Encoding extends Wrapper {
 			return $result;
 		}
 
-		$result = $this->storage->moveFromStorage($sourceStorage, $sourceInternalPath, $this->findPathToUse($targetInternalPath));
+		$result = $this->getWrapperStorage()->moveFromStorage($sourceStorage, $sourceInternalPath, $this->findPathToUse($targetInternalPath));
 		if ($result) {
 			unset($this->namesCache[$sourceInternalPath]);
 			unset($this->namesCache[$targetInternalPath]);
@@ -531,11 +309,21 @@ class Encoding extends Wrapper {
 		return $result;
 	}
 
-	public function getMetaData($path) {
-		return $this->storage->getMetaData($this->findPathToUse($path));
+	#[\Override]
+	public function getMetaData(string $path): ?array {
+		$entry = $this->getWrapperStorage()->getMetaData($this->findPathToUse($path));
+		if ($entry !== null) {
+			$entry['name'] = trim(Filesystem::normalizePath($entry['name']), '/');
+		}
+		return $entry;
 	}
 
-	public function getDirectoryContent($directory): \Traversable {
-		return $this->storage->getDirectoryContent($this->findPathToUse($directory));
+	#[\Override]
+	public function getDirectoryContent(string $directory): \Traversable {
+		$entries = $this->getWrapperStorage()->getDirectoryContent($this->findPathToUse($directory));
+		foreach ($entries as $entry) {
+			$entry['name'] = trim(Filesystem::normalizePath($entry['name']), '/');
+			yield $entry;
+		}
 	}
 }

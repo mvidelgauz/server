@@ -1,35 +1,22 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Jacob Neplokh <me@jacobneplokh.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Tests\unit\CardDAV;
 
 use OCA\DAV\CardDAV\AddressBook;
 use OCA\DAV\CardDAV\ImageExportPlugin;
+use OCA\DAV\CardDAV\Integration\ExternalAddressBook;
 use OCA\DAV\CardDAV\PhotoCache;
+use OCP\AppFramework\Http;
 use OCP\Files\NotFoundException;
 use OCP\Files\SimpleFS\ISimpleFile;
+use PHPUnit\Framework\MockObject\MockObject;
 use Sabre\CardDAV\Card;
 use Sabre\DAV\Node;
 use Sabre\DAV\Server;
@@ -39,19 +26,12 @@ use Sabre\HTTP\ResponseInterface;
 use Test\TestCase;
 
 class ImageExportPluginTest extends TestCase {
-
-	/** @var ResponseInterface|\PHPUnit\Framework\MockObject\MockObject */
-	private $response;
-	/** @var RequestInterface|\PHPUnit\Framework\MockObject\MockObject */
-	private $request;
-	/** @var ImageExportPlugin|\PHPUnit\Framework\MockObject\MockObject */
-	private $plugin;
-	/** @var Server */
-	private $server;
-	/** @var Tree|\PHPUnit\Framework\MockObject\MockObject */
-	private $tree;
-	/** @var PhotoCache|\PHPUnit\Framework\MockObject\MockObject */
-	private $cache;
+	private ResponseInterface&MockObject $response;
+	private RequestInterface&MockObject $request;
+	private Server&MockObject $server;
+	private Tree&MockObject $tree;
+	private PhotoCache&MockObject $cache;
+	private ImageExportPlugin $plugin;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -63,24 +43,18 @@ class ImageExportPluginTest extends TestCase {
 		$this->server->tree = $this->tree;
 		$this->cache = $this->createMock(PhotoCache::class);
 
-		$this->plugin = $this->getMockBuilder(ImageExportPlugin::class)
-			->setMethods(['getPhoto'])
-			->setConstructorArgs([$this->cache])
-			->getMock();
+		$this->plugin = new ImageExportPlugin($this->cache);
 		$this->plugin->initialize($this->server);
 	}
 
-	/**
-	 * @dataProvider providesQueryParams
-	 * @param $param
-	 */
-	public function testQueryParams($param) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'providesQueryParams')]
+	public function testQueryParams(array $param): void {
 		$this->request->expects($this->once())->method('getQueryParameters')->willReturn($param);
 		$result = $this->plugin->httpGet($this->request, $this->response);
 		$this->assertTrue($result);
 	}
 
-	public function providesQueryParams() {
+	public static function providesQueryParams(): array {
 		return [
 			[[]],
 			[['1']],
@@ -88,7 +62,7 @@ class ImageExportPluginTest extends TestCase {
 		];
 	}
 
-	public function testNoCard() {
+	public function testNoCard(): void {
 		$this->request->method('getQueryParameters')
 			->willReturn([
 				'photo'
@@ -105,7 +79,7 @@ class ImageExportPluginTest extends TestCase {
 		$this->assertTrue($result);
 	}
 
-	public function dataTestCard() {
+	public static function dataTestCard(): array {
 		return [
 			[null, false],
 			[null, true],
@@ -114,13 +88,8 @@ class ImageExportPluginTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider dataTestCard
-	 *
-	 * @param $size
-	 * @param bool $photo
-	 */
-	public function testCard($size, $photo) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataTestCard')]
+	public function testCard(?int $size, bool $photo): void {
 		$query = ['photo' => null];
 		if ($size !== null) {
 			$query['size'] = $size;
@@ -150,16 +119,6 @@ class ImageExportPluginTest extends TestCase {
 				$this->fail();
 			});
 
-		$this->response->expects($this->at(0))
-			->method('setHeader')
-			->with('Cache-Control', 'private, max-age=3600, must-revalidate');
-		$this->response->expects($this->at(1))
-			->method('setHeader')
-			->with('Etag', '"myEtag"');
-		$this->response->expects($this->at(2))
-			->method('setHeader')
-			->with('Pragma', 'public');
-
 		$size = $size === null ? -1 : $size;
 
 		if ($photo) {
@@ -173,12 +132,18 @@ class ImageExportPluginTest extends TestCase {
 				->with(1, 'card', $size, $card)
 				->willReturn($file);
 
-			$this->response->expects($this->at(3))
+			$setHeaderCalls = [
+				['Cache-Control', 'private, max-age=3600, must-revalidate'],
+				['Etag', '"myEtag"'],
+				['Content-Type', 'image/jpeg'],
+				['Content-Disposition', 'attachment; filename=card.jpg'],
+			];
+			$this->response->expects($this->exactly(count($setHeaderCalls)))
 				->method('setHeader')
-				->with('Content-Type', 'image/jpeg');
-			$this->response->expects($this->at(4))
-				->method('setHeader')
-				->with('Content-Disposition', 'attachment; filename=card.jpg');
+				->willReturnCallback(function () use (&$setHeaderCalls): void {
+					$expected = array_shift($setHeaderCalls);
+					$this->assertEquals($expected, func_get_args());
+				});
 
 			$this->response->expects($this->once())
 				->method('setStatus')
@@ -187,13 +152,116 @@ class ImageExportPluginTest extends TestCase {
 				->method('setBody')
 				->with('imgdata');
 		} else {
+			$setHeaderCalls = [
+				['Cache-Control', 'private, max-age=3600, must-revalidate'],
+				['Etag', '"myEtag"'],
+			];
+			$this->response->expects($this->exactly(count($setHeaderCalls)))
+				->method('setHeader')
+				->willReturnCallback(function () use (&$setHeaderCalls): void {
+					$expected = array_shift($setHeaderCalls);
+					$this->assertEquals($expected, func_get_args());
+				});
 			$this->cache->method('get')
 				->with(1, 'card', $size, $card)
 				->willThrowException(new NotFoundException());
 			$this->response->expects($this->once())
 				->method('setStatus')
-				->with(404);
+				->with(Http::STATUS_NO_CONTENT);
 		}
+
+		$result = $this->plugin->httpGet($this->request, $this->response);
+		$this->assertFalse($result);
+	}
+
+	public function testAppGeneratedAddressBook(): void {
+		$this->request->method('getQueryParameters')
+			->willReturn(['photo' => null]);
+		$this->request->method('getPath')
+			->willReturn('user/book/card');
+
+		$card = $this->createMock(Card::class);
+		$card->method('getETag')
+			->willReturn('"myEtag"');
+		$book = $this->createMock(ExternalAddressBook::class);
+
+		$this->tree->method('getNodeForPath')
+			->willReturnCallback(function ($path) use ($card, $book) {
+				if ($path === 'user/book/card') {
+					return $card;
+				} elseif ($path === 'user/book') {
+					return $book;
+				}
+				$this->fail();
+			});
+
+		$this->cache->expects($this->never())
+			->method('get');
+		$this->response->expects($this->once())
+			->method('setStatus')
+			->with(Http::STATUS_NO_CONTENT);
+		$this->response->expects($this->never())
+			->method('setBody');
+
+		$result = $this->plugin->httpGet($this->request, $this->response);
+		$this->assertFalse($result);
+	}
+
+	public function testCardWithSpecialCharactersInName(): void {
+		$this->request->method('getQueryParameters')
+			->willReturn(['photo' => null]);
+		$this->request->method('getPath')
+			->willReturn('user/book/card');
+
+		$card = $this->createMock(Card::class);
+		$card->method('getETag')
+			->willReturn('"myEtag"');
+		$card->method('getName')
+			->willReturn('contact "with" special;chars');
+		$book = $this->createMock(AddressBook::class);
+		$book->method('getResourceId')
+			->willReturn(1);
+
+		$this->tree->method('getNodeForPath')
+			->willReturnCallback(function ($path) use ($card, $book) {
+				if ($path === 'user/book/card') {
+					return $card;
+				} elseif ($path === 'user/book') {
+					return $book;
+				}
+				$this->fail();
+			});
+
+		$file = $this->createMock(ISimpleFile::class);
+		$file->method('getMimeType')
+			->willReturn('image/png');
+		$file->method('getContent')
+			->willReturn('imgdata');
+
+		$this->cache->method('get')
+			->with(1, 'contact "with" special;chars', -1, $card)
+			->willReturn($file);
+
+		// When special characters are present, they should be properly quoted in the filename parameter
+		$setHeaderCalls = [
+			['Cache-Control', 'private, max-age=3600, must-revalidate'],
+			['Etag', '"myEtag"'],
+			['Content-Type', 'image/png'],
+			['Content-Disposition', 'attachment; filename="contact \"with\" special;chars.png"'],
+		];
+		$this->response->expects($this->exactly(count($setHeaderCalls)))
+			->method('setHeader')
+			->willReturnCallback(function () use (&$setHeaderCalls): void {
+				$expected = array_shift($setHeaderCalls);
+				$this->assertEquals($expected, func_get_args());
+			});
+
+		$this->response->expects($this->once())
+			->method('setStatus')
+			->with(200);
+		$this->response->expects($this->once())
+			->method('setBody')
+			->with('imgdata');
 
 		$result = $this->plugin->httpGet($this->request, $this->response);
 		$this->assertFalse($result);

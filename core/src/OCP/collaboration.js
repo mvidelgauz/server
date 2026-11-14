@@ -1,46 +1,29 @@
 /**
- * @copyright Copyright (c) 2018 Julius Härtl <jus@bitgrid.net>
- *
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Julius Härtl <jus@bitgrid.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 import escapeHTML from 'escape-html'
 
 /**
  * @typedef TypeDefinition
- * @method {callback} action This action is executed to let the user select a resource
+ * @function action This action is executed to let the user select a resource
  * @param {string} icon Contains the icon css class for the type
- * @constructor
+ * @function Object() { [native code] }
  */
 
 /**
  * @type {TypeDefinition[]}
- **/
+ */
 const types = {}
 
 /**
  * Those translations will be used by the vue component but they should be shipped with the server
  * FIXME: Those translations should be added to the library
- * @returns {Array}
+ *
+ * @return {Array}
  */
-export const l10nProjects = () => {
+export function l10nProjects() {
 	return [
 		t('core', 'Add to a project'),
 		t('core', 'Show details'),

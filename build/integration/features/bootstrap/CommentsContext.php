@@ -1,34 +1,19 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
-require __DIR__ . '/../../vendor/autoload.php';
+
+use Behat\Hook\AfterScenario;
+use Behat\Step\Given;
+use Behat\Step\Then;
+use Behat\Step\When;
+
+require __DIR__ . '/autoload.php';
 
 class CommentsContext implements \Behat\Behat\Context\Context {
-	/** @var string */
-	private $baseUrl;
 	/** @var array */
 	private $response;
 	/** @var int */
@@ -39,9 +24,9 @@ class CommentsContext implements \Behat\Behat\Context\Context {
 	/**
 	 * @param string $baseUrl
 	 */
-	public function __construct($baseUrl) {
-		$this->baseUrl = $baseUrl;
-
+	public function __construct(
+		private $baseUrl,
+	) {
 		// in case of ci deployment we take the server url from the environment
 		$testServerUrl = getenv('TEST_SERVER_URL');
 		if ($testServerUrl !== false) {
@@ -49,7 +34,36 @@ class CommentsContext implements \Behat\Behat\Context\Context {
 		}
 	}
 
-	/** @AfterScenario */
+	/**
+	 * get a named entry from response instead of picking a random entry from values
+	 *
+	 * @param string $path
+	 *
+	 * @return array|string
+	 * @throws Exception
+	 */
+	private function getValueFromNamedEntries(string $path, array $response): mixed {
+		$next = '';
+		if (str_contains($path, ' ')) {
+			[$key, $next] = explode(' ', $path, 2);
+		} else {
+			$key = $path;
+		}
+
+		foreach ($response as $entry) {
+			if ($entry['name'] === $key) {
+				if ($next !== '') {
+					return $this->getValueFromNamedEntries($next, $entry['value']);
+				} else {
+					return $entry['value'];
+				}
+			}
+		}
+
+		return null;
+	}
+
+	#[AfterScenario]
 	public function teardownScenario() {
 		$client = new \GuzzleHttp\Client();
 		try {
@@ -95,13 +109,13 @@ class CommentsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @When :user posts a comment with content :content on the file named :fileName it should return :statusCode
 	 * @param string $user
 	 * @param string $content
 	 * @param string $fileName
 	 * @param int $statusCode
 	 * @throws \Exception
 	 */
+	#[When(':user posts a comment with content :content on the file named :fileName it should return :statusCode')]
 	public function postsACommentWithContentOnTheFileNamedItShouldReturn($user, $content, $fileName, $statusCode) {
 		$fileId = $this->getFileIdForPath($fileName);
 		$this->fileId = (int)$fileId;
@@ -127,18 +141,17 @@ class CommentsContext implements \Behat\Behat\Context\Context {
 		}
 
 		if ($res->getStatusCode() !== (int)$statusCode) {
-			throw new \Exception("Response status code was not $statusCode (" . $res->getStatusCode() . ")");
+			throw new \Exception("Response status code was not $statusCode (" . $res->getStatusCode() . ')');
 		}
 	}
 
-
 	/**
-	 * @Then As :user load all the comments of the file named :fileName it should return :statusCode
 	 * @param string $user
 	 * @param string $fileName
 	 * @param int $statusCode
 	 * @throws \Exception
 	 */
+	#[Then('As :user load all the comments of the file named :fileName it should return :statusCode')]
 	public function asLoadloadAllTheCommentsOfTheFileNamedItShouldReturn($user, $fileName, $statusCode) {
 		$fileId = $this->getFileIdForPath($fileName);
 		$url = $this->baseUrl . '/remote.php/dav/comments/files/' . $fileId . '/';
@@ -169,24 +182,24 @@ class CommentsContext implements \Behat\Behat\Context\Context {
 		}
 
 		if ($res->getStatusCode() !== (int)$statusCode) {
-			throw new \Exception("Response status code was not $statusCode (" . $res->getStatusCode() . ")");
+			throw new \Exception("Response status code was not $statusCode (" . $res->getStatusCode() . ')');
 		}
 
 		if ($res->getStatusCode() === 207) {
 			$service = new Sabre\Xml\Service();
 			$this->response = $service->parse($res->getBody()->getContents());
-			$this->commentId = (int)$this->response[0]['value'][2]['value'][0]['value'][0]['value'];
+			$this->commentId = (int)($this->getValueFromNamedEntries('{DAV:}response {DAV:}propstat {DAV:}prop {http://owncloud.org/ns}id', $this->response ?? []) ?? 0);
 		}
 	}
 
 	/**
-	 * @Given As :user sending :verb to :url with
 	 * @param string $user
 	 * @param string $verb
 	 * @param string $url
 	 * @param \Behat\Gherkin\Node\TableNode $body
 	 * @throws \Exception
 	 */
+	#[Given('As :user sending :verb to :url with')]
 	public function asUserSendingToWith($user, $verb, $url, \Behat\Gherkin\Node\TableNode $body) {
 		$client = new \GuzzleHttp\Client();
 		$options = [];
@@ -200,11 +213,11 @@ class CommentsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @Then As :user delete the created comment it should return :statusCode
 	 * @param string $user
 	 * @param int $statusCode
 	 * @throws \Exception
 	 */
+	#[Then('As :user delete the created comment it should return :statusCode')]
 	public function asDeleteTheCreatedCommentItShouldReturn($user, $statusCode) {
 		$url = $this->baseUrl . '/remote.php/dav/comments/files/' . $this->fileId . '/' . $this->commentId;
 
@@ -227,18 +240,19 @@ class CommentsContext implements \Behat\Behat\Context\Context {
 		}
 
 		if ($res->getStatusCode() !== (int)$statusCode) {
-			throw new \Exception("Response status code was not $statusCode (" . $res->getStatusCode() . ")");
+			throw new \Exception("Response status code was not $statusCode (" . $res->getStatusCode() . ')');
 		}
 	}
 
 	/**
-	 * @Then the response should contain a property :key with value :value
 	 * @param string $key
 	 * @param string $value
 	 * @throws \Exception
 	 */
+	#[Then('the response should contain a property :key with value :value')]
 	public function theResponseShouldContainAPropertyWithValue($key, $value) {
-		$keys = $this->response[0]['value'][2]['value'][0]['value'];
+		//		$keys = $this->response[0]['value'][1]['value'][0]['value'];
+		$keys = $this->getValueFromNamedEntries('{DAV:}response {DAV:}propstat {DAV:}prop', $this->response);
 		$found = false;
 		foreach ($keys as $singleKey) {
 			if ($singleKey['name'] === '{http://owncloud.org/ns}' . substr($key, 3)) {
@@ -253,27 +267,27 @@ class CommentsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @Then the response should contain only :number comments
 	 * @param int $number
 	 * @throws \Exception
 	 */
+	#[Then('the response should contain only :number comments')]
 	public function theResponseShouldContainOnlyComments($number) {
 		$count = 0;
 		if ($this->response !== null) {
 			$count = count($this->response);
 		}
 		if ($count !== (int)$number) {
-			throw new \Exception("Found more comments than $number (" . $count . ")");
+			throw new \Exception("Found more comments than $number (" . $count . ')');
 		}
 	}
 
 	/**
-	 * @Then As :user edit the last created comment and set text to :text it should return :statusCode
 	 * @param string $user
 	 * @param string $text
 	 * @param int $statusCode
 	 * @throws \Exception
 	 */
+	#[Then('As :user edit the last created comment and set text to :text it should return :statusCode')]
 	public function asEditTheLastCreatedCommentAndSetTextToItShouldReturn($user, $text, $statusCode) {
 		$client = new \GuzzleHttp\Client();
 		$options = [];
@@ -293,7 +307,7 @@ class CommentsContext implements \Behat\Behat\Context\Context {
 		}
 
 		if ($res->getStatusCode() !== (int)$statusCode) {
-			throw new \Exception("Response status code was not $statusCode (" . $res->getStatusCode() . ")");
+			throw new \Exception("Response status code was not $statusCode (" . $res->getStatusCode() . ')');
 		}
 	}
 }

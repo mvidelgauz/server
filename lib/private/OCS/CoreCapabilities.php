@@ -1,29 +1,19 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\OCS;
 
 use OCP\Capabilities\ICapability;
 use OCP\IConfig;
+use OCP\IPreview;
+use OCP\IURLGenerator;
 
 /**
  * Class Capabilities
@@ -31,28 +21,55 @@ use OCP\IConfig;
  * @package OC\OCS
  */
 class CoreCapabilities implements ICapability {
-
-	/** @var IConfig */
-	private $config;
-
 	/**
 	 * @param IConfig $config
+	 * @param IPreview $preview
 	 */
-	public function __construct(IConfig $config) {
-		$this->config = $config;
+	public function __construct(
+		private IConfig $config,
+		private IPreview $preview,
+	) {
 	}
 
 	/**
 	 * Return this classes capabilities
 	 *
-	 * @return array
+	 * @return array{
+	 *     core: array{
+	 *         pollinterval: int,
+	 *         webdav-root: string,
+	 *         reference-api: boolean,
+	 *         reference-regex: string,
+	 *         mod-rewrite-working: boolean,
+	 *         previews: array{
+	 *             enabled_providers: list<string>,
+	 *             max_width: int,
+	 *             max_height: int,
+	 *         },
+	 *     },
+	 * }
 	 */
-	public function getCapabilities() {
+	#[\Override]
+	public function getCapabilities(): array {
 		return [
 			'core' => [
-				'pollinterval' => $this->config->getSystemValue('pollinterval', 60),
-				'webdav-root' => $this->config->getSystemValue('webdav-root', 'remote.php/webdav'),
-			]
+				'pollinterval' => $this->config->getSystemValueInt('pollinterval', 60),
+				'webdav-root' => $this->config->getSystemValueString('webdav-root', 'remote.php/webdav'),
+				'reference-api' => true,
+				'reference-regex' => IURLGenerator::URL_REGEX_NO_MODIFIERS,
+				'mod-rewrite-working' => $this->config->getSystemValueBool('htaccess.IgnoreFrontController') || getenv('front_controller_active') === 'true',
+				'previews' => [
+					// The mime patterns previews can be generated for. Empty
+					// when previews are off entirely. Clients use it to tell
+					// the formats a browser cannot show on its own but the
+					// server can render from the ones it can do neither of.
+					'enabled_providers' => array_keys($this->preview->getProviders()),
+					// The largest preview the server renders. Past it, a client
+					// that needs more detail has to load the file itself
+					'max_width' => $this->config->getSystemValueInt('preview_max_x', 4096),
+					'max_height' => $this->config->getSystemValueInt('preview_max_y', 4096),
+				],
+			],
 		];
 	}
 }

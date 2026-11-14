@@ -1,89 +1,82 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Robin Appelman <robin@icewind.nl>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Florent <florent@coppint.com>
- * @author James Letendre <James.Letendre@gmail.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author S. Cat <33800996+sparrowjack63@users.noreply.github.com>
- * @author Stephen Cuppett <steve@cuppett.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Files\ObjectStore;
 
 use Aws\ClientResolver;
 use Aws\Credentials\CredentialProvider;
-use Aws\Credentials\EcsCredentialProvider;
 use Aws\Credentials\Credentials;
 use Aws\Exception\CredentialsException;
+use Aws\Middleware;
 use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
-use GuzzleHttp\Promise;
+use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\RejectedPromise;
-use OCP\ILogger;
+use GuzzleHttp\Psr7\Utils;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Files\ObjectStore\Events\BucketCreatedEvent;
+use OCP\Files\StorageNotAvailableException;
+use OCP\ICache;
+use OCP\ICacheFactory;
+use OCP\ICertificateManager;
+use OCP\Server;
+use Psr\Http\Message\RequestInterface;
+use Psr\Log\LoggerInterface;
 
 trait S3ConnectionTrait {
-	/** @var array */
-	protected $params;
+	use S3ConfigTrait;
 
-	/** @var S3Client */
-	protected $connection;
+	protected string $id;
 
-	/** @var string */
-	protected $id;
+	protected bool $test;
 
-	/** @var string */
-	protected $bucket;
-
-	/** @var int */
-	protected $timeout;
-
-	/** @var string */
-	protected $proxy;
-
-	/** @var int */
-	protected $uploadPartSize;
-
-	protected $test;
+	protected ?S3Client $connection = null;
+	private ?ICache $existingBucketsCache = null;
+	private bool $usePresignedUrl = false;
 
 	protected function parseParams($params) {
 		if (empty($params['bucket'])) {
-			throw new \Exception("Bucket has to be configured.");
+			throw new \Exception('Bucket has to be configured.');
+		}
+
+		if (isset($params['perBucket'][$params['bucket']])) {
+			$params = array_merge($params, $params['perBucket'][$params['bucket']]);
 		}
 
 		$this->id = 'amazon::' . $params['bucket'];
 
 		$this->test = isset($params['test']);
 		$this->bucket = $params['bucket'];
+		// Default to 5 like the S3 SDK does
+		$this->concurrency = $params['concurrency'] ?? 5;
 		$this->proxy = $params['proxy'] ?? false;
+		$this->connectTimeout = $params['connect_timeout'] ?? 5;
 		$this->timeout = $params['timeout'] ?? 15;
+		$this->storageClass = !empty($params['storageClass']) ? $params['storageClass'] : 'STANDARD';
 		$this->uploadPartSize = $params['uploadPartSize'] ?? 524288000;
+		$this->putSizeLimit = $params['putSizeLimit'] ?? 104857600;
+		$this->copySizeLimit = $params['copySizeLimit'] ?? 5242880000;
+		$this->useMultipartCopy = (bool)($params['useMultipartCopy'] ?? true);
+		$this->retriesMaxAttempts = $params['retriesMaxAttempts'] ?? 5;
 		$params['region'] = empty($params['region']) ? 'eu-west-1' : $params['region'];
 		$params['hostname'] = empty($params['hostname']) ? 's3.' . $params['region'] . '.amazonaws.com' : $params['hostname'];
+		$params['key'] = $params['key'] ?? '';
+		$params['s3-accelerate'] = $params['hostname'] === 's3-accelerate.amazonaws.com' || $params['hostname'] === 's3-accelerate.dualstack.amazonaws.com';
 		if (!isset($params['port']) || $params['port'] === '') {
 			$params['port'] = (isset($params['use_ssl']) && $params['use_ssl'] === false) ? 80 : 443;
 		}
-		$params['verify_bucket_exists'] = empty($params['verify_bucket_exists']) ? true : $params['verify_bucket_exists'];
+		$params['verify_bucket_exists'] = $params['verify_bucket_exists'] ?? true;
+
+		if ($params['s3-accelerate']) {
+			$params['verify_bucket_exists'] = false;
+		}
+
 		$this->params = $params;
+		$this->usePresignedUrl = $params['use_presigned_url'] ?? false;
 	}
 
 	public function getBucket() {
@@ -101,72 +94,123 @@ trait S3ConnectionTrait {
 	 * @throws \Exception if connection could not be made
 	 */
 	public function getConnection() {
-		if (!is_null($this->connection)) {
+		if ($this->connection !== null) {
 			return $this->connection;
+		}
+
+		if ($this->existingBucketsCache === null) {
+			$this->existingBucketsCache = Server::get(ICacheFactory::class)
+				->createLocal('s3-bucket-exists-cache');
 		}
 
 		$scheme = (isset($this->params['use_ssl']) && $this->params['use_ssl'] === false) ? 'http' : 'https';
 		$base_url = $scheme . '://' . $this->params['hostname'] . ':' . $this->params['port'] . '/';
 
 		// Adding explicit credential provider to the beginning chain.
-		// Including environment variables and IAM instance profiles.
+		// Including default credential provider (skipping AWS shared config files).
 		$provider = CredentialProvider::memoize(
 			CredentialProvider::chain(
 				$this->paramCredentialProvider(),
-				CredentialProvider::env(),
-				CredentialProvider::assumeRoleWithWebIdentityCredentialProvider(),
-				!empty(getenv(EcsCredentialProvider::ENV_URI))
-					? CredentialProvider::ecsCredentials()
-					: CredentialProvider::instanceProfile()
+				CredentialProvider::defaultProvider(['use_aws_shared_config_files' => false])
 			)
 		);
 
 		$options = [
-			'version' => isset($this->params['version']) ? $this->params['version'] : 'latest',
+			'version' => $this->params['version'] ?? 'latest',
 			'credentials' => $provider,
 			'endpoint' => $base_url,
 			'region' => $this->params['region'],
 			'use_path_style_endpoint' => isset($this->params['use_path_style']) ? $this->params['use_path_style'] : false,
+			'proxy' => isset($this->params['proxy']) ? $this->params['proxy'] : false,
 			'signature_provider' => \Aws\or_chain([self::class, 'legacySignatureProvider'], ClientResolver::_default_signature_provider()),
 			'csm' => false,
 			'use_arn_region' => false,
+			'http' => [
+				'verify' => $this->getCertificateBundlePath(),
+				'connect_timeout' => $this->connectTimeout,
+			],
+			'use_aws_shared_config_files' => false,
+			'retries' => [
+				'mode' => 'standard',
+				'max_attempts' => $this->retriesMaxAttempts,
+			],
 		];
+
+		if ($this->params['s3-accelerate']) {
+			$options['use_accelerate_endpoint'] = true;
+		} else {
+			$options['endpoint'] = $base_url;
+		}
+
+		if (isset($this->params['request_checksum_calculation'])) {
+			$options['request_checksum_calculation'] = $this->params['request_checksum_calculation'];
+		} else {
+			$options['request_checksum_calculation'] = 'when_required';
+		}
+
+		if (isset($this->params['response_checksum_validation'])) {
+			$options['response_checksum_validation'] = $this->params['response_checksum_validation'];
+		} else {
+			$options['response_checksum_validation'] = 'when_required';
+		}
+
 		if ($this->getProxy()) {
-			$options['http'] = [ 'proxy' => $this->getProxy() ];
+			$options['http']['proxy'] = $this->getProxy();
 		}
 		if (isset($this->params['legacy_auth']) && $this->params['legacy_auth']) {
 			$options['signature_version'] = 'v2';
 		}
 		$this->connection = new S3Client($options);
 
-		if (!$this->connection::isBucketDnsCompatible($this->bucket)) {
-			$logger = \OC::$server->getLogger();
-			$logger->debug('Bucket "' . $this->bucket . '" This bucket name is not dns compatible, it may contain invalid characters.',
-					 ['app' => 'objectstore']);
-		}
+		$this->addDeleteObjectsContentMd5Middleware();
 
-		if ($this->params['verify_bucket_exists'] && !$this->connection->doesBucketExist($this->bucket)) {
-			$logger = \OC::$server->getLogger();
-			try {
-				$logger->info('Bucket "' . $this->bucket . '" does not exist - creating it.', ['app' => 'objectstore']);
-				if (!$this->connection::isBucketDnsCompatible($this->bucket)) {
-					throw new \Exception("The bucket will not be created because the name is not dns compatible, please correct it: " . $this->bucket);
-				}
-				$this->connection->createBucket(['Bucket' => $this->bucket]);
-				$this->testTimeout();
-			} catch (S3Exception $e) {
-				$logger->logException($e, [
-					'message' => 'Invalid remote storage.',
-					'level' => ILogger::DEBUG,
-					'app' => 'objectstore',
-				]);
-				throw new \Exception('Creation of bucket "' . $this->bucket . '" failed. ' . $e->getMessage());
+		try {
+			$logger = Server::get(LoggerInterface::class);
+			if (!$this->connection::isBucketDnsCompatible($this->bucket)) {
+				$logger->debug('Bucket "' . $this->bucket . '" This bucket name is not dns compatible, it may contain invalid characters.',
+					['app' => 'objectstore']);
 			}
-		}
 
-		// google cloud's s3 compatibility doesn't like the EncodingType parameter
-		if (strpos($base_url, 'storage.googleapis.com')) {
-			$this->connection->getHandlerList()->remove('s3.auto_encode');
+			if ($this->params['verify_bucket_exists']) {
+				$cacheKey = $this->params['hostname'] . $this->bucket;
+				$exist = $this->existingBucketsCache->get($cacheKey) === 1;
+
+				if (!$exist) {
+					if (!$this->connection->doesBucketExist($this->bucket)) {
+						try {
+							$logger->info('Bucket "' . $this->bucket . '" does not exist - creating it.', ['app' => 'objectstore']);
+							if (!$this->connection::isBucketDnsCompatible($this->bucket)) {
+								throw new StorageNotAvailableException('The bucket will not be created because the name is not dns compatible, please correct it: ' . $this->bucket);
+							}
+							$this->connection->createBucket(['Bucket' => $this->bucket]);
+							Server::get(IEventDispatcher::class)
+								->dispatchTyped(new BucketCreatedEvent(
+									$this->bucket,
+									$options['endpoint'],
+									$options['region'],
+									$options['version']
+								));
+							$this->testTimeout();
+						} catch (S3Exception $e) {
+							$logger->debug('Invalid remote storage.', [
+								'exception' => $e,
+								'app' => 'objectstore',
+							]);
+							if ($e->getAwsErrorCode() !== 'BucketAlreadyOwnedByYou') {
+								throw new StorageNotAvailableException('Creation of bucket "' . $this->bucket . '" failed. ' . $e->getMessage());
+							}
+						}
+					}
+					$this->existingBucketsCache->set($cacheKey, 1);
+				}
+			}
+
+			// google cloud's s3 compatibility doesn't like the EncodingType parameter
+			if (strpos($base_url, 'storage.googleapis.com')) {
+				$this->connection->getHandlerList()->remove('s3.auto_encode');
+			}
+		} catch (S3Exception $e) {
+			throw new StorageNotAvailableException('S3 service is unable to handle request: ' . $e->getMessage());
 		}
 
 		return $this->connection;
@@ -179,6 +223,41 @@ trait S3ConnectionTrait {
 		if ($this->test) {
 			sleep($this->timeout);
 		}
+	}
+
+	/**
+	 * Add middleware to inject Content-MD5 header for DeleteObjects operations
+	 *
+	 * AWS SDK PHP v3.339.0+ stopped generating the Content-MD5 header for DeleteObjects operations.
+	 * However, this is still required by the `bt-blue.com` S3 provider.
+	 * This middleware automatically calculates and adds the header to comply with
+	 * AWS S3 API requirements.
+	 *
+	 * @see https://github.com/aws/aws-sdk-php/issues/3068
+	 */
+	private function addDeleteObjectsContentMd5Middleware(): void {
+		if ($this->connection === null) {
+			return;
+		}
+
+		$handlerList = $this->connection->getHandlerList();
+		$handlerList->appendBuild(
+			Middleware::mapRequest(static function (RequestInterface $request): RequestInterface {
+				// Only add Content-MD5 for DeleteObjects operations
+				if ($request->getUri()->getQuery() !== 'delete') {
+					return $request;
+				}
+
+				// Calculate MD5 of request body and add Content-MD5 header
+				if (!$request->hasHeader('Content-MD5')) {
+					$body = $request->getBody();
+					$contentMd5 = base64_encode(Utils::hash($body, 'md5', true));
+					return $request->withHeader('Content-MD5', $contentMd5);
+				}
+
+				return $request;
+			})
+		);
 	}
 
 	public static function legacySignatureProvider($version, $service, $region) {
@@ -194,19 +273,144 @@ trait S3ConnectionTrait {
 	/**
 	 * This function creates a credential provider based on user parameter file
 	 */
-	protected function paramCredentialProvider() : callable {
+	protected function paramCredentialProvider(): callable {
 		return function () {
 			$key = empty($this->params['key']) ? null : $this->params['key'];
 			$secret = empty($this->params['secret']) ? null : $this->params['secret'];
+			$sessionToken = empty($this->params['session_token']) ? null : $this->params['session_token'];
 
 			if ($key && $secret) {
-				return Promise\promise_for(
-					new Credentials($key, $secret)
+				return Create::promiseFor(
+					// a null sessionToken match the default signature of the constructor
+					new Credentials($key, $secret, $sessionToken)
 				);
 			}
 
 			$msg = 'Could not find parameters set for credentials in config file.';
 			return new RejectedPromise(new CredentialsException($msg));
 		};
+	}
+
+	protected function getCertificateBundlePath(): ?string {
+		if ((int)($this->params['use_nextcloud_bundle'] ?? '0')) {
+			/** @var ICertificateManager $certManager */
+			$certManager = Server::get(ICertificateManager::class);
+			// since we store the certificate bundles on the primary storage, we can't get the bundle while setting up the primary storage
+			if (!isset($this->params['primary_storage'])) {
+				return $certManager->getAbsoluteBundlePath();
+			} else {
+				return $certManager->getDefaultCertificatesBundlePath();
+			}
+		} else {
+			return null;
+		}
+	}
+
+	protected function getSSECKey(): ?string {
+		if (isset($this->params['sse_c_key']) && !empty($this->params['sse_c_key'])) {
+			return $this->params['sse_c_key'];
+		}
+
+		return null;
+	}
+
+	protected function getSSECParameters(bool $copy = false): array {
+		$key = $this->getSSECKey();
+
+		if ($key === null) {
+			return [];
+		}
+
+		$rawKey = base64_decode($key);
+		if ($copy) {
+			return [
+				'CopySourceSSECustomerAlgorithm' => 'AES256',
+				'CopySourceSSECustomerKey' => $rawKey,
+				'CopySourceSSECustomerKeyMD5' => md5($rawKey, true)
+			];
+		}
+		return [
+			'SSECustomerAlgorithm' => 'AES256',
+			'SSECustomerKey' => $rawKey,
+			'SSECustomerKeyMD5' => md5($rawKey, true)
+		];
+	}
+
+	/**
+	 * Get SSE-KMS key ID from configuration
+	 * @return string|null KMS key ARN/ID or null for bucket default key
+	 */
+	protected function getSSEKMSKeyId(): ?string {
+		if (isset($this->params['sse_kms_key_id']) && !empty($this->params['sse_kms_key_id'])) {
+			return $this->params['sse_kms_key_id'];
+		}
+		return null;
+	}
+
+	/**
+	 * Check if SSE-KMS is enabled
+	 * @return bool
+	 */
+	protected function isSSEKMSEnabled(): bool {
+		return !empty($this->params['sse_kms_enabled']) && $this->params['sse_kms_enabled'] === true;
+	}
+
+	/**
+	 * Get SSE-KMS parameters for S3 operations
+	 *
+	 * When SSE-KMS is enabled, AWS S3 encrypts objects server-side using
+	 * AWS Key Management Service (KMS) keys. This provides:
+	 * - Centralized key management via AWS KMS
+	 * - Audit trail of key usage
+	 * - No client-side encryption overhead
+	 * - Automatic key rotation support
+	 *
+	 * @param bool $copy Whether this is for a copy operation (unused for KMS)
+	 * @return array Parameters to merge into S3 API calls
+	 */
+	protected function getSSEKMSParameters(bool $copy = false): array {
+		if (!$this->isSSEKMSEnabled()) {
+			return [];
+		}
+
+		$params = [
+			'ServerSideEncryption' => 'aws:kms',
+		];
+
+		// Add specific KMS key if configured, otherwise use bucket default key
+		$keyId = $this->getSSEKMSKeyId();
+		if ($keyId !== null) {
+			$params['SSEKMSKeyId'] = $keyId;
+		}
+
+		// Note: For copy operations, S3 re-encrypts with the destination key
+		// No special source parameters needed (unlike SSE-C)
+
+		return $params;
+	}
+
+	/**
+	 * Get unified server-side encryption parameters
+	 *
+	 * Supports both SSE-C (customer-provided keys) and SSE-KMS (AWS-managed keys).
+	 * SSE-C takes precedence if both are configured (for backward compatibility
+	 * during migration from SSE-C to SSE-KMS).
+	 *
+	 * @param bool $copy Whether this is for a copy operation
+	 * @return array Encryption parameters to merge into S3 API calls
+	 */
+	protected function getServerSideEncryptionParameters(bool $copy = false): array {
+		// SSE-C takes precedence for backward compatibility during migration
+		$sseC = $this->getSSECParameters($copy);
+		if (!empty($sseC)) {
+			return $sseC;
+		}
+
+		// Fall back to SSE-KMS if enabled
+		return $this->getSSEKMSParameters($copy);
+	}
+
+	public function isUsePresignedUrl(): bool {
+		return $this->usePresignedUrl;
 	}
 }

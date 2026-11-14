@@ -3,28 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020 Joas Schilling <coding@schilljs.com>
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Settings\Search;
 
 use OCP\IGroupManager;
@@ -40,31 +22,18 @@ use OCP\Settings\IManager;
 
 class SectionSearch implements IProvider {
 
-	/** @var IManager */
-	protected $settingsManager;
-
-	/** @var IGroupManager */
-	protected $groupManager;
-
-	/** @var IURLGenerator */
-	protected $urlGenerator;
-
-	/** @var IL10N */
-	protected $l;
-
-	public function __construct(IManager $settingsManager,
-								IGroupManager $groupManager,
-								IURLGenerator $urlGenerator,
-								IL10N $l) {
-		$this->settingsManager = $settingsManager;
-		$this->groupManager = $groupManager;
-		$this->urlGenerator = $urlGenerator;
-		$this->l = $l;
+	public function __construct(
+		protected IManager $settingsManager,
+		protected IGroupManager $groupManager,
+		protected IURLGenerator $urlGenerator,
+		protected IL10N $l,
+	) {
 	}
 
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	public function getId(): string {
 		return 'settings';
 	}
@@ -72,6 +41,7 @@ class SectionSearch implements IProvider {
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	public function getName(): string {
 		return $this->l->t('Settings');
 	}
@@ -79,6 +49,7 @@ class SectionSearch implements IProvider {
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	public function getOrder(string $route, array $routeParameters): int {
 		if ($route === 'settings.PersonalSettings.index' || $route === 'settings.AdminSettings.index') {
 			return -1;
@@ -90,12 +61,29 @@ class SectionSearch implements IProvider {
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	public function search(IUser $user, ISearchQuery $query): SearchResult {
 		$isAdmin = $this->groupManager->isAdmin($user->getUID());
 
+		$personalSections = $this->settingsManager->getPersonalSections();
+		foreach ($personalSections as $priority => $sections) {
+			$personalSections[$priority] = array_values(array_filter(
+				$sections,
+				fn (IIconSection $section) => !empty($this->settingsManager->getPersonalSettings($section->getID())),
+			));
+		}
+
+		$adminSections = $this->settingsManager->getAdminSections();
+		foreach ($adminSections as $priority => $sections) {
+			$adminSections[$priority] = array_values(array_filter(
+				$sections,
+				fn (IIconSection $section) => !empty($this->settingsManager->getAllowedAdminSettings($section->getID(), $user)),
+			));
+		}
+
 		$result = $this->searchSections(
 			$query,
-			$this->settingsManager->getPersonalSections(),
+			$personalSections,
 			$isAdmin ? $this->l->t('Personal') : '',
 			'settings.PersonalSettings.index'
 		);
@@ -103,7 +91,7 @@ class SectionSearch implements IProvider {
 		if ($this->groupManager->isAdmin($user->getUID())) {
 			$result = array_merge($result, $this->searchSections(
 				$query,
-				$this->settingsManager->getAdminSections(),
+				$adminSections,
 				$this->l->t('Administration'),
 				'settings.AdminSettings.index'
 			));
@@ -127,23 +115,24 @@ class SectionSearch implements IProvider {
 		foreach ($sections as $priority => $sectionsByPriority) {
 			foreach ($sectionsByPriority as $section) {
 				if (
-					stripos($section->getName(), $query->getTerm()) === false &&
-					stripos($section->getID(), $query->getTerm()) === false
+					stripos($section->getName(), $query->getTerm()) === false
+					&& stripos($section->getID(), $query->getTerm()) === false
 				) {
 					continue;
 				}
 
-				/**
-				 * We can't use the icon URL at the moment as they don't invert correctly for dark theme
-				 * $iconUrl = $section->getIcon();
-				 */
+				// The section's own icon, or a generic cog fallback.
+				$icon = $section->getIcon();
+				if ($icon === '') {
+					$icon = $this->urlGenerator->imagePath('settings', 'settings.svg');
+				}
 
 				$result[] = new SearchResultEntry(
 					'',
 					$section->getName(),
 					$subline,
 					$this->urlGenerator->linkToRouteAbsolute($routeName, ['section' => $section->getID()]),
-					'icon-settings'
+					$icon,
 				);
 			}
 		}

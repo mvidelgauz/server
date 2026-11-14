@@ -1,53 +1,42 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bernhard Reiter <ockham@raz.or.at>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Thomas Tanghus <thomas@tanghus.net>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC;
 
 use OC\Tagging\TagMapper;
+use OCP\Db\Exception as DBException;
 use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\EventDispatcher\Event;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\EventDispatcher\IEventListener;
+use OCP\Files\IRootFolder;
 use OCP\IDBConnection;
 use OCP\ITagManager;
 use OCP\ITags;
+use OCP\IUserManager;
 use OCP\IUserSession;
+use OCP\User\Events\UserDeletedEvent;
+use Psr\Log\LoggerInterface;
 
-class TagManager implements ITagManager {
+/**
+ * @template-implements IEventListener<UserDeletedEvent>
+ */
+class TagManager implements ITagManager, IEventListener {
 
-	/** @var TagMapper */
-	private $mapper;
-
-	/** @var IUserSession */
-	private $userSession;
-
-	/** @var IDBConnection */
-	private $connection;
-
-	public function __construct(TagMapper $mapper, IUserSession $userSession, IDBConnection $connection) {
-		$this->mapper = $mapper;
-		$this->userSession = $userSession;
-		$this->connection = $connection;
+	public function __construct(
+		private TagMapper $mapper,
+		private IUserSession $userSession,
+		private IUserManager $userManager,
+		private IDBConnection $connection,
+		private LoggerInterface $logger,
+		private IEventDispatcher $dispatcher,
+		private IRootFolder $rootFolder,
+	) {
 	}
 
 	/**
@@ -58,11 +47,12 @@ class TagManager implements ITagManager {
 	 * @param array $defaultTags An array of default tags to be used if none are stored.
 	 * @param boolean $includeShared Whether to include tags for items shared with this user by others.
 	 * @param string $userId user for which to retrieve the tags, defaults to the currently
-	 * logged in user
-	 * @return \OCP\ITags
+	 *                       logged in user
+	 * @return ?ITags
 	 *
 	 * since 20.0.0 $includeShared isn't used anymore
 	 */
+	#[\Override]
 	public function load($type, $defaultTags = [], $includeShared = false, $userId = null) {
 		if (is_null($userId)) {
 			$user = $this->userSession->getUser();
@@ -72,11 +62,12 @@ class TagManager implements ITagManager {
 			}
 			$userId = $this->userSession->getUser()->getUId();
 		}
-		return new Tags($this->mapper, $userId, $type, $defaultTags);
+		$userFolder = $this->rootFolder->getUserFolder($userId);
+		return new Tags($this->mapper, $userId, $type, $this->logger, $this->connection, $this->dispatcher, $this->userManager, $userFolder, $defaultTags);
 	}
 
 	/**
-	 * Get all users who favorited an object
+	 * Get all users who marked an object as favorite.
 	 *
 	 * @param string $objectType
 	 * @param int $objectId
@@ -91,10 +82,64 @@ class TagManager implements ITagManager {
 			->andWhere($query->expr()->eq('c.type', $query->createNamedParameter($objectType)))
 			->andWhere($query->expr()->eq('c.category', $query->createNamedParameter(ITags::TAG_FAVORITE)));
 
-		$result = $query->execute();
-		$users = $result->fetchAll(\PDO::FETCH_COLUMN);
+		$result = $query->executeQuery();
+		$users = $result->fetchFirstColumn();
 		$result->closeCursor();
 
 		return $users;
+	}
+
+	#[\Override]
+	public function handle(Event $event): void {
+		if (!($event instanceof UserDeletedEvent)) {
+			return;
+		}
+
+		// Find all objectid/tagId pairs.
+		$user = $event->getUser();
+		$qb = $this->connection->getQueryBuilder();
+		$qb->select('id')
+			->from('vcategory')
+			->where($qb->expr()->eq('uid', $qb->createNamedParameter($user->getUID())));
+		try {
+			$result = $qb->executeQuery();
+		} catch (DBException $e) {
+			$this->logger->error($e->getMessage(), [
+				'app' => 'core',
+				'exception' => $e,
+			]);
+			return;
+		}
+
+		$tagsIds = array_map(fn (array $row) => (int)$row['id'], $result->fetchAllAssociative());
+		$result->closeCursor();
+
+		if (count($tagsIds) === 0) {
+			return;
+		}
+
+		// Clean vcategory_to_object table
+		$qb = $this->connection->getQueryBuilder();
+		$qb = $qb->delete('vcategory_to_object')
+			->where($qb->expr()->in('categoryid', $qb->createParameter('chunk')));
+
+		// Clean vcategory
+		$qb1 = $this->connection->getQueryBuilder();
+		$qb1 = $qb1->delete('vcategory')
+			->where($qb1->expr()->in('id', $qb1->createParameter('chunk')));
+
+		foreach (array_chunk($tagsIds, IQueryBuilder::MAX_IN_PARAMETERS) as $tagChunk) {
+			$qb->setParameter('chunk', $tagChunk, IQueryBuilder::PARAM_INT_ARRAY);
+			$qb1->setParameter('chunk', $tagChunk, IQueryBuilder::PARAM_INT_ARRAY);
+			try {
+				$qb->executeStatement();
+				$qb1->executeStatement();
+			} catch (DBException $e) {
+				$this->logger->error($e->getMessage(), [
+					'app' => 'core',
+					'exception' => $e,
+				]);
+			}
+		}
 	}
 }

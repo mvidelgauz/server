@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2015-2016 ownCloud, Inc.
+# SPDX-License-Identifier: AGPL-3.0-only
 Feature: capabilities
 	Background:
 		Given using api version "1"
@@ -142,6 +144,7 @@ Feature: capabilities
 
 	Scenario: Changing password enforce
 		Given As an "admin"
+		And parameter "shareapi_enable_link_password_by_default" of app "core" is set to "yes"
 		And parameter "shareapi_enforce_links_password" of app "core" is set to "yes"
 		When sending "GET" to "/cloud/capabilities"
 		Then the HTTP status code should be "200"

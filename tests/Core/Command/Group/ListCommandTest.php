@@ -1,27 +1,11 @@
 <?php
+
 /**
- * @copyright 2016, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-namespace Test\Core\Command\Group;
+namespace Tests\Core\Command\Group;
 
 use OC\Core\Command\Group\ListCommand;
 use OCP\IGroup;
@@ -32,7 +16,6 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Test\TestCase;
 
 class ListCommandTest extends TestCase {
-
 	/** @var IGroupManager|\PHPUnit\Framework\MockObject\MockObject */
 	private $groupManager;
 
@@ -45,20 +28,21 @@ class ListCommandTest extends TestCase {
 	/** @var OutputInterface|\PHPUnit\Framework\MockObject\MockObject */
 	private $output;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
 		$this->groupManager = $this->createMock(IGroupManager::class);
 		$this->command = $this->getMockBuilder(ListCommand::class)
 			->setConstructorArgs([$this->groupManager])
-			->setMethods(['writeArrayInOutputFormat'])
+			->onlyMethods(['writeArrayInOutputFormat'])
 			->getMock();
 
 		$this->input = $this->createMock(InputInterface::class);
 		$this->output = $this->createMock(OutputInterface::class);
 	}
 
-	public function testExecute() {
+	public function testExecute(): void {
 		$group1 = $this->createMock(IGroup::class);
 		$group1->method('getGID')->willReturn('group1');
 		$group2 = $this->createMock(IGroup::class);
@@ -108,30 +92,35 @@ class ListCommandTest extends TestCase {
 			->with(
 				$this->equalTo($this->input),
 				$this->equalTo($this->output),
-				[
-					'group1' => [
-						'user1',
-						'user2',
-					],
-					'group2' => [
-					],
-					'group3' => [
-						'user1',
-						'user3',
+				$this->callback(
+					fn ($iterator) => iterator_to_array($iterator) === [
+						'group1' => [
+							'user1',
+							'user2',
+						],
+						'group2' => [
+						],
+						'group3' => [
+							'user1',
+							'user3',
+						]
 					]
-				]
+				)
 			);
 
 		$this->invokePrivate($this->command, 'execute', [$this->input, $this->output]);
 	}
 
-	public function testInfo() {
+	public function testInfo(): void {
 		$group1 = $this->createMock(IGroup::class);
 		$group1->method('getGID')->willReturn('group1');
+		$group1->method('getDisplayName')->willReturn('Group 1');
 		$group2 = $this->createMock(IGroup::class);
 		$group2->method('getGID')->willReturn('group2');
+		$group2->method('getDisplayName')->willReturn('Group 2');
 		$group3 = $this->createMock(IGroup::class);
 		$group3->method('getGID')->willReturn('group3');
+		$group3->method('getDisplayName')->willReturn('Group 3');
 
 		$user = $this->createMock(IUser::class);
 
@@ -184,26 +173,31 @@ class ListCommandTest extends TestCase {
 			->with(
 				$this->equalTo($this->input),
 				$this->equalTo($this->output),
-				[
-					'group1' => [
-						'backends' => ['Database'],
-						'users' => [
-							'user1',
-							'user2',
+				$this->callback(
+					fn ($iterator) => iterator_to_array($iterator) === [
+						'group1' => [
+							'displayName' => 'Group 1',
+							'backends' => ['Database'],
+							'users' => [
+								'user1',
+								'user2',
+							],
 						],
-					],
-					'group2' => [
-						'backends' => ['Database'],
-						'users' => [],
-					],
-					'group3' => [
-						'backends' => ['LDAP'],
-						'users' => [
-							'user1',
-							'user3',
+						'group2' => [
+							'displayName' => 'Group 2',
+							'backends' => ['Database'],
+							'users' => [],
 						],
+						'group3' => [
+							'displayName' => 'Group 3',
+							'backends' => ['LDAP'],
+							'users' => [
+								'user1',
+								'user3',
+							],
+						]
 					]
-				]
+				)
 			);
 
 		$this->invokePrivate($this->command, 'execute', [$this->input, $this->output]);

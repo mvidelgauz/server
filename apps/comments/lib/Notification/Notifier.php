@@ -1,27 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Comments\Notification;
 
 use OCP\Comments\IComment;
@@ -29,42 +13,22 @@ use OCP\Comments\ICommentsManager;
 use OCP\Comments\NotFoundException;
 use OCP\Files\IRootFolder;
 use OCP\IURLGenerator;
-use OCP\IUser;
 use OCP\IUserManager;
 use OCP\L10N\IFactory;
 use OCP\Notification\AlreadyProcessedException;
+use OCP\Notification\IAction;
 use OCP\Notification\INotification;
 use OCP\Notification\INotifier;
+use OCP\Notification\UnknownNotificationException;
 
 class Notifier implements INotifier {
-
-	/** @var IFactory */
-	protected $l10nFactory;
-
-	/** @var IRootFolder  */
-	protected $rootFolder;
-
-	/** @var ICommentsManager  */
-	protected $commentsManager;
-
-	/** @var IURLGenerator */
-	protected $url;
-
-	/** @var IUserManager */
-	protected $userManager;
-
 	public function __construct(
-		IFactory $l10nFactory,
-		IRootFolder $rootFolder,
-		ICommentsManager $commentsManager,
-		IURLGenerator $url,
-		IUserManager $userManager
+		protected IFactory $l10nFactory,
+		protected IRootFolder $rootFolder,
+		protected ICommentsManager $commentsManager,
+		protected IURLGenerator $url,
+		protected IUserManager $userManager,
 	) {
-		$this->l10nFactory = $l10nFactory;
-		$this->rootFolder = $rootFolder;
-		$this->commentsManager = $commentsManager;
-		$this->url = $url;
-		$this->userManager = $userManager;
 	}
 
 	/**
@@ -73,6 +37,7 @@ class Notifier implements INotifier {
 	 * @return string
 	 * @since 17.0.0
 	 */
+	#[\Override]
 	public function getID(): string {
 		return 'comments';
 	}
@@ -83,6 +48,7 @@ class Notifier implements INotifier {
 	 * @return string
 	 * @since 17.0.0
 	 */
+	#[\Override]
 	public function getName(): string {
 		return $this->l10nFactory->get('comments')->t('Comments');
 	}
@@ -91,27 +57,28 @@ class Notifier implements INotifier {
 	 * @param INotification $notification
 	 * @param string $languageCode The code of the language that should be used to prepare the notification
 	 * @return INotification
-	 * @throws \InvalidArgumentException When the notification was not prepared by a notifier
+	 * @throws UnknownNotificationException When the notification was not prepared by a notifier
 	 * @throws AlreadyProcessedException When the notification is not needed anymore and should be deleted
 	 * @since 9.0.0
 	 */
+	#[\Override]
 	public function prepare(INotification $notification, string $languageCode): INotification {
 		if ($notification->getApp() !== 'comments') {
-			throw new \InvalidArgumentException();
+			throw new UnknownNotificationException();
 		}
 		try {
 			$comment = $this->commentsManager->get($notification->getObjectId());
 		} catch (NotFoundException $e) {
 			// needs to be converted to InvalidArgumentException, otherwise none Notifications will be shown at all
-			throw new \InvalidArgumentException('Comment not found', 0, $e);
+			throw new UnknownNotificationException('Comment not found', 0, $e);
 		}
 		$l = $this->l10nFactory->get('comments', $languageCode);
 		$displayName = $comment->getActorId();
 		$isDeletedActor = $comment->getActorType() === ICommentsManager::DELETED_USER;
 		if ($comment->getActorType() === 'users') {
-			$commenter = $this->userManager->get($comment->getActorId());
-			if ($commenter instanceof IUser) {
-				$displayName = $commenter->getDisplayName();
+			$commenter = $this->userManager->getDisplayName($comment->getActorId());
+			if ($commenter !== null) {
+				$displayName = $commenter;
 			}
 		}
 
@@ -119,17 +86,16 @@ class Notifier implements INotifier {
 			case 'mention':
 				$parameters = $notification->getSubjectParameters();
 				if ($parameters[0] !== 'files') {
-					throw new \InvalidArgumentException('Unsupported comment object');
+					throw new UnknownNotificationException('Unsupported comment object');
 				}
 				$userFolder = $this->rootFolder->getUserFolder($notification->getUser());
-				$nodes = $userFolder->getById((int)$parameters[1]);
-				if (empty($nodes)) {
+				$node = $userFolder->getFirstNodeById((int)$parameters[1]);
+				if ($node === null) {
 					throw new AlreadyProcessedException();
 				}
-				$node = $nodes[0];
 
 				$path = rtrim($node->getPath(), '/');
-				if (strpos($path, '/' . $notification->getUser() . '/files/') === 0) {
+				if (str_starts_with($path, '/' . $notification->getUser() . '/files/')) {
 					// Remove /user/files/...
 					$fullPath = $path;
 					[,,, $path] = explode('/', $fullPath, 4);
@@ -145,31 +111,38 @@ class Notifier implements INotifier {
 				];
 
 				if ($isDeletedActor) {
-					$subject = $l->t('You were mentioned on “{file}”, in a comment by a user that has since been deleted');
+					$subject = $l->t('You were mentioned on "{file}", in a comment by an account that has since been deleted');
 				} else {
-					$subject = $l->t('{user} mentioned you in a comment on “{file}”');
+					$subject = $l->t('{user} mentioned you in a comment on "{file}"');
 					$subjectParameters['user'] = [
 						'type' => 'user',
 						'id' => $comment->getActorId(),
 						'name' => $displayName,
 					];
 				}
+
+				$commentLink = $this->url->linkToRouteAbsolute(
+					'comments.Notifications.view',
+					['id' => $comment->getId()],
+				);
+
 				[$message, $messageParameters] = $this->commentToRichMessage($comment);
 				$notification->setRichSubject($subject, $subjectParameters)
-					->setParsedSubject($this->richToParsed($subject, $subjectParameters))
 					->setRichMessage($message, $messageParameters)
-					->setParsedMessage($this->richToParsed($message, $messageParameters))
 					->setIcon($this->url->getAbsoluteURL($this->url->imagePath('core', 'actions/comment.svg')))
-					->setLink($this->url->linkToRouteAbsolute(
-						'comments.Notifications.view',
-						['id' => $comment->getId()])
-					);
+					->setLink($commentLink);
+
+				$action = $notification->createAction();
+				$action->setLink($commentLink, IAction::TYPE_WEB);
+				$action->setPrimary(true);
+				$action->setParsedLabel($l->t('Go to file'));
+				$notification->addParsedAction($action);
 
 				return $notification;
 				break;
 
 			default:
-				throw new \InvalidArgumentException('Invalid subject');
+				throw new UnknownNotificationException('Invalid subject');
 		}
 	}
 
@@ -180,8 +153,8 @@ class Notifier implements INotifier {
 		$mentions = $comment->getMentions();
 		foreach ($mentions as $mention) {
 			if ($mention['type'] === 'user') {
-				$user = $this->userManager->get($mention['id']);
-				if (!$user instanceof IUser) {
+				$userDisplayName = $this->userManager->getDisplayName($mention['id']);
+				if ($userDisplayName === null) {
 					continue;
 				}
 			}
@@ -195,7 +168,7 @@ class Notifier implements INotifier {
 			// index of the mentions of that type.
 			$mentionParameterId = 'mention-' . $mention['type'] . $mentionTypeCount[$mention['type']];
 			$message = str_replace('@"' . $mention['id'] . '"', '{' . $mentionParameterId . '}', $message);
-			if (strpos($mention['id'], ' ') === false && strpos($mention['id'], 'guest/') !== 0) {
+			if (!str_contains($mention['id'], ' ') && !str_starts_with($mention['id'], 'guest/')) {
 				$message = str_replace('@' . $mention['id'], '{' . $mentionParameterId . '}', $message);
 			}
 
@@ -213,20 +186,5 @@ class Notifier implements INotifier {
 			];
 		}
 		return [$message, $messageParameters];
-	}
-
-	public function richToParsed(string $message, array $parameters): string {
-		$placeholders = $replacements = [];
-		foreach ($parameters as $placeholder => $parameter) {
-			$placeholders[] = '{' . $placeholder . '}';
-			if ($parameter['type'] === 'user') {
-				$replacements[] = '@' . $parameter['name'];
-			} elseif ($parameter['type'] === 'file') {
-				$replacements[] = $parameter['path'];
-			} else {
-				$replacements[] = $parameter['name'];
-			}
-		}
-		return str_replace($placeholders, $replacements, $message);
 	}
 }

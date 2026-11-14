@@ -1,22 +1,26 @@
 <?php
+
 /**
- * Copyright (c) 2012 Robin Appelman <icewind@owncloud.com>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Archive;
 
 use OC\Archive\TAR;
+use OCP\ITempManager;
+use OCP\Server;
 
 class TARTest extends TestBase {
+	#[\Override]
 	protected function getExisting() {
 		$dir = \OC::$SERVERROOT . '/tests/data';
 		return new TAR($dir . '/data.tar.gz');
 	}
 
+	#[\Override]
 	protected function getNew() {
-		return new TAR(\OC::$server->getTempManager()->getTemporaryFile('.tar.gz'));
+		return new TAR(Server::get(ITempManager::class)->getTemporaryFile('.tar.gz'));
 	}
 }

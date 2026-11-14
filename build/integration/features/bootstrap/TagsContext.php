@@ -1,40 +1,21 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Phil Davis <phil.davis@inf.org>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Sergio Bertolin <sbertolin@solidgear.es>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
-require __DIR__ . '/../../vendor/autoload.php';
+require __DIR__ . '/autoload.php';
 
 use Behat\Gherkin\Node\TableNode;
+use Behat\Hook\AfterScenario;
+use Behat\Hook\BeforeScenario;
+use Behat\Step\Then;
+use Behat\Step\When;
 use GuzzleHttp\Client;
 use GuzzleHttp\Message\ResponseInterface;
 
 class TagsContext implements \Behat\Behat\Context\Context {
-	/** @var string */
-	private $baseUrl;
 	/** @var Client */
 	private $client;
 	/** @var ResponseInterface */
@@ -43,9 +24,9 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	/**
 	 * @param string $baseUrl
 	 */
-	public function __construct($baseUrl) {
-		$this->baseUrl = $baseUrl;
-
+	public function __construct(
+		private $baseUrl,
+	) {
 		// in case of ci deployment we take the server url from the environment
 		$testServerUrl = getenv('TEST_SERVER_URL');
 		if ($testServerUrl !== false) {
@@ -53,12 +34,12 @@ class TagsContext implements \Behat\Behat\Context\Context {
 		}
 	}
 
-	/** @BeforeScenario */
+	#[BeforeScenario]
 	public function setUpScenario() {
 		$this->client = new Client();
 	}
 
-	/** @AfterScenario */
+	#[AfterScenario]
 	public function tearDownScenario() {
 		$user = 'admin';
 		$tags = $this->requestTagsForUser($user);
@@ -155,33 +136,33 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @When :user creates a :type tag with name :name
 	 * @param string $user
 	 * @param string $type
 	 * @param string $name
 	 * @throws \Exception
 	 */
+	#[When(':user creates a :type tag with name :name')]
 	public function createsATagWithName($user, $type, $name) {
 		$this->createTag($user, $type, $name);
 	}
 
 	/**
-	 * @When :user creates a :type tag with name :name and groups :groups
 	 * @param string $user
 	 * @param string $type
 	 * @param string $name
 	 * @param string $groups
 	 * @throws \Exception
 	 */
+	#[When(':user creates a :type tag with name :name and groups :groups')]
 	public function createsATagWithNameAndGroups($user, $type, $name, $groups) {
 		$this->createTag($user, $type, $name, $groups);
 	}
 
 	/**
-	 * @Then The response should have a status code :statusCode
 	 * @param int $statusCode
 	 * @throws \Exception
 	 */
+	#[Then('The response should have a status code :statusCode')]
 	public function theResponseShouldHaveAStatusCode($statusCode) {
 		if ((int)$statusCode !== $this->response->getStatusCode()) {
 			throw new \Exception("Expected $statusCode, got " . $this->response->getStatusCode());
@@ -256,18 +237,18 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @Then The following tags should exist for :user
 	 * @param string $user
 	 * @param TableNode $table
 	 * @throws \Exception
 	 */
+	#[Then('The following tags should exist for :user')]
 	public function theFollowingTagsShouldExistFor($user, TableNode $table) {
 		$tags = $this->requestTagsForUser($user);
 
 		if (count($table->getRows()) !== count($tags)) {
 			throw new \Exception(
 				sprintf(
-					"Expected %s tags, got %s.",
+					'Expected %s tags, got %s.',
 					count($table->getRows()),
 					count($tags)
 				)
@@ -277,9 +258,9 @@ class TagsContext implements \Behat\Behat\Context\Context {
 		foreach ($table->getRowsHash() as $rowDisplayName => $row) {
 			foreach ($tags as $key => $tag) {
 				if (
-					$tag['display-name'] === $rowDisplayName &&
-					$tag['user-visible'] === $row[0] &&
-					$tag['user-assignable'] === $row[1]
+					$tag['display-name'] === $rowDisplayName
+					&& $tag['user-visible'] === $row[0]
+					&& $tag['user-assignable'] === $row[1]
 				) {
 					unset($tags[$key]);
 				}
@@ -290,9 +271,7 @@ class TagsContext implements \Behat\Behat\Context\Context {
 		}
 	}
 
-	/**
-	 * @Then the user :user :can assign The :type tag with name :tagName
-	 */
+	#[Then('the user :user :can assign The :type tag with name :tagName')]
 	public function theUserCanAssignTheTag($user, $can, $type, $tagName) {
 		$foundTag = $this->findTag($type, $tagName, $user);
 		if ($foundTag === null) {
@@ -312,9 +291,7 @@ class TagsContext implements \Behat\Behat\Context\Context {
 		}
 	}
 
-	/**
-	 * @Then The :type tag with name :tagName has the groups :groups
-	 */
+	#[Then('The :type tag with name :tagName has the groups :groups')]
 	public function theTagHasGroup($type, $tagName, $groups) {
 		$foundTag = $this->findTag($type, $tagName, 'admin', true);
 		if ($foundTag === null) {
@@ -327,11 +304,11 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @Then :count tags should exist for :user
 	 * @param int $count
 	 * @param string $user
 	 * @throws \Exception
 	 */
+	#[Then(':count tags should exist for :user')]
 	public function tagsShouldExistFor($count, $user) {
 		if ((int)$count !== count($this->requestTagsForUser($user))) {
 			throw new \Exception("Expected $count tags, got " . count($this->requestTagsForUser($user)));
@@ -394,12 +371,12 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @When :user edits the tag with name :oldNmae and sets its name to :newName
 	 * @param string $user
 	 * @param string $oldName
 	 * @param string $newName
 	 * @throws \Exception
 	 */
+	#[When(':user edits the tag with name :oldNmae and sets its name to :newName')]
 	public function editsTheTagWithNameAndSetsItsNameTo($user, $oldName, $newName) {
 		$tagId = $this->findTagIdByName($oldName);
 		if ($tagId === 0) {
@@ -431,12 +408,12 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @When :user edits the tag with name :oldNmae and sets its groups to :groups
 	 * @param string $user
 	 * @param string $oldName
 	 * @param string $groups
 	 * @throws \Exception
 	 */
+	#[When(':user edits the tag with name :oldNmae and sets its groups to :groups')]
 	public function editsTheTagWithNameAndSetsItsGroupsTo($user, $oldName, $groups) {
 		$tagId = $this->findTagIdByName($oldName);
 		if ($tagId === 0) {
@@ -468,10 +445,10 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @When :user deletes the tag with name :name
 	 * @param string $user
 	 * @param string $name
 	 */
+	#[When(':user deletes the tag with name :name')]
 	public function deletesTheTagWithName($user, $name) {
 		$tagId = $this->findTagIdByName($name);
 		try {
@@ -518,12 +495,12 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @When /^"([^"]*)" adds the tag "([^"]*)" to "([^"]*)" (shared|owned) by "([^"]*)"$/
 	 * @param string $taggingUser
 	 * @param string $tagName
 	 * @param string $fileName
 	 * @param string $sharingUser
 	 */
+	#[When('/^"([^"]*)" adds the tag "([^"]*)" to "([^"]*)" (shared|owned) by "([^"]*)"$/')]
 	public function addsTheTagToSharedBy($taggingUser, $tagName, $fileName, $sharedOrOwnedBy, $sharingUser) {
 		$fileId = $this->getFileIdForPath($fileName, $sharingUser);
 		$tagId = $this->findTagIdByName($tagName);
@@ -544,12 +521,12 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @Then /^"([^"]*)" (shared|owned) by "([^"]*)" has the following tags$/
 	 * @param string $fileName
 	 * @param string $sharingUser
 	 * @param TableNode $table
 	 * @throws \Exception
 	 */
+	#[Then('/^"([^"]*)" (shared|owned) by "([^"]*)" has the following tags$/')]
 	public function sharedByHasTheFollowingTags($fileName, $sharedOrOwnedBy, $sharingUser, TableNode $table) {
 		$loadedExpectedTags = $table->getTable();
 		$expectedTags = [];
@@ -593,13 +570,13 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @Then :fileName shared by :sharingUser has the following tags for :user
 	 * @param string $fileName
 	 * @param string $sharingUser
 	 * @param string $user
 	 * @param TableNode $table
 	 * @throws \Exception
 	 */
+	#[Then(':fileName shared by :sharingUser has the following tags for :user')]
 	public function sharedByHasTheFollowingTagsFor($fileName, $sharingUser, $user, TableNode $table) {
 		$loadedExpectedTags = $table->getTable();
 		$expectedTags = [];
@@ -651,12 +628,12 @@ class TagsContext implements \Behat\Behat\Context\Context {
 	}
 
 	/**
-	 * @When :user removes the tag :tagName from :fileName shared by :shareUser
 	 * @param string $user
 	 * @param string $tagName
 	 * @param string $fileName
 	 * @param string $shareUser
 	 */
+	#[When(':user removes the tag :tagName from :fileName shared by :shareUser')]
 	public function removesTheTagFromSharedBy($user, $tagName, $fileName, $shareUser) {
 		$tagId = $this->findTagIdByName($tagName);
 		$fileId = $this->getFileIdForPath($fileName, $shareUser);

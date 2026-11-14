@@ -3,59 +3,32 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2018 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author 2018 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-namespace Tests\Authentication\TwoFactorAuth;
+namespace Test\Authentication\TwoFactorAuth;
 
 use OC\Authentication\TwoFactorAuth\EnforcementState;
 use OC\Authentication\TwoFactorAuth\MandatoryTwoFactor;
 use OCP\IConfig;
 use OCP\IGroupManager;
 use OCP\IUser;
-use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class MandatoryTwoFactorTest extends TestCase {
-
-	/** @var IConfig|MockObject */
-	private $config;
-
-	/** @var IGroupManager|MockObject */
-	private $groupManager;
-
 	/** @var MandatoryTwoFactor */
 	private $mandatoryTwoFactor;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->config = $this->createMock(IConfig::class);
-		$this->groupManager = $this->createMock(IGroupManager::class);
-
-		$this->mandatoryTwoFactor = new MandatoryTwoFactor($this->config, $this->groupManager);
+		$this->mandatoryTwoFactor = $this->createInstanceWithMocks(MandatoryTwoFactor::class);
 	}
 
-	public function testIsNotEnforced() {
-		$this->config
+	public function testIsNotEnforced(): void {
+		$this->getAutoMock(IConfig::class)
 			->method('getSystemValue')
 			->willReturnMap([
 				['twofactor_enforced', 'false', 'false'],
@@ -68,8 +41,8 @@ class MandatoryTwoFactorTest extends TestCase {
 		$this->assertFalse($state->isEnforced());
 	}
 
-	public function testIsEnforced() {
-		$this->config
+	public function testIsEnforced(): void {
+		$this->getAutoMock(IConfig::class)
 			->method('getSystemValue')
 			->willReturnMap([
 				['twofactor_enforced', 'false', 'true'],
@@ -82,10 +55,10 @@ class MandatoryTwoFactorTest extends TestCase {
 		$this->assertTrue($state->isEnforced());
 	}
 
-	public function testIsNotEnforcedForAnybody() {
+	public function testIsNotEnforcedForAnybody(): void {
 		$user = $this->createMock(IUser::class);
 		$user->method('getUID')->willReturn('user123');
-		$this->config
+		$this->getAutoMock(IConfig::class)
 			->method('getSystemValue')
 			->willReturnMap([
 				['twofactor_enforced', 'false', 'false'],
@@ -98,17 +71,17 @@ class MandatoryTwoFactorTest extends TestCase {
 		$this->assertFalse($isEnforced);
 	}
 
-	public function testIsEnforcedForAGroupMember() {
+	public function testIsEnforcedForAGroupMember(): void {
 		$user = $this->createMock(IUser::class);
 		$user->method('getUID')->willReturn('user123');
-		$this->config
+		$this->getAutoMock(IConfig::class)
 			->method('getSystemValue')
 			->willReturnMap([
 				['twofactor_enforced', 'false', 'true'],
 				['twofactor_enforced_groups', [], ['twofactorers']],
 				['twofactor_enforced_excluded_groups', [], []],
 			]);
-		$this->groupManager->method('isInGroup')
+		$this->getAutoMock(IGroupManager::class)->method('isInGroup')
 			->willReturnCallback(function ($user, $group) {
 				return $user === 'user123' && $group === 'twofactorers';
 			});
@@ -118,17 +91,17 @@ class MandatoryTwoFactorTest extends TestCase {
 		$this->assertTrue($isEnforced);
 	}
 
-	public function testIsEnforcedForOtherGroups() {
+	public function testIsEnforcedForOtherGroups(): void {
 		$user = $this->createMock(IUser::class);
 		$user->method('getUID')->willReturn('user123');
-		$this->config
+		$this->getAutoMock(IConfig::class)
 			->method('getSystemValue')
 			->willReturnMap([
 				['twofactor_enforced', 'false', 'true'],
 				['twofactor_enforced_groups', [], ['twofactorers']],
 				['twofactor_enforced_excluded_groups', [], []],
 			]);
-		$this->groupManager->method('isInGroup')
+		$this->getAutoMock(IGroupManager::class)->method('isInGroup')
 			->willReturn(false);
 
 		$isEnforced = $this->mandatoryTwoFactor->isEnforcedFor($user);
@@ -136,17 +109,17 @@ class MandatoryTwoFactorTest extends TestCase {
 		$this->assertFalse($isEnforced);
 	}
 
-	public function testIsEnforcedButMemberOfExcludedGroup() {
+	public function testIsEnforcedButMemberOfExcludedGroup(): void {
 		$user = $this->createMock(IUser::class);
 		$user->method('getUID')->willReturn('user123');
-		$this->config
+		$this->getAutoMock(IConfig::class)
 			->method('getSystemValue')
 			->willReturnMap([
 				['twofactor_enforced', 'false', 'true'],
 				['twofactor_enforced_groups', [], []],
 				['twofactor_enforced_excluded_groups', [], ['yoloers']],
 			]);
-		$this->groupManager->method('isInGroup')
+		$this->getAutoMock(IGroupManager::class)->method('isInGroup')
 			->willReturnCallback(function ($user, $group) {
 				return $user === 'user123' && $group === 'yoloers';
 			});
@@ -156,8 +129,8 @@ class MandatoryTwoFactorTest extends TestCase {
 		$this->assertFalse($isEnforced);
 	}
 
-	public function testSetEnforced() {
-		$this->config
+	public function testSetEnforced(): void {
+		$this->getAutoMock(IConfig::class)
 			->expects($this->exactly(3))
 			->method('setSystemValue')
 			->willReturnMap([
@@ -169,8 +142,8 @@ class MandatoryTwoFactorTest extends TestCase {
 		$this->mandatoryTwoFactor->setState(new EnforcementState(true));
 	}
 
-	public function testSetEnforcedForGroups() {
-		$this->config
+	public function testSetEnforcedForGroups(): void {
+		$this->getAutoMock(IConfig::class)
 			->expects($this->exactly(3))
 			->method('setSystemValue')
 			->willReturnMap([
@@ -182,8 +155,8 @@ class MandatoryTwoFactorTest extends TestCase {
 		$this->mandatoryTwoFactor->setState(new EnforcementState(true, ['twofactorers'], ['yoloers']));
 	}
 
-	public function testSetNotEnforced() {
-		$this->config
+	public function testSetNotEnforced(): void {
+		$this->getAutoMock(IConfig::class)
 			->expects($this->exactly(3))
 			->method('setSystemValue')
 			->willReturnMap([

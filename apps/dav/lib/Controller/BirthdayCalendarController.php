@@ -1,66 +1,29 @@
 <?php
+
 /**
- * @copyright 2017, Georg Ehrke <oc.list@georgehrke.com>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Controller;
 
 use OCA\DAV\BackgroundJob\GenerateBirthdayCalendarBackgroundJob;
 use OCA\DAV\CalDAV\CalDavBackend;
+use OCA\DAV\Settings\CalDAVSettings;
 use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\Attribute\AuthorizedAdminSetting;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\Http\Response;
 use OCP\BackgroundJob\IJobList;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IConfig;
 use OCP\IDBConnection;
 use OCP\IRequest;
 use OCP\IUser;
 use OCP\IUserManager;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
 
 class BirthdayCalendarController extends Controller {
-
-	/**
-	 * @var IDBConnection
-	 */
-	protected $db;
-
-	/**
-	 * @var IConfig
-	 */
-	protected $config;
-
-	/**
-	 * @var IUserManager
-	 */
-	protected $userManager;
-
-	/**
-	 * @var CalDavBackend
-	 */
-	protected $caldavBackend;
-
-	/**
-	 * @var IJobList
-	 */
-	protected $jobList;
 
 	/**
 	 * BirthdayCalendar constructor.
@@ -71,33 +34,42 @@ class BirthdayCalendarController extends Controller {
 	 * @param IConfig $config
 	 * @param IJobList $jobList
 	 * @param IUserManager $userManager
-	 * @param CalDavBackend $calDavBackend
+	 * @param CalDavBackend $caldavBackend
+	 * @param IEventDispatcher $eventDispatcher
 	 */
-	public function __construct($appName, IRequest $request,
-								IDBConnection $db, IConfig $config,
-								IJobList $jobList,
-								IUserManager $userManager,
-								CalDavBackend $calDavBackend) {
+	public function __construct(
+		$appName,
+		IRequest $request,
+		protected IDBConnection $db,
+		protected IConfig $config,
+		protected IJobList $jobList,
+		protected IUserManager $userManager,
+		protected CalDavBackend $caldavBackend,
+		protected IEventDispatcher $eventDispatcher,
+	) {
 		parent::__construct($appName, $request);
-		$this->db = $db;
-		$this->config = $config;
-		$this->userManager = $userManager;
-		$this->jobList = $jobList;
-		$this->caldavBackend = $calDavBackend;
 	}
 
 	/**
 	 * @return Response
 	 */
+	#[AuthorizedAdminSetting(settings: CalDAVSettings::class)]
 	public function enable() {
 		$this->config->setAppValue($this->appName, 'generateBirthdayCalendar', 'yes');
 
 		// add background job for each user
-		$this->userManager->callForSeenUsers(function (IUser $user) {
+		$this->userManager->callForSeenUsers(function (IUser $user): void {
 			$this->jobList->add(GenerateBirthdayCalendarBackgroundJob::class, [
 				'userId' => $user->getUID(),
 			]);
 		});
+
+		$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+			'Birthday calendars were enabled',
+			[],
+			false,
+			'dav.birthday_calendar.enabled',
+		));
 
 		return new JSONResponse([]);
 	}
@@ -105,11 +77,19 @@ class BirthdayCalendarController extends Controller {
 	/**
 	 * @return Response
 	 */
+	#[AuthorizedAdminSetting(settings: CalDAVSettings::class)]
 	public function disable() {
 		$this->config->setAppValue($this->appName, 'generateBirthdayCalendar', 'no');
 
 		$this->jobList->remove(GenerateBirthdayCalendarBackgroundJob::class);
 		$this->caldavBackend->deleteAllBirthdayCalendars();
+
+		$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+			'Birthday calendars were disabled',
+			[],
+			false,
+			'dav.birthday_calendar.disabled',
+		));
 
 		return new JSONResponse([]);
 	}

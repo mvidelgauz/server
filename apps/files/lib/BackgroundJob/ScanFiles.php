@@ -1,35 +1,23 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files\BackgroundJob;
 
+use OC\Files\SetupManager;
 use OC\Files\Utils\Scanner;
+use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\BackgroundJob\TimedJob;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IConfig;
 use OCP\IDBConnection;
-use OCP\ILogger;
 use OCP\IUserManager;
+use Psr\Log\LoggerInterface;
 
 /**
  * Class ScanFiles is a background job used to run the file scanner over the user
@@ -37,92 +25,125 @@ use OCP\IUserManager;
  *
  * @package OCA\Files\BackgroundJob
  */
-class ScanFiles extends \OC\BackgroundJob\TimedJob {
-	/** @var IConfig */
-	private $config;
-	/** @var IUserManager */
-	private $userManager;
-	/** @var IEventDispatcher */
-	private $dispatcher;
-	/** @var ILogger */
-	private $logger;
-	private $connection;
-
+class ScanFiles extends TimedJob {
 	/** Amount of users that should get scanned per execution */
 	public const USERS_PER_SESSION = 500;
 
-	/**
-	 * @param IConfig $config
-	 * @param IUserManager $userManager
-	 * @param IEventDispatcher $dispatcher
-	 * @param ILogger $logger
-	 * @param IDBConnection $connection
-	 */
 	public function __construct(
-		IConfig $config,
-		IUserManager $userManager,
-		IEventDispatcher $dispatcher,
-		ILogger $logger,
-		IDBConnection $connection
+		private IConfig $config,
+		private IEventDispatcher $dispatcher,
+		private LoggerInterface $logger,
+		private IDBConnection $connection,
+		ITimeFactory $time,
+		private readonly SetupManager $setupManager,
+		private readonly IUserManager $userManager,
 	) {
+		parent::__construct($time);
 		// Run once per 10 minutes
 		$this->setInterval(60 * 10);
-
-		$this->config = $config;
-		$this->userManager = $userManager;
-		$this->dispatcher = $dispatcher;
-		$this->logger = $logger;
-		$this->connection = $connection;
 	}
 
-	/**
-	 * @param string $user
-	 */
-	protected function runScanner(string $user) {
+	protected function runScanner(string $user): void {
 		try {
 			$scanner = new Scanner(
-					$user,
-					null,
-					$this->dispatcher,
-					$this->logger
+				$this->userManager->get($user),
+				null,
+				$this->dispatcher,
+				$this->logger,
+				$this->setupManager,
 			);
-			$scanner->backgroundScan('');
+			$scanner->backgroundScan('/' . $user);
 		} catch (\Exception $e) {
-			$this->logger->logException($e, ['app' => 'files']);
+			$this->logger->error($e->getMessage(), ['exception' => $e, 'app' => 'files']);
 		}
-		\OC_Util::tearDownFS();
+		$this->setupManager->tearDown();
 	}
 
 	/**
-	 * Find all storages which have unindexed files and return a user for each
+	 * Find a storage which have unindexed files and return a user with access to the storage
 	 *
-	 * @return string[]
+	 * @return string|false
 	 */
-	private function getUsersToScan(): array {
-		$query = $this->connection->getQueryBuilder();
-		$query->select($query->func()->max('user_id'))
-			->from('filecache', 'f')
-			->innerJoin('f', 'mounts', 'm', $query->expr()->eq('storage_id', 'storage'))
-			->where($query->expr()->lt('size', $query->createNamedParameter(0, IQueryBuilder::PARAM_INT)))
-			->groupBy('storage_id')
-			->setMaxResults(self::USERS_PER_SESSION);
+	private function getUserToScan() {
+		if ($this->connection->getShardDefinition('filecache')) {
+			// for sharded filecache, the "LIMIT" from the normal query doesn't work
 
-		return $query->execute()->fetchAll(\PDO::FETCH_COLUMN);
+			// first we try it with a "LEFT JOIN" on mounts, this is fast, but might return a storage that isn't mounted.
+			// we also ask for up to 10 results from different storages to increase the odds of finding a result that is mounted
+			$query = $this->connection->getQueryBuilder();
+			$query->select('m.user_id')
+				->from('filecache', 'f')
+				->leftJoin('f', 'mounts', 'm', $query->expr()->eq('m.storage_id', 'f.storage'))
+				->where($query->expr()->eq('f.size', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
+				->andWhere($query->expr()->gt('f.parent', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
+				->setMaxResults(10)
+				->groupBy('f.storage')
+				->runAcrossAllShards();
+
+			$result = $query->executeQuery();
+			while ($res = $result->fetchAssociative()) {
+				if ($res['user_id']) {
+					return $res['user_id'];
+				}
+			}
+
+			// as a fallback, we try a slower approach where we find all mounted storages first
+			// this is essentially doing the inner join manually
+			$storages = $this->getAllMountedStorages();
+
+			$query = $this->connection->getQueryBuilder();
+			$query->select('m.user_id')
+				->from('filecache', 'f')
+				->leftJoin('f', 'mounts', 'm', $query->expr()->eq('m.storage_id', 'f.storage'))
+				->where($query->expr()->eq('f.size', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
+				->andWhere($query->expr()->gt('f.parent', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
+				->andWhere($query->expr()->in('f.storage', $query->createNamedParameter($storages, IQueryBuilder::PARAM_INT_ARRAY)))
+				->setMaxResults(1)
+				->runAcrossAllShards();
+			return $query->executeQuery()->fetchOne();
+		} else {
+			$query = $this->connection->getQueryBuilder();
+			$query->select('m.user_id')
+				->from('filecache', 'f')
+				->innerJoin('f', 'mounts', 'm', $query->expr()->eq('m.storage_id', 'f.storage'))
+				->where($query->expr()->eq('f.size', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
+				->andWhere($query->expr()->gt('f.parent', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT)))
+				->setMaxResults(1)
+				->runAcrossAllShards();
+
+			return $query->executeQuery()->fetchOne();
+		}
+	}
+
+	private function getAllMountedStorages(): array {
+		$query = $this->connection->getQueryBuilder();
+		$query->selectDistinct('storage_id')
+			->from('mounts');
+		return $query->executeQuery()->fetchFirstColumn();
 	}
 
 	/**
 	 * @param $argument
 	 * @throws \Exception
 	 */
-	protected function run($argument) {
+	#[\Override]
+	protected function run($argument): void {
 		if ($this->config->getSystemValueBool('files_no_background_scan', false)) {
 			return;
 		}
 
-		$users = $this->getUsersToScan();
-
-		foreach ($users as $user) {
+		$usersScanned = 0;
+		$lastUser = '';
+		$user = $this->getUserToScan();
+		while ($user && $usersScanned < self::USERS_PER_SESSION && $lastUser !== $user) {
 			$this->runScanner($user);
+			$lastUser = $user;
+			$user = $this->getUserToScan();
+			$usersScanned += 1;
+		}
+
+		if ($lastUser === $user) {
+			$this->logger->warning("User $user still has unscanned files after running background scan, background scan might be stopped prematurely");
 		}
 	}
 }

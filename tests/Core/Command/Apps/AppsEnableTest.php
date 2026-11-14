@@ -2,62 +2,55 @@
 
 declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2019, Daniel Kesselberg (mail@danielkesselberg.de)
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Tests\Core\Command\Config;
 
 use OC\Core\Command\App\Enable;
+use OC\Installer;
+use OCP\App\IAppManager;
+use OCP\IGroupManager;
+use OCP\Server;
 use Symfony\Component\Console\Tester\CommandTester;
 use Test\TestCase;
 
 /**
  * Class AppsEnableTest
- *
- * @group DB
  */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class AppsEnableTest extends TestCase {
-
 	/** @var CommandTester */
 	private $commandTester;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
 		$command = new Enable(
-			\OC::$server->getAppManager(),
-			\OC::$server->getGroupManager()
+			Server::get(IAppManager::class),
+			Server::get(IGroupManager::class),
+			Server::get(Installer::class),
 		);
 
 		$this->commandTester = new CommandTester($command);
 
-		\OC::$server->getAppManager()->disableApp('admin_audit');
-		\OC::$server->getAppManager()->disableApp('comments');
+		// Not every setup disables the app store, and enabling an unknown app pulls
+		// the whole catalogue (~30 MB, cached for an hour) to find it is not there.
+		$this->overwriteSystemConfig('appstoreenabled', false);
+
+		Server::get(IAppManager::class)->disableApp('admin_audit');
+		Server::get(IAppManager::class)->disableApp('comments');
 	}
 
 	/**
-	 * @dataProvider dataCommandInput
 	 * @param $appId
 	 * @param $groups
 	 * @param $statusCode
 	 * @param $pattern
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataCommandInput')]
 	public function testCommandInput($appId, $groups, $statusCode, $pattern): void {
 		$input = ['app-id' => $appId];
 
@@ -67,29 +60,31 @@ class AppsEnableTest extends TestCase {
 
 		$this->commandTester->execute($input);
 
-		$this->assertRegExp('/' . $pattern . '/', $this->commandTester->getDisplay());
+		$this->assertMatchesRegularExpression('/' . $pattern . '/', $this->commandTester->getDisplay());
 		$this->assertSame($statusCode, $this->commandTester->getStatusCode());
 	}
 
-	public function dataCommandInput(): array {
+	public const VERSION_REGEX = '([\d\.\-dev]*)';
+
+	public static function dataCommandInput(): array {
 		return [
-			[['admin_audit'], null, 0, 'admin_audit ([\d\.]*) enabled'],
-			[['comments'], null, 0, 'comments ([\d\.]*) enabled'],
-			[['comments', 'comments'], null, 0, "comments ([\d\.]*) enabled\ncomments already enabled"],
+			[['admin_audit'], null, 0, 'admin_audit ' . self::VERSION_REGEX . ' enabled'],
+			[['comments'], null, 0, 'comments ' . self::VERSION_REGEX . ' enabled'],
+			[['comments', 'comments'], null, 0, 'comments ' . self::VERSION_REGEX . " enabled\ncomments already enabled"],
 			[['invalid_app'], null, 1, 'Could not download app invalid_app'],
 
-			[['admin_audit', 'comments'], null, 0, "admin_audit ([\d\.]*) enabled\ncomments ([\d\.]*) enabled"],
-			[['admin_audit', 'comments', 'invalid_app'], null, 1, "admin_audit ([\d\.]*) enabled\ncomments ([\d\.]*) enabled\nCould not download app invalid_app"],
+			[['admin_audit', 'comments'], null, 0, 'admin_audit ' . self::VERSION_REGEX . " enabled\ncomments " . self::VERSION_REGEX . ' enabled'],
+			[['admin_audit', 'comments', 'invalid_app'], null, 1, 'admin_audit ' . self::VERSION_REGEX . " enabled\ncomments " . self::VERSION_REGEX . " enabled\nCould not download app invalid_app"],
 
 			[['admin_audit'], ['admin'], 1, "admin_audit can't be enabled for groups"],
 			[['comments'], ['admin'], 1, "comments can't be enabled for groups"],
 
-			[['updatenotification'], ['admin'], 0, 'updatenotification ([\d\.]*) enabled for groups: admin'],
-			[['updatenotification', 'accessibility'], ['admin'], 0, "updatenotification ([\d\.]*) enabled for groups: admin\naccessibility ([\d\.]*) enabled for groups: admin"],
+			[['updatenotification'], ['admin'], 0, 'updatenotification ' . self::VERSION_REGEX . ' enabled for groups: admin'],
+			[['updatenotification', 'dashboard'], ['admin'], 0, 'updatenotification ' . self::VERSION_REGEX . " enabled for groups: admin\ndashboard " . self::VERSION_REGEX . ' enabled for groups: admin'],
 
-			[['updatenotification'], ['admin', 'invalid_group'], 0, 'updatenotification ([\d\.]*) enabled for groups: admin'],
-			[['updatenotification', 'accessibility'], ['admin', 'invalid_group'], 0, "updatenotification ([\d\.]*) enabled for groups: admin\naccessibility ([\d\.]*) enabled for groups: admin"],
-			[['updatenotification', 'accessibility', 'invalid_app'], ['admin', 'invalid_group'], 1, "updatenotification ([\d\.]*) enabled for groups: admin\naccessibility ([\d\.]*) enabled for groups: admin\nCould not download app invalid_app"],
+			[['updatenotification'], ['admin', 'invalid_group'], 0, 'updatenotification ' . self::VERSION_REGEX . ' enabled for groups: admin'],
+			[['updatenotification', 'dashboard'], ['admin', 'invalid_group'], 0, 'updatenotification ' . self::VERSION_REGEX . " enabled for groups: admin\ndashboard " . self::VERSION_REGEX . ' enabled for groups: admin'],
+			[['updatenotification', 'dashboard', 'invalid_app'], ['admin', 'invalid_group'], 1, 'updatenotification ' . self::VERSION_REGEX . " enabled for groups: admin\ndashboard " . self::VERSION_REGEX . " enabled for groups: admin\nCould not download app invalid_app"],
 		];
 	}
 }

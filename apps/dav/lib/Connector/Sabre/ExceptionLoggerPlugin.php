@@ -1,36 +1,20 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Connector\Sabre;
 
 use OCA\DAV\Connector\Sabre\Exception\FileLocked;
 use OCA\DAV\Connector\Sabre\Exception\PasswordLoginForbidden;
+use OCA\DAV\Exception\ServerMaintenanceMode;
 use OCP\Files\StorageNotAvailableException;
-use OCP\ILogger;
+use Psr\Log\LoggerInterface;
 use Sabre\DAV\Exception\BadRequest;
 use Sabre\DAV\Exception\Conflict;
 use Sabre\DAV\Exception\Forbidden;
@@ -41,7 +25,6 @@ use Sabre\DAV\Exception\NotFound;
 use Sabre\DAV\Exception\NotImplemented;
 use Sabre\DAV\Exception\PreconditionFailed;
 use Sabre\DAV\Exception\RequestedRangeNotSatisfiable;
-use Sabre\DAV\Exception\ServiceUnavailable;
 
 class ExceptionLoggerPlugin extends \Sabre\DAV\ServerPlugin {
 	protected $nonFatalExceptions = [
@@ -65,6 +48,9 @@ class ExceptionLoggerPlugin extends \Sabre\DAV\ServerPlugin {
 		// forbidden can be expected when trying to upload to
 		// read-only folders for example
 		Forbidden::class => true,
+		// our forbidden is expected when access control is blocking
+		// an item in a folder
+		\OCA\DAV\Connector\Sabre\Exception\Forbidden::class => true,
 		// Happens when an external storage or federated share is temporarily
 		// not available
 		StorageNotAvailableException::class => true,
@@ -81,21 +67,16 @@ class ExceptionLoggerPlugin extends \Sabre\DAV\ServerPlugin {
 		FileLocked::class => true,
 		// An invalid range is requested
 		RequestedRangeNotSatisfiable::class => true,
+		ServerMaintenanceMode::class => true,
 	];
 
-	/** @var string */
-	private $appName;
-
-	/** @var ILogger */
-	private $logger;
-
 	/**
-	 * @param string $loggerAppName app name to use when logging
-	 * @param ILogger $logger
+	 * @param string $appName app name to use when logging
 	 */
-	public function __construct($loggerAppName, $logger) {
-		$this->appName = $loggerAppName;
-		$this->logger = $logger;
+	public function __construct(
+		private string $appName,
+		private LoggerInterface $logger,
+	) {
 	}
 
 	/**
@@ -109,29 +90,27 @@ class ExceptionLoggerPlugin extends \Sabre\DAV\ServerPlugin {
 	 * @param \Sabre\DAV\Server $server
 	 * @return void
 	 */
+	#[\Override]
 	public function initialize(\Sabre\DAV\Server $server) {
 		$server->on('exception', [$this, 'logException'], 10);
 	}
 
 	/**
 	 * Log exception
-	 *
 	 */
 	public function logException(\Throwable $ex) {
 		$exceptionClass = get_class($ex);
-		$level = ILogger::FATAL;
-		if (isset($this->nonFatalExceptions[$exceptionClass]) ||
-			(
-				$exceptionClass === ServiceUnavailable::class &&
-				$ex->getMessage() === 'System in maintenance mode.'
-			)
-		) {
-			$level = ILogger::DEBUG;
+		if (isset($this->nonFatalExceptions[$exceptionClass])) {
+			$this->logger->debug($ex->getMessage(), [
+				'app' => $this->appName,
+				'exception' => $ex,
+			]);
+			return;
 		}
 
-		$this->logger->logException($ex, [
+		$this->logger->critical($ex->getMessage(), [
 			'app' => $this->appName,
-			'level' => $level,
+			'exception' => $ex,
 		]);
 	}
 }

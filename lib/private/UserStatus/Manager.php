@@ -3,63 +3,33 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020, Georg Ehrke
- *
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\UserStatus;
 
-use OCP\ILogger;
-use OCP\IServerContainer;
 use OCP\UserStatus\IManager;
 use OCP\UserStatus\IProvider;
 use Psr\Container\ContainerExceptionInterface;
+use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
 
 class Manager implements IManager {
+	/** @var ?class-string */
+	private ?string $providerClass = null;
+	private ?IProvider $provider = null;
 
-	/** @var IServerContainer */
-	private $container;
-
-	/** @var ILogger */
-	private $logger;
-
-	/** @var null */
-	private $providerClass;
-
-	/** @var IProvider */
-	private $provider;
-
-	/**
-	 * Manager constructor.
-	 *
-	 * @param IServerContainer $container
-	 * @param ILogger $logger
-	 */
-	public function __construct(IServerContainer $container,
-								ILogger $logger) {
-		$this->container = $container;
-		$this->logger = $logger;
+	public function __construct(
+		private ContainerInterface $container,
+		private LoggerInterface $logger,
+	) {
 	}
 
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	public function getUserStatuses(array $userIds): array {
 		$this->setupProvider();
 		if (!$this->provider) {
@@ -90,16 +60,46 @@ class Manager implements IManager {
 			return;
 		}
 
+		/**
+		 * @psalm-suppress InvalidCatch
+		 */
 		try {
 			$provider = $this->container->get($this->providerClass);
 		} catch (ContainerExceptionInterface $e) {
-			$this->logger->logException($e, [
-				'message' => 'Could not load user-status provider dynamically: ' . $e->getMessage(),
-				'level' => ILogger::ERROR,
+			$this->logger->error('Could not load user-status "' . $this->providerClass . '" provider dynamically: ' . $e->getMessage(), [
+				'exception' => $e,
 			]);
 			return;
 		}
 
 		$this->provider = $provider;
+	}
+
+	#[\Override]
+	public function setUserStatus(string $userId, string $messageId, string $status, bool $createBackup = false, ?string $customMessage = null): void {
+		$this->setupProvider();
+		if (!$this->provider instanceof ISettableProvider) {
+			return;
+		}
+
+		$this->provider->setUserStatus($userId, $messageId, $status, $createBackup, $customMessage);
+	}
+
+	#[\Override]
+	public function revertUserStatus(string $userId, string $messageId, string $status): void {
+		$this->setupProvider();
+		if (!$this->provider instanceof ISettableProvider) {
+			return;
+		}
+		$this->provider->revertUserStatus($userId, $messageId, $status);
+	}
+
+	#[\Override]
+	public function revertMultipleUserStatus(array $userIds, string $messageId, string $status): void {
+		$this->setupProvider();
+		if (!$this->provider instanceof ISettableProvider) {
+			return;
+		}
+		$this->provider->revertMultipleUserStatus($userIds, $messageId, $status);
 	}
 }

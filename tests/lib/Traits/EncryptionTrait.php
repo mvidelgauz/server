@@ -1,20 +1,30 @@
 <?php
+
 /**
- * Copyright (c) 2015 Robin Appelman <icewind@owncloud.com>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Traits;
 
 use OC\Encryption\EncryptionWrapper;
-use OC\Files\Filesystem;
+use OC\Files\SetupManager;
 use OC\Memcache\ArrayCache;
 use OCA\Encryption\AppInfo\Application;
+use OCA\Encryption\Crypto\Encryption;
 use OCA\Encryption\KeyManager;
 use OCA\Encryption\Users\Setup;
+use OCP\App\IAppManager;
 use OCP\Encryption\IManager;
+use OCP\Files\IRootFolder;
+use OCP\Files\ISetupManager;
+use OCP\IAppConfig;
+use OCP\IConfig;
+use OCP\IUserManager;
+use OCP\IUserSession;
+use OCP\Server;
+use Psr\Log\LoggerInterface;
 
 /**
  * Enables encryption
@@ -31,13 +41,18 @@ trait EncryptionTrait {
 
 	private $originalEncryptionModule;
 
+	private IUserManager $userManagerEncTrait;
+	private ISetupManager $setupManagerEncTrait;
+
 	/**
-	 * @var \OCP\IConfig
+	 * @var IConfig
 	 */
 	private $config;
 
+	private IAppConfig $appConfig;
+
 	/**
-	 * @var \OCA\Encryption\AppInfo\Application
+	 * @var Application
 	 */
 	private $encryptionApp;
 
@@ -45,62 +60,67 @@ trait EncryptionTrait {
 		\OC_Util::tearDownFS();
 		\OC_User::setUserId('');
 		// needed for fully logout
-		\OC::$server->getUserSession()->setUser(null);
+		Server::get(IUserSession::class)->setUser(null);
 
-		Filesystem::tearDown();
+		$this->setupManagerEncTrait->tearDown();
+
 		\OC_User::setUserId($user);
 		$this->postLogin();
 		\OC_Util::setupFS($user);
-		if (\OC::$server->getUserManager()->userExists($user)) {
-			\OC::$server->getUserFolder($user);
+		if ($this->userManagerEncTrait->userExists($user)) {
+			Server::get(IRootFolder::class)->getUserFolder($user);
 		}
 	}
 
 	protected function setupForUser($name, $password) {
-		\OC_Util::tearDownFS();
-		\OC_Util::setupFS($name);
+		$this->setupManagerEncTrait->tearDown();
+		$this->setupManagerEncTrait->setupForUser($this->userManagerEncTrait->get($name));
+
 		$container = $this->encryptionApp->getContainer();
-		/** @var KeyManager $keyManager */
-		$keyManager = $container->query(KeyManager::class);
-		/** @var Setup $userSetup */
-		$userSetup = $container->query(Setup::class);
+		$keyManager = $container->get(KeyManager::class);
+		$userSetup = $container->get(Setup::class);
 		$userSetup->setupUser($name, $password);
-		$encryptionManager = $container->query(IManager::class);
+		$encryptionManager = $container->get(IManager::class);
 		$this->encryptionApp->setUp($encryptionManager);
 		$keyManager->init($name, $password);
+		$this->invokePrivate($keyManager, 'keyUid', [$name]);
 	}
 
 	protected function postLogin() {
 		$encryptionWrapper = new EncryptionWrapper(
 			new ArrayCache(),
-			\OC::$server->getEncryptionManager(),
-			\OC::$server->getLogger()
+			Server::get(\OCP\Encryption\IManager::class),
+			Server::get(LoggerInterface::class)
 		);
 
 		$this->registerStorageWrapper('oc_encryption', [$encryptionWrapper, 'wrapStorage']);
 	}
 
 	protected function setUpEncryptionTrait() {
-		$isReady = \OC::$server->getEncryptionManager()->isReady();
+		$isReady = Server::get(\OCP\Encryption\IManager::class)->isReady();
 		if (!$isReady) {
 			$this->markTestSkipped('Encryption not ready');
 		}
 
-		\OC_App::loadApp('encryption');
+		$this->userManagerEncTrait = Server::get(IUserManager::class);
+		$this->setupManagerEncTrait = Server::get(SetupManager::class);
+
+		Server::get(IAppManager::class)->loadApp('encryption');
 
 		$this->encryptionApp = new Application([], $isReady);
 
-		$this->config = \OC::$server->getConfig();
-		$this->encryptionWasEnabled = $this->config->getAppValue('core', 'encryption_enabled', 'no');
+		$this->config = Server::get(IConfig::class);
+		$this->appConfig = Server::get(IAppConfig::class);
+		$this->encryptionWasEnabled = $this->appConfig->getValueBool('core', 'encryption_enabled');
 		$this->originalEncryptionModule = $this->config->getAppValue('core', 'default_encryption_module');
-		$this->config->setAppValue('core', 'default_encryption_module', \OCA\Encryption\Crypto\Encryption::ID);
-		$this->config->setAppValue('core', 'encryption_enabled', 'yes');
-		$this->assertTrue(\OC::$server->getEncryptionManager()->isEnabled());
+		$this->config->setAppValue('core', 'default_encryption_module', Encryption::ID);
+		$this->appConfig->setValueBool('core', 'encryption_enabled', true);
+		$this->assertTrue(Server::get(\OCP\Encryption\IManager::class)->isEnabled());
 	}
 
 	protected function tearDownEncryptionTrait() {
 		if ($this->config) {
-			$this->config->setAppValue('core', 'encryption_enabled', $this->encryptionWasEnabled);
+			$this->appConfig->setValueBool('core', 'encryption_enabled', $this->encryptionWasEnabled);
 			$this->config->setAppValue('core', 'default_encryption_module', $this->originalEncryptionModule);
 			$this->config->deleteAppValue('encryption', 'useMasterKey');
 		}

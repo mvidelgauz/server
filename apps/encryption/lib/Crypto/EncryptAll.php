@@ -1,30 +1,13 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Kenneth Newwood <kenneth@newwood.name>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Encryption\Crypto;
 
 use OC\Encryption\Exceptions\DecryptionFailedException;
@@ -32,11 +15,17 @@ use OC\Files\View;
 use OCA\Encryption\KeyManager;
 use OCA\Encryption\Users\Setup;
 use OCA\Encryption\Util;
+use OCP\Files\FileInfo;
+use OCP\Files\ISetupManager;
 use OCP\IConfig;
 use OCP\IL10N;
+use OCP\IUser;
 use OCP\IUserManager;
+use OCP\L10N\IFactory;
+use OCP\Mail\Headers\AutoSubmitted;
 use OCP\Mail\IMailer;
 use OCP\Security\ISecureRandom;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Helper\QuestionHelper;
 use Symfony\Component\Console\Helper\Table;
@@ -46,90 +35,32 @@ use Symfony\Component\Console\Question\ConfirmationQuestion;
 
 class EncryptAll {
 
-	/** @var Setup */
-	protected $userSetup;
+	/** @var array<string, array{password: string, user: IUser}> $userCache store one time passwords for the users */
+	protected array $userCache = [];
+	protected OutputInterface $output;
+	protected InputInterface $input;
 
-	/** @var IUserManager */
-	protected $userManager;
-
-	/** @var View */
-	protected $rootView;
-
-	/** @var KeyManager */
-	protected $keyManager;
-
-	/** @var Util */
-	protected $util;
-
-	/** @var array  */
-	protected $userPasswords;
-
-	/** @var  IConfig */
-	protected $config;
-
-	/** @var IMailer */
-	protected $mailer;
-
-	/** @var  IL10N */
-	protected $l;
-
-	/** @var  QuestionHelper */
-	protected $questionHelper;
-
-	/** @var  OutputInterface */
-	protected $output;
-
-	/** @var  InputInterface */
-	protected $input;
-
-	/** @var ISecureRandom */
-	protected $secureRandom;
-
-	/**
-	 * @param Setup $userSetup
-	 * @param IUserManager $userManager
-	 * @param View $rootView
-	 * @param KeyManager $keyManager
-	 * @param Util $util
-	 * @param IConfig $config
-	 * @param IMailer $mailer
-	 * @param IL10N $l
-	 * @param QuestionHelper $questionHelper
-	 * @param ISecureRandom $secureRandom
-	 */
 	public function __construct(
-		Setup $userSetup,
-		IUserManager $userManager,
-		View $rootView,
-		KeyManager $keyManager,
-		Util $util,
-		IConfig $config,
-		IMailer $mailer,
-		IL10N $l,
-		QuestionHelper $questionHelper,
-		ISecureRandom $secureRandom
+		protected readonly Setup $userSetup,
+		protected readonly IUserManager $userManager,
+		protected readonly View $rootView,
+		protected readonly KeyManager $keyManager,
+		protected readonly Util $util,
+		protected readonly IConfig $config,
+		protected readonly IMailer $mailer,
+		protected readonly IL10N $l,
+		protected readonly IFactory $l10nFactory,
+		protected readonly QuestionHelper $questionHelper,
+		protected readonly ISecureRandom $secureRandom,
+		protected readonly LoggerInterface $logger,
+		protected readonly ISetupManager $setupManager,
 	) {
-		$this->userSetup = $userSetup;
-		$this->userManager = $userManager;
-		$this->rootView = $rootView;
-		$this->keyManager = $keyManager;
-		$this->util = $util;
-		$this->config = $config;
-		$this->mailer = $mailer;
-		$this->l = $l;
-		$this->questionHelper = $questionHelper;
-		$this->secureRandom = $secureRandom;
-		// store one time passwords for the users
-		$this->userPasswords = [];
 	}
 
 	/**
 	 * start to encrypt all files
-	 *
-	 * @param InputInterface $input
-	 * @param OutputInterface $output
 	 */
-	public function encryptAll(InputInterface $input, OutputInterface $output) {
+	public function encryptAll(InputInterface $input, OutputInterface $output): void {
 		$this->input = $input;
 		$this->output = $output;
 
@@ -153,7 +84,6 @@ class EncryptAll {
 			$this->createKeyPairs();
 		}
 
-
 		// output generated encryption key passwords
 		if ($this->util->isMasterKeyEnabled() === false) {
 			//send-out or display password list and write it to a file
@@ -176,32 +106,24 @@ class EncryptAll {
 	/**
 	 * create key-pair for every user
 	 */
-	protected function createKeyPairs() {
+	protected function createKeyPairs(): void {
 		$this->output->writeln("\n");
 		$progress = new ProgressBar($this->output);
 		$progress->setFormat(" %message% \n [%bar%]");
 		$progress->start();
 
-		foreach ($this->userManager->getBackends() as $backend) {
-			$limit = 500;
-			$offset = 0;
-			do {
-				$users = $backend->getUsers('', $limit, $offset);
-				foreach ($users as $user) {
-					if ($this->keyManager->userHasKeys($user) === false) {
-						$progress->setMessage('Create key-pair for ' . $user);
-						$progress->advance();
-						$this->setupUserFS($user);
-						$password = $this->generateOneTimePassword($user);
-						$this->userSetup->setupUser($user, $password);
-					} else {
-						// users which already have a key-pair will be stored with a
-						// empty password and filtered out later
-						$this->userPasswords[$user] = '';
-					}
-				}
-				$offset += $limit;
-			} while (count($users) >= $limit);
+		foreach ($this->userManager->getSeenUsers() as $user) {
+			if ($this->keyManager->userHasKeys($user->getUID()) === false) {
+				$progress->setMessage('Create key-pair for ' . $user->getUID());
+				$progress->advance();
+				$this->setupUserFileSystem($user);
+				$password = $this->generateOneTimePassword($user);
+				$this->userSetup->setupUser($user->getUID(), $password);
+			} else {
+				// users which already have a key-pair will be stored with a
+				// empty password and filtered out later
+				$this->userCache[$user->getUID()] = ['password' => '', 'user' => $user];
+			}
 		}
 
 		$progress->setMessage('Key-pair created for all users');
@@ -211,90 +133,87 @@ class EncryptAll {
 	/**
 	 * iterate over all user and encrypt their files
 	 */
-	protected function encryptAllUsersFiles() {
+	protected function encryptAllUsersFiles(): void {
 		$this->output->writeln("\n");
 		$progress = new ProgressBar($this->output);
 		$progress->setFormat(" %message% \n [%bar%]");
 		$progress->start();
-		$numberOfUsers = count($this->userPasswords);
+		$numberOfUsers = count($this->userCache);
 		$userNo = 1;
 		if ($this->util->isMasterKeyEnabled()) {
 			$this->encryptAllUserFilesWithMasterKey($progress);
 		} else {
-			foreach ($this->userPasswords as $uid => $password) {
+			foreach ($this->userCache as $uid => $cache) {
+				['user' => $user, 'password' => $password] = $cache;
 				$userCount = "$uid ($userNo of $numberOfUsers)";
-				$this->encryptUsersFiles($uid, $progress, $userCount);
+				$this->encryptUsersFiles($user, $progress, $userCount);
 				$userNo++;
 			}
 		}
-		$progress->setMessage("all files encrypted");
+		$progress->setMessage('all files encrypted');
 		$progress->finish();
 	}
 
 	/**
 	 * encrypt all user files with the master key
-	 *
-	 * @param ProgressBar $progress
 	 */
-	protected function encryptAllUserFilesWithMasterKey(ProgressBar $progress) {
+	protected function encryptAllUserFilesWithMasterKey(ProgressBar $progress): void {
 		$userNo = 1;
-		foreach ($this->userManager->getBackends() as $backend) {
-			$limit = 500;
-			$offset = 0;
-			do {
-				$users = $backend->getUsers('', $limit, $offset);
-				foreach ($users as $user) {
-					$userCount = "$user ($userNo)";
-					$this->encryptUsersFiles($user, $progress, $userCount);
-					$userNo++;
-				}
-				$offset += $limit;
-			} while (count($users) >= $limit);
+		foreach ($this->userManager->getSeenUsers() as $user) {
+			$userCount = $user->getUID() . " ($userNo)";
+			$this->encryptUsersFiles($user, $progress, $userCount);
+			$userNo++;
 		}
 	}
 
 	/**
 	 * encrypt files from the given user
-	 *
-	 * @param string $uid
-	 * @param ProgressBar $progress
-	 * @param string $userCount
 	 */
-	protected function encryptUsersFiles($uid, ProgressBar $progress, $userCount) {
-		$this->setupUserFS($uid);
+	protected function encryptUsersFiles(IUser $user, ProgressBar $progress, string $userCount): void {
+		$this->setupUserFileSystem($user);
+		$uid = $user->getUID();
 		$directories = [];
 		$directories[] = '/' . $uid . '/files';
 
 		while ($root = array_pop($directories)) {
 			$content = $this->rootView->getDirectoryContent($root);
 			foreach ($content as $file) {
-				$path = $root . '/' . $file['name'];
-				if ($this->rootView->is_dir($path)) {
+				$path = $root . '/' . $file->getName();
+				if ($file->isShared()) {
+					$progress->setMessage("Skip shared file/folder $path");
+					$progress->advance();
+					continue;
+				} elseif ($file->getType() === FileInfo::TYPE_FOLDER) {
 					$directories[] = $path;
 					continue;
 				} else {
 					$progress->setMessage("encrypt files for user $userCount: $path");
 					$progress->advance();
-					if ($this->encryptFile($path) === false) {
-						$progress->setMessage("encrypt files for user $userCount: $path (already encrypted)");
+					try {
+						if ($this->encryptFile($file, $path) === false) {
+							$progress->setMessage("encrypt files for user $userCount: $path (already encrypted)");
+							$progress->advance();
+						}
+					} catch (\Exception $e) {
+						$progress->setMessage("Failed to encrypt path $path: " . $e->getMessage());
 						$progress->advance();
+						$this->logger->error(
+							'Failed to encrypt path {path}',
+							[
+								'user' => $uid,
+								'path' => $path,
+								'exception' => $e,
+							]
+						);
 					}
 				}
 			}
 		}
 	}
 
-	/**
-	 * encrypt file
-	 *
-	 * @param string $path
-	 * @return bool
-	 */
-	protected function encryptFile($path) {
-
+	protected function encryptFile(FileInfo $fileInfo, string $path): bool {
 		// skip already encrypted files
-		$fileInfo = $this->rootView->getFileInfo($path);
-		if ($fileInfo !== false && $fileInfo->isEncrypted()) {
+		if ($fileInfo->isEncrypted()) {
 			return true;
 		}
 
@@ -302,7 +221,14 @@ class EncryptAll {
 		$target = $path . '.encrypted.' . time();
 
 		try {
-			$this->rootView->copy($source, $target);
+			$copySuccess = $this->rootView->copy($source, $target);
+			if ($copySuccess === false) {
+				/* Copy failed, abort */
+				if ($this->rootView->file_exists($target)) {
+					$this->rootView->unlink($target);
+				}
+				throw new \Exception('Copy failed for ' . $source);
+			}
 			$this->rootView->rename($target, $source);
 		} catch (DecryptionFailedException $e) {
 			if ($this->rootView->file_exists($target)) {
@@ -317,14 +243,15 @@ class EncryptAll {
 	/**
 	 * output one-time encryption passwords
 	 */
-	protected function outputPasswords() {
+	protected function outputPasswords(): void {
 		$table = new Table($this->output);
 		$table->setHeaders(['Username', 'Private key password']);
 
 		//create rows
 		$newPasswords = [];
 		$unchangedPasswords = [];
-		foreach ($this->userPasswords as $uid => $password) {
+		foreach ($this->userCache as $uid => $cache) {
+			['user' => $user, 'password' => $password] = $cache;
 			if (empty($password)) {
 				$unchangedPasswords[] = $uid;
 			} else {
@@ -350,7 +277,7 @@ class EncryptAll {
 		$this->writePasswordsToFile($newPasswords);
 
 		$this->output->writeln('');
-		$question = new ConfirmationQuestion('Do you want to send the passwords directly to the users by mail? (y/n) ', false);
+		$question = new ConfirmationQuestion('Do you want to send the passwords directly to the users by mail? (y/n) ', true);
 		if ($this->questionHelper->ask($this->input, $this->output, $question)) {
 			$this->sendPasswordsByMail();
 		}
@@ -358,10 +285,8 @@ class EncryptAll {
 
 	/**
 	 * write one-time encryption passwords to a csv file
-	 *
-	 * @param array $passwords
 	 */
-	protected function writePasswordsToFile(array $passwords) {
+	protected function writePasswordsToFile(array $passwords): void {
 		$fp = $this->rootView->fopen('oneTimeEncryptionPasswords.csv', 'w');
 		foreach ($passwords as $pwd) {
 			fputcsv($fp, $pwd);
@@ -379,40 +304,42 @@ class EncryptAll {
 
 	/**
 	 * setup user file system
-	 *
-	 * @param string $uid
 	 */
-	protected function setupUserFS($uid) {
-		\OC_Util::tearDownFS();
-		\OC_Util::setupFS($uid);
+	protected function setupUserFileSystem(IUser $user): void {
+		$this->setupManager->tearDown();
+		$this->setupManager->setupForUser($user);
 	}
 
 	/**
 	 * generate one time password for the user and store it in a array
 	 *
-	 * @param string $uid
 	 * @return string password
 	 */
-	protected function generateOneTimePassword($uid) {
+	protected function generateOneTimePassword(IUser $user): string {
 		$password = $this->secureRandom->generate(16, ISecureRandom::CHAR_HUMAN_READABLE);
-		$this->userPasswords[$uid] = $password;
+		$this->userCache[$user->getUID()] = ['password' => $password, 'user' => $user];
 		return $password;
 	}
 
 	/**
 	 * send encryption key passwords to the users by mail
 	 */
-	protected function sendPasswordsByMail() {
+	protected function sendPasswordsByMail(): void {
 		$noMail = [];
 
 		$this->output->writeln('');
-		$progress = new ProgressBar($this->output, count($this->userPasswords));
+		$progress = new ProgressBar($this->output, count($this->userCache));
 		$progress->start();
 
-		foreach ($this->userPasswords as $uid => $password) {
+		foreach ($this->userCache as $uid => $cache) {
+			['user' => $user, 'password' => $password] = $cache;
 			$progress->advance();
 			if (!empty($password)) {
 				$recipient = $this->userManager->get($uid);
+				if (!$recipient instanceof IUser) {
+					continue;
+				}
+
 				$recipientDisplayName = $recipient->getDisplayName();
 				$to = $recipient->getEMailAddress();
 
@@ -421,20 +348,34 @@ class EncryptAll {
 					continue;
 				}
 
-				$subject = $this->l->t('one-time password for server-side-encryption');
-				[$htmlBody, $textBody] = $this->createMailBody($password);
+				$l = $this->l10nFactory->get('encryption', $this->l10nFactory->getUserLanguage($recipient));
+
+				$template = $this->mailer->createEMailTemplate('encryption.encryptAllPassword', [
+					'user' => $recipient->getUID(),
+					'password' => $password,
+				]);
+				$template->setLanguage($l->getLanguageCode());
+
+				$template->setSubject($l->t('one-time password for server-side-encryption'));
+				// 'Hey there,<br><br>The administration enabled server-side-encryption. Your files were encrypted using the password <strong>%s</strong>.<br><br>
+				// Please login to the web interface, go to the section "Basic encryption module" of your personal settings and update your encryption password by entering this password into the "Old log-in password" field and your current login-password.<br><br>'
+				$template->addHeader();
+				$template->addHeading($l->t('Encryption password'));
+				$template->addBodyText(
+					$l->t('The administration enabled server-side-encryption. Your files were encrypted using the password <strong>%s</strong>.', [htmlspecialchars($password)]),
+					$l->t('The administration enabled server-side-encryption. Your files were encrypted using the password "%s".', $password)
+				);
+				$template->addBodyText(
+					$l->t('Please login to the web interface, go to the "Security" section of your personal settings and update your encryption password by entering this password into the "Old login password" field and your current login password.')
+				);
+				$template->addFooter();
 
 				// send it out now
 				try {
 					$message = $this->mailer->createMessage();
-					$message->setSubject($subject);
 					$message->setTo([$to => $recipientDisplayName]);
-					$message->setHtmlBody($htmlBody);
-					$message->setPlainBody($textBody);
-					$message->setFrom([
-						\OCP\Util::getDefaultEmailAddress('admin-noreply')
-					]);
-
+					$message->useTemplate($template);
+					$message->setAutoSubmitted(AutoSubmitted::VALUE_AUTO_GENERATED);
 					$this->mailer->send($message);
 				} catch (\Exception $e) {
 					$noMail[] = $uid;
@@ -452,28 +393,10 @@ class EncryptAll {
 			$this->output->writeln("\n\nCould not send password to following users:\n");
 			$rows = [];
 			foreach ($noMail as $uid) {
-				$rows[] = [$uid, $this->userPasswords[$uid]];
+				$rows[] = [$uid, $this->userCache[$uid]['password']];
 			}
 			$table->setRows($rows);
 			$table->render();
 		}
-	}
-
-	/**
-	 * create mail body for plain text and html mail
-	 *
-	 * @param string $password one-time encryption password
-	 * @return array an array of the html mail body and the plain text mail body
-	 */
-	protected function createMailBody($password) {
-		$html = new \OC_Template("encryption", "mail", "");
-		$html->assign('password', $password);
-		$htmlMail = $html->fetchPage();
-
-		$plainText = new \OC_Template("encryption", "altmail", "");
-		$plainText->assign('password', $password);
-		$plainTextMail = $plainText->fetchPage();
-
-		return [$htmlMail, $plainTextMail];
 	}
 }

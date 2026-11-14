@@ -1,28 +1,9 @@
 /**
- * @copyright 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import _ from 'underscore'
-import OC from './index'
+import OC from './index.js'
 
 /**
  * Utility class for the history API,
@@ -41,11 +22,11 @@ export default {
 	 * Note: this includes a workaround for IE8/IE9 that uses
 	 * the hash part instead of the search part.
 	 *
-	 * @param {Object|string} params to append to the URL, can be either a string
+	 * @param {object | string} params to append to the URL, can be either a string
 	 * or a map
 	 * @param {string} [url] URL to be used, otherwise the current URL will be used,
 	 * using the params as query string
-	 * @param {boolean} [replace=false] whether to replace instead of pushing
+	 * @param {boolean} [replace] whether to replace instead of pushing
 	 */
 	_pushState(params, url, replace) {
 		let strParams
@@ -92,7 +73,7 @@ export default {
 	 * Note: this includes a workaround for IE8/IE9 that uses
 	 * the hash part instead of the search part.
 	 *
-	 * @param {Object|string} params to append to the URL, can be either a string or a map
+	 * @param {object | string} params to append to the URL, can be either a string or a map
 	 * @param {string} [url] URL to be used, otherwise the current URL will be used, using the params as query string
 	 */
 	pushState(params, url) {
@@ -105,7 +86,7 @@ export default {
 	 * Note: this includes a workaround for IE8/IE9 that uses
 	 * the hash part instead of the search part.
 	 *
-	 * @param {Object|string} params to append to the URL, can be either a string
+	 * @param {object | string} params to append to the URL, can be either a string
 	 * or a map
 	 * @param {string} [url] URL to be used, otherwise the current URL will be used,
 	 * using the params as query string
@@ -126,7 +107,8 @@ export default {
 	/**
 	 * Parse a query string from the hash part of the URL.
 	 * (workaround for IE8 / IE9)
-	 * @returns {string}
+	 *
+	 * @return {string}
 	 */
 	_parseHashQuery() {
 		const hash = window.location.hash
@@ -149,7 +131,7 @@ export default {
 	 * Parse the query/search part of the URL.
 	 * Also try and parse it from the URL hash (for IE8)
 	 *
-	 * @returns {Object} map of parameters
+	 * @return {object} map of parameters
 	 */
 	parseUrlQuery() {
 		const query = this._parseHashQuery()
@@ -159,8 +141,10 @@ export default {
 			params = OC.parseQueryString(this._decodeQuery(query))
 		}
 		// else read from query attributes
-		params = _.extend(params || {}, OC.parseQueryString(this._decodeQuery(location.search)))
-		return params || {}
+		return {
+			...(params || {}),
+			...OC.parseQueryString(this._decodeQuery(location.search)),
+		}
 	},
 
 	_onPopState(e) {
@@ -173,7 +157,7 @@ export default {
 			return
 		}
 		params = (e && e.state)
-		if (_.isString(params)) {
+		if (typeof params === 'string') {
 			params = OC.parseQueryString(params)
 		} else if (!params) {
 			params = this.parseUrlQuery() || {}

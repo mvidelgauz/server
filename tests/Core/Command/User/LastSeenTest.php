@@ -1,22 +1,9 @@
 <?php
+
 /**
- * @author Joas Schilling <nickvergessen@owncloud.com>
- *
- * @copyright Copyright (c) 2015, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Tests\Core\Command\User;
@@ -39,6 +26,7 @@ class LastSeenTest extends TestCase {
 	/** @var \Symfony\Component\Console\Command\Command */
 	protected $command;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
@@ -48,11 +36,11 @@ class LastSeenTest extends TestCase {
 		$this->consoleInput = $this->getMockBuilder(InputInterface::class)->getMock();
 		$this->consoleOutput = $this->getMockBuilder(OutputInterface::class)->getMock();
 
-		/** @var \OCP\IUserManager $userManager */
+		/** @var IUserManager $userManager */
 		$this->command = new LastSeen($userManager);
 	}
 
-	public function validUserLastSeen() {
+	public static function validUserLastSeen(): array {
 		return [
 			[0, 'never logged in'],
 			[time(), 'last login'],
@@ -60,12 +48,12 @@ class LastSeenTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider validUserLastSeen
 	 *
 	 * @param int $lastSeen
 	 * @param string $expectedString
 	 */
-	public function testValidUser($lastSeen, $expectedString) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('validUserLastSeen')]
+	public function testValidUser($lastSeen, $expectedString): void {
 		$user = $this->getMockBuilder(IUser::class)->getMock();
 		$user->expects($this->once())
 			->method('getLastLogin')
@@ -88,7 +76,7 @@ class LastSeenTest extends TestCase {
 		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
 	}
 
-	public function testInvalidUser() {
+	public function testInvalidUser(): void {
 		$this->userManager->expects($this->once())
 			->method('get')
 			->with('user')
@@ -102,6 +90,100 @@ class LastSeenTest extends TestCase {
 		$this->consoleOutput->expects($this->once())
 			->method('writeln')
 			->with($this->stringContains('User does not exist'));
+
+		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
+	}
+
+	public function testAllUsersWithoutExcludeDisabled(): void {
+		$enabledUser = $this->getMockBuilder(IUser::class)->getMock();
+		$enabledUser->expects($this->once())
+			->method('getLastLogin')
+			->willReturn(time());
+		$enabledUser->expects($this->once())
+			->method('getUID')
+			->willReturn('enabled_user');
+		$enabledUser->expects($this->never())
+			->method('isEnabled');
+
+		$disabledUser = $this->getMockBuilder(IUser::class)->getMock();
+		$disabledUser->expects($this->once())
+			->method('getLastLogin')
+			->willReturn(time());
+		$disabledUser->expects($this->once())
+			->method('getUID')
+			->willReturn('disabled_user');
+		$disabledUser->expects($this->never())
+			->method('isEnabled');
+
+		$this->consoleInput->expects($this->once())
+			->method('getArgument')
+			->with('uid')
+			->willReturn(null);
+
+		$this->consoleInput->expects($this->exactly(2))
+			->method('getOption')
+			->willReturnMap([
+				['all', true],
+				['exclude-disabled', false],
+			]);
+
+		$this->userManager->expects($this->once())
+			->method('callForAllUsers')
+			->willReturnCallback(function ($callback) use ($enabledUser, $disabledUser): void {
+				$callback($enabledUser);
+				$callback($disabledUser);
+			});
+
+		$this->consoleOutput->expects($this->exactly(2))
+			->method('writeln')
+			->with($this->stringContains("'s last login:"));
+
+		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
+	}
+
+	public function testAllUsersWithExcludeDisabled(): void {
+		$enabledUser = $this->getMockBuilder(IUser::class)->getMock();
+		$enabledUser->expects($this->once())
+			->method('getLastLogin')
+			->willReturn(time());
+		$enabledUser->expects($this->once())
+			->method('getUID')
+			->willReturn('enabled_user');
+		$enabledUser->expects($this->once())
+			->method('isEnabled')
+			->willReturn(true);
+
+		$disabledUser = $this->getMockBuilder(IUser::class)->getMock();
+		$disabledUser->expects($this->never())
+			->method('getLastLogin');
+		$disabledUser->expects($this->never())
+			->method('getUID');
+		$disabledUser->expects($this->once())
+			->method('isEnabled')
+			->willReturn(false);
+
+		$this->consoleInput->expects($this->once())
+			->method('getArgument')
+			->with('uid')
+			->willReturn(null);
+
+		$this->consoleInput->expects($this->exactly(2))
+			->method('getOption')
+			->willReturnMap([
+				['all', true],
+				['exclude-disabled', true],
+			]);
+
+		$this->userManager->expects($this->once())
+			->method('callForAllUsers')
+			->willReturnCallback(function ($callback) use ($enabledUser, $disabledUser): void {
+				$callback($enabledUser);
+				$callback($disabledUser);
+			});
+
+		$this->consoleOutput->expects($this->once())
+			->method('writeln')
+			->with($this->stringContains("enabled_user's last login:"));
 
 		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
 	}

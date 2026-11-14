@@ -3,39 +3,23 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2021 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Listener;
 
 use OCA\DAV\Connector\Sabre\Principal;
-use OCA\DAV\Events\CalendarObjectCreatedEvent;
-use OCA\DAV\Events\CalendarObjectUpdatedEvent;
 use OCA\DAV\Events\CalendarShareUpdatedEvent;
+use OCP\Calendar\Events\CalendarObjectCreatedEvent;
+use OCP\Calendar\Events\CalendarObjectUpdatedEvent;
 use OCP\Contacts\Events\ContactInteractedWithEvent;
 use OCP\EventDispatcher\Event;
 use OCP\EventDispatcher\IEventDispatcher;
 use OCP\EventDispatcher\IEventListener;
 use OCP\IUser;
 use OCP\IUserSession;
-use OCP\Mail\IMailer;
+use OCP\Mail\IEmailValidator;
 use Psr\Log\LoggerInterface;
 use Sabre\VObject\Component\VEvent;
 use Sabre\VObject\Parameter;
@@ -43,39 +27,22 @@ use Sabre\VObject\Property;
 use Sabre\VObject\Reader;
 use Throwable;
 use function strlen;
-use function strpos;
 use function substr;
 
+/** @template-implements IEventListener<CalendarObjectCreatedEvent|CalendarObjectUpdatedEvent|CalendarShareUpdatedEvent> */
 class CalendarContactInteractionListener implements IEventListener {
-	private const URI_USERS = 'principals/users/';
+	private const string URI_USERS = 'principals/users/';
 
-	/** @var IEventDispatcher */
-	private $dispatcher;
-
-	/** @var IUserSession */
-	private $userSession;
-
-	/** @var Principal */
-	private $principalConnector;
-
-	/** @var IMailer */
-	private $mailer;
-
-	/** @var LoggerInterface */
-	private $logger;
-
-	public function __construct(IEventDispatcher $dispatcher,
-								IUserSession $userSession,
-								Principal $principalConnector,
-								IMailer $mailer,
-								LoggerInterface $logger) {
-		$this->dispatcher = $dispatcher;
-		$this->userSession = $userSession;
-		$this->principalConnector = $principalConnector;
-		$this->mailer = $mailer;
-		$this->logger = $logger;
+	public function __construct(
+		private IEventDispatcher $dispatcher,
+		private IUserSession $userSession,
+		private Principal $principalConnector,
+		private IEmailValidator $emailValidator,
+		private LoggerInterface $logger,
+	) {
 	}
 
+	#[\Override]
 	public function handle(Event $event): void {
 		if (($user = $this->userSession->getUser()) === null) {
 			// Without user context we can't do anything
@@ -130,7 +97,7 @@ class CalendarContactInteractionListener implements IEventListener {
 			// Invalid principal
 			return;
 		}
-		if (strpos($principal, self::URI_USERS) !== 0) {
+		if (!str_starts_with($principal, self::URI_USERS)) {
 			// Not a user principal
 			return;
 		}
@@ -159,12 +126,12 @@ class CalendarContactInteractionListener implements IEventListener {
 			}
 
 			$mailTo = $attendee->getValue();
-			if (strpos($mailTo, 'mailto:') !== 0) {
+			if (!str_starts_with($mailTo, 'mailto:')) {
 				// Doesn't look like an email
 				continue;
 			}
 			$email = substr($mailTo, strlen('mailto:'));
-			if (!$this->mailer->validateMailAddress($email)) {
+			if (!$this->emailValidator->isValid($email)) {
 				// This really isn't a valid email
 				continue;
 			}

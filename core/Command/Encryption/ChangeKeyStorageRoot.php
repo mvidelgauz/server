@@ -1,28 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Core\Command\Encryption;
 
 use OC\Encryption\Keys\Storage;
@@ -40,38 +23,17 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Question\ConfirmationQuestion;
 
 class ChangeKeyStorageRoot extends Command {
-
-	/** @var View  */
-	protected $rootView;
-
-	/** @var IUserManager */
-	protected $userManager;
-
-	/** @var IConfig  */
-	protected $config;
-
-	/** @var Util  */
-	protected $util;
-
-	/** @var QuestionHelper */
-	protected $questionHelper;
-
-	/**
-	 * @param View $view
-	 * @param IUserManager $userManager
-	 * @param IConfig $config
-	 * @param Util $util
-	 * @param QuestionHelper $questionHelper
-	 */
-	public function __construct(View $view, IUserManager $userManager, IConfig $config, Util $util, QuestionHelper $questionHelper) {
+	public function __construct(
+		protected View $rootView,
+		protected IUserManager $userManager,
+		protected IConfig $config,
+		protected Util $util,
+		protected QuestionHelper $questionHelper,
+	) {
 		parent::__construct();
-		$this->rootView = $view;
-		$this->userManager = $userManager;
-		$this->config = $config;
-		$this->util = $util;
-		$this->questionHelper = $questionHelper;
 	}
 
+	#[\Override]
 	protected function configure() {
 		parent::configure();
 		$this
@@ -84,6 +46,7 @@ class ChangeKeyStorageRoot extends Command {
 			);
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$oldRoot = $this->util->getKeyStorageRoot();
 		$newRoot = $input->getArgument('newRoot');
@@ -119,10 +82,10 @@ class ChangeKeyStorageRoot extends Command {
 	 * @throws \Exception
 	 */
 	protected function moveAllKeys($oldRoot, $newRoot, OutputInterface $output) {
-		$output->writeln("Start to move keys:");
+		$output->writeln('Start to move keys:');
 
 		if ($this->rootView->is_dir($oldRoot) === false) {
-			$output->writeln("No old keys found: Nothing needs to be moved");
+			$output->writeln('No old keys found: Nothing needs to be moved');
 			return false;
 		}
 
@@ -154,7 +117,6 @@ class ChangeKeyStorageRoot extends Command {
 		}
 	}
 
-
 	/**
 	 * move system key folder
 	 *
@@ -163,13 +125,12 @@ class ChangeKeyStorageRoot extends Command {
 	 */
 	protected function moveSystemKeys($oldRoot, $newRoot) {
 		if (
-			$this->rootView->is_dir($oldRoot . '/files_encryption') &&
-			$this->targetExists($newRoot . '/files_encryption') === false
+			$this->rootView->is_dir($oldRoot . '/files_encryption')
+			&& $this->targetExists($newRoot . '/files_encryption') === false
 		) {
 			$this->rootView->rename($oldRoot . '/files_encryption', $newRoot . '/files_encryption');
 		}
 	}
-
 
 	/**
 	 * setup file system for the given user
@@ -181,7 +142,6 @@ class ChangeKeyStorageRoot extends Command {
 		\OC_Util::setupFS($uid);
 	}
 
-
 	/**
 	 * iterate over each user and move the keys to the new storage
 	 *
@@ -192,7 +152,6 @@ class ChangeKeyStorageRoot extends Command {
 	protected function moveUserKeys($oldRoot, $newRoot, OutputInterface $output) {
 		$progress = new ProgressBar($output);
 		$progress->start();
-
 
 		foreach ($this->userManager->getBackends() as $backend) {
 			$limit = 500;
@@ -223,8 +182,8 @@ class ChangeKeyStorageRoot extends Command {
 			$source = $oldRoot . '/' . $user . '/files_encryption';
 			$target = $newRoot . '/' . $user . '/files_encryption';
 			if (
-				$this->rootView->is_dir($source) &&
-				$this->targetExists($target) === false
+				$this->rootView->is_dir($source)
+				&& $this->targetExists($target) === false
 			) {
 				$this->prepareParentFolder($newRoot . '/' . $user);
 				$this->rootView->rename($source, $target);

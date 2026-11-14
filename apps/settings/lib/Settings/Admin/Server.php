@@ -1,73 +1,70 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Settings\Settings\Admin;
 
+use OC\Profile\ProfileManager;
+use OC\Profile\TProfileHelper;
+use OCA\Settings\ConfigLexicon;
 use OCP\AppFramework\Http\TemplateResponse;
+use OCP\AppFramework\Services\IInitialState;
 use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\IAppConfig;
 use OCP\IConfig;
 use OCP\IDBConnection;
 use OCP\IL10N;
+use OCP\IURLGenerator;
 use OCP\Settings\IDelegatedSettings;
 
 class Server implements IDelegatedSettings {
+	use TProfileHelper;
 
-	/** @var IDBConnection */
-	private $connection;
-	/** @var ITimeFactory */
-	private $timeFactory;
-	/** @var IConfig */
-	private $config;
-	/** @var IL10N $l */
-	private $l;
-
-	public function __construct(IDBConnection $connection,
-								ITimeFactory $timeFactory,
-								IConfig $config,
-								IL10N $l) {
-		$this->connection = $connection;
-		$this->timeFactory = $timeFactory;
-		$this->config = $config;
-		$this->l = $l;
+	public function __construct(
+		private IDBConnection $connection,
+		private IInitialState $initialStateService,
+		private ProfileManager $profileManager,
+		private ITimeFactory $timeFactory,
+		private IURLGenerator $urlGenerator,
+		private IConfig $config,
+		private IAppConfig $appConfig,
+		private IL10N $l,
+	) {
 	}
 
 	/**
 	 * @return TemplateResponse
 	 */
+	#[\Override]
 	public function getForm() {
-		$parameters = [
-			// Background jobs
-			'backgroundjobs_mode' => $this->config->getAppValue('core', 'backgroundjobs_mode', 'ajax'),
-			'lastcron' => $this->config->getAppValue('core', 'lastcron', false),
-			'cronMaxAge' => $this->cronMaxAge(),
-			'cronErrors' => $this->config->getAppValue('core', 'cronErrors'),
-			'cli_based_cron_possible' => function_exists('posix_getpwuid'),
-			'cli_based_cron_user' => function_exists('posix_getpwuid') ? posix_getpwuid(fileowner(\OC::$configDir . 'config.php'))['name'] : '',
-		];
+		$ownerConfigFile = fileowner(\OC::$configDir . 'config.php');
+		$cliBasedCronPossible = function_exists('posix_getpwuid') && $ownerConfigFile !== false;
+		$cliBasedCronUser = $cliBasedCronPossible ? (posix_getpwuid($ownerConfigFile)['name'] ?? '') : '';
 
-		return new TemplateResponse('settings', 'settings/admin/server', $parameters, '');
+		// Background jobs
+		$this->initialStateService->provideInitialState('backgroundJobsMode', $this->appConfig->getValueString('core', 'backgroundjobs_mode', 'ajax'));
+		$this->initialStateService->provideInitialState('lastCron', $this->appConfig->getValueInt('core', 'lastcron', 0));
+		$this->initialStateService->provideInitialState('cronMaxAge', $this->cronMaxAge());
+		$this->initialStateService->provideInitialState('cronErrors', $this->config->getAppValue('core', 'cronErrors'));
+		$this->initialStateService->provideInitialState('cliBasedCronPossible', $cliBasedCronPossible);
+		$this->initialStateService->provideInitialState('cliBasedCronUser', $cliBasedCronUser);
+		$this->initialStateService->provideInitialState('backgroundJobsDocUrl', $this->urlGenerator->linkToDocs('admin-background-jobs'));
+
+		// Profile page
+		$this->initialStateService->provideInitialState('profileEnabledGlobally', $this->profileManager->isProfileEnabled());
+		$this->initialStateService->provideInitialState('profileEnabledByDefault', $this->isProfileEnabledByDefault($this->config));
+		$this->initialStateService->provideInitialState('profilePickerEnabled', $this->isProfilePickerEnabled($this->config));
+		$this->initialStateService->provideInitialState('profilePrivate', $this->appConfig->getValueBool('settings', ConfigLexicon::PROFILE_PRIVATE));
+
+		// Basic settings
+		$this->initialStateService->provideInitialState('restrictSystemTagsCreationToAdmin', $this->appConfig->getValueBool('systemtags', 'restrict_creation_to_admin', false));
+
+		return new TemplateResponse('settings', 'settings/admin/server', [
+			'profileEnabledGlobally' => $this->profileManager->isProfileEnabled(),
+		], '');
 	}
 
 	protected function cronMaxAge(): int {
@@ -77,9 +74,9 @@ class Server implements IDelegatedSettings {
 			->orderBy('last_checked', 'ASC')
 			->setMaxResults(1);
 
-		$result = $query->execute();
-		if ($row = $result->fetch()) {
-			$maxAge = (int) $row['last_checked'];
+		$result = $query->executeQuery();
+		if ($row = $result->fetchAssociative()) {
+			$maxAge = (int)$row['last_checked'];
 		} else {
 			$maxAge = $this->timeFactory->getTime();
 		}
@@ -91,30 +88,30 @@ class Server implements IDelegatedSettings {
 	/**
 	 * @return string the section ID, e.g. 'sharing'
 	 */
+	#[\Override]
 	public function getSection(): string {
 		return 'server';
 	}
 
 	/**
 	 * @return int whether the form should be rather on the top or bottom of
-	 * the admin section. The forms are arranged in ascending order of the
-	 * priority values. It is required to return a value between 0 and 100.
+	 *             the admin section. The forms are arranged in ascending order of the
+	 *             priority values. It is required to return a value between 0 and 100.
 	 *
 	 * E.g.: 70
 	 */
+	#[\Override]
 	public function getPriority(): int {
 		return 0;
 	}
 
+	#[\Override]
 	public function getName(): ?string {
 		return $this->l->t('Background jobs');
 	}
 
+	#[\Override]
 	public function getAuthorizedAppConfig(): array {
-		return [
-			'core' => [
-				'/mail_general_settings/',
-			],
-		];
+		return [];
 	}
 }

@@ -1,92 +1,45 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2018 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Comments\Tests\Unit\Activity;
 
 use OCA\Comments\Activity\Listener;
 use OCP\Activity\IEvent;
 use OCP\Activity\IManager;
 use OCP\App\IAppManager;
-use OCP\Comments\CommentsEvent;
+use OCP\Comments\Events\CommentAddedEvent;
 use OCP\Comments\IComment;
 use OCP\Files\Config\ICachedMountFileInfo;
 use OCP\Files\Config\IMountProviderCollection;
 use OCP\Files\Config\IUserMountCache;
-use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
+use OCP\Files\IUserFolder;
 use OCP\Files\Node;
 use OCP\IUser;
 use OCP\IUserSession;
 use OCP\Share\IShareHelper;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class ListenerTest extends TestCase {
+	protected Listener $listener;
 
-	/** @var Listener */
-	protected $listener;
-
-	/** @var IManager|\PHPUnit\Framework\MockObject\MockObject */
-	protected $activityManager;
-
-	/** @var IUserSession|\PHPUnit\Framework\MockObject\MockObject */
-	protected $session;
-
-	/** @var IAppManager|\PHPUnit\Framework\MockObject\MockObject */
-	protected $appManager;
-
-	/** @var IMountProviderCollection|\PHPUnit\Framework\MockObject\MockObject */
-	protected $mountProviderCollection;
-
-	/** @var IRootFolder|\PHPUnit\Framework\MockObject\MockObject */
-	protected $rootFolder;
-
-	/** @var IShareHelper|\PHPUnit\Framework\MockObject\MockObject */
-	protected $shareHelper;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->activityManager = $this->createMock(IManager::class);
-		$this->session = $this->createMock(IUserSession::class);
-		$this->appManager = $this->createMock(IAppManager::class);
-		$this->mountProviderCollection = $this->createMock(IMountProviderCollection::class);
-		$this->rootFolder = $this->createMock(IRootFolder::class);
-		$this->shareHelper = $this->createMock(IShareHelper::class);
-
-		$this->listener = new Listener(
-			$this->activityManager,
-			$this->session,
-			$this->appManager,
-			$this->mountProviderCollection,
-			$this->rootFolder,
-			$this->shareHelper
-		);
+		$this->listener = $this->createInstanceWithMocks(Listener::class);
 	}
 
-	public function testCommentEvent() {
-		$this->appManager->expects($this->any())
-			->method('isInstalled')
+	public function testCommentEvent(): void {
+		$this->getAutoMock(IAppManager::class)->expects($this->any())
+			->method('isEnabledForAnyone')
 			->with('activity')
 			->willReturn(true);
 
@@ -95,22 +48,15 @@ class ListenerTest extends TestCase {
 			->method('getObjectType')
 			->willReturn('files');
 
-		/** @var CommentsEvent|\PHPUnit\Framework\MockObject\MockObject $event */
-		$event = $this->createMock(CommentsEvent::class);
-		$event->expects($this->any())
-			->method('getComment')
-			->willReturn($comment);
-		$event->expects($this->any())
-			->method('getEvent')
-			->willReturn(CommentsEvent::EVENT_ADD);
+		$event = new CommentAddedEvent($comment);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $ownerUser */
+		/** @var IUser|MockObject $ownerUser */
 		$ownerUser = $this->createMock(IUser::class);
 		$ownerUser->expects($this->any())
 			->method('getUID')
 			->willReturn('937393');
 
-		/** @var \PHPUnit\Framework\MockObject\MockObject $mount */
+		/** @var MockObject $mount */
 		$mount = $this->createMock(ICachedMountFileInfo::class);
 		$mount->expects($this->any())
 			->method('getUser')
@@ -123,19 +69,18 @@ class ListenerTest extends TestCase {
 			->method('getMountsForFileId')
 			->willReturn($mounts);
 
-		$this->mountProviderCollection->expects($this->any())
+		$this->getAutoMock(IMountProviderCollection::class)->expects($this->any())
 			->method('getMountCache')
 			->willReturn($userMountCache);
 
 		$node = $this->createMock(Node::class);
-		$nodes = [ $node ];
 
-		$ownerFolder = $this->createMock(Folder::class);
+		$ownerFolder = $this->createMock(IUserFolder::class);
 		$ownerFolder->expects($this->any())
-			->method('getById')
-			->willReturn($nodes);
+			->method('getFirstNodeById')
+			->willReturn($node);
 
-		$this->rootFolder->expects($this->any())
+		$this->getAutoMock(IRootFolder::class)->expects($this->any())
 			->method('getUserFolder')
 			->willReturn($ownerFolder);
 
@@ -144,15 +89,15 @@ class ListenerTest extends TestCase {
 			'254342' => 'there/i/have/it',
 			'sandra' => 'and/here/i/placed/it'
 		]];
-		$this->shareHelper->expects($this->any())
+		$this->getAutoMock(IShareHelper::class)->expects($this->any())
 			->method('getPathsForAccessList')
 			->willReturn($al);
 
-		$this->session->expects($this->any())
+		$this->getAutoMock(IUserSession::class)->expects($this->any())
 			->method('getUser')
 			->willReturn($ownerUser);
 
-		/** @var \PHPUnit\Framework\MockObject\MockObject $activity */
+		/** @var MockObject $activity */
 		$activity = $this->createMock(IEvent::class);
 		$activity->expects($this->exactly(count($al['users'])))
 			->method('setAffectedUser');
@@ -177,10 +122,10 @@ class ListenerTest extends TestCase {
 			->with('add_comment_message', $this->anything())
 			->willReturnSelf();
 
-		$this->activityManager->expects($this->once())
+		$this->getAutoMock(IManager::class)->expects($this->once())
 			->method('generateEvent')
 			->willReturn($activity);
-		$this->activityManager->expects($this->exactly(count($al['users'])))
+		$this->getAutoMock(IManager::class)->expects($this->exactly(count($al['users'])))
 			->method('publish');
 
 		$this->listener->commentEvent($event);

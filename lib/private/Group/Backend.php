@@ -1,33 +1,19 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Knut Ahlers <knut@ahlers.me>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Group;
+
+use OCP\GroupInterface;
 
 /**
  * Abstract base class for user management
  */
-abstract class Backend implements \OCP\GroupInterface {
+abstract class Backend implements GroupInterface {
 	/**
 	 * error code for functions not provided by the group backend
 	 */
@@ -69,6 +55,7 @@ abstract class Backend implements \OCP\GroupInterface {
 	 * Returns the supported actions as int to be
 	 * compared with \OC\Group\Backend::CREATE_GROUP etc.
 	 */
+	#[\Override]
 	public function implementsActions($actions) {
 		return (bool)($this->getSupportedActions() & $actions);
 	}
@@ -81,18 +68,20 @@ abstract class Backend implements \OCP\GroupInterface {
 	 *
 	 * Checks whether the user is member of a group or not.
 	 */
+	#[\Override]
 	public function inGroup($uid, $gid) {
-		return in_array($gid, $this->getUserGroups($uid));
+		return in_array($gid, $this->getUserGroups($uid), true);
 	}
 
 	/**
 	 * Get all groups a user belongs to
 	 * @param string $uid Name of the user
-	 * @return array an array of group names
+	 * @return list<string> an array of group names
 	 *
 	 * This function fetches all groups a user belongs to. It does not check
 	 * if the user exists at all.
 	 */
+	#[\Override]
 	public function getUserGroups($uid) {
 		return [];
 	}
@@ -107,6 +96,7 @@ abstract class Backend implements \OCP\GroupInterface {
 	 * Returns a list with all groups
 	 */
 
+	#[\Override]
 	public function getGroups($search = '', $limit = -1, $offset = 0) {
 		return [];
 	}
@@ -116,8 +106,9 @@ abstract class Backend implements \OCP\GroupInterface {
 	 * @param string $gid
 	 * @return bool
 	 */
+	#[\Override]
 	public function groupExists($gid) {
-		return in_array($gid, $this->getGroups($gid, 1));
+		return in_array($gid, $this->getGroups($gid, 1), true);
 	}
 
 	/**
@@ -126,8 +117,9 @@ abstract class Backend implements \OCP\GroupInterface {
 	 * @param string $search
 	 * @param int $limit
 	 * @param int $offset
-	 * @return array an array of user ids
+	 * @return array<int,string> an array of user ids
 	 */
+	#[\Override]
 	public function usersInGroup($gid, $search = '', $limit = -1, $offset = 0) {
 		return [];
 	}

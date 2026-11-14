@@ -1,78 +1,76 @@
 <?php
+
 /**
- * @copyright 2017 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Core\Controller;
 
+use Exception;
+use NCU\AppFramework\Http\Attribute\TokenScope;
 use OC\Contacts\ContactsMenu\Manager;
+use OC\Core\TokenScopes;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\FrontpageRoute;
+use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\JSONResponse;
+use OCP\Contacts\ContactsMenu\IEntry;
 use OCP\IRequest;
 use OCP\IUserSession;
+use OCP\Teams\ITeamManager;
 
+#[TokenScope(scope: TokenScopes::PEOPLE_READ)]
 class ContactsMenuController extends Controller {
-
-	/** @var Manager */
-	private $manager;
-
-	/** @var IUserSession */
-	private $userSession;
-
-	/**
-	 * @param IRequest $request
-	 * @param IUserSession $userSession
-	 * @param Manager $manager
-	 */
-	public function __construct(IRequest $request, IUserSession $userSession, Manager $manager) {
+	public function __construct(
+		IRequest $request,
+		private IUserSession $userSession,
+		private Manager $manager,
+		private ITeamManager $teamManager,
+	) {
 		parent::__construct('core', $request);
-		$this->userSession = $userSession;
-		$this->manager = $manager;
 	}
 
 	/**
-	 * @NoAdminRequired
-	 *
-	 * @param string|null filter
 	 * @return \JsonSerializable[]
+	 * @throws Exception
 	 */
-	public function index($filter = null) {
-		return $this->manager->getEntries($this->userSession->getUser(), $filter);
+	#[NoAdminRequired]
+	#[FrontpageRoute(verb: 'POST', url: '/contactsmenu/contacts')]
+	public function index(?string $filter = null, ?string $teamId = null): array {
+		$entries = $this->manager->getEntries($this->userSession->getUser(), $filter);
+		if ($teamId !== null) {
+			$memberIds = $this->teamManager->getMembersOfTeam($teamId, $this->userSession->getUser()->getUID());
+			$entries['contacts'] = array_filter(
+				$entries['contacts'],
+				fn (IEntry $entry) => array_key_exists($entry->getProperty('UID'), $memberIds)
+			);
+		}
+		return $entries;
 	}
 
 	/**
-	 * @NoAdminRequired
-	 *
-	 * @param integer $shareType
-	 * @param string $shareWith
 	 * @return JSONResponse|\JsonSerializable
+	 * @throws Exception
 	 */
-	public function findOne($shareType, $shareWith) {
+	#[NoAdminRequired]
+	#[FrontpageRoute(verb: 'POST', url: '/contactsmenu/findOne')]
+	public function findOne(int $shareType, string $shareWith) {
 		$contact = $this->manager->findOne($this->userSession->getUser(), $shareType, $shareWith);
 
 		if ($contact) {
 			return $contact;
 		}
 		return new JSONResponse([], Http::STATUS_NOT_FOUND);
+	}
+
+	/**
+	 * @return \JsonSerializable[]
+	 */
+	#[NoAdminRequired]
+	#[FrontpageRoute(verb: 'GET', url: '/contactsmenu/teams')]
+	public function getTeams(): array {
+		return $this->teamManager->getTeamsForUser($this->userSession->getUser()->getUID());
 	}
 }

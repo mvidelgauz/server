@@ -1,28 +1,15 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017, ownCloud GmbH
- *
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2015 ownCloud GmbH
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Migration;
 
-use OCP\ILogger;
 use OCP\Migration\IOutput;
+use Psr\Log\LoggerInterface;
 
 /**
  * Class SimpleOutput
@@ -33,21 +20,23 @@ use OCP\Migration\IOutput;
  * @package OC\Migration
  */
 class SimpleOutput implements IOutput {
+	public function __construct(
+		private LoggerInterface $logger,
+		private $appName,
+	) {
+	}
 
-	/** @var ILogger */
-	private $logger;
-	private $appName;
-
-	public function __construct(ILogger $logger, $appName) {
-		$this->logger = $logger;
-		$this->appName = $appName;
+	#[\Override]
+	public function debug(string $message): void {
+		$this->logger->debug($message, ['app' => $this->appName]);
 	}
 
 	/**
 	 * @param string $message
 	 * @since 9.1.0
 	 */
-	public function info($message) {
+	#[\Override]
+	public function info($message): void {
 		$this->logger->info($message, ['app' => $this->appName]);
 	}
 
@@ -55,7 +44,8 @@ class SimpleOutput implements IOutput {
 	 * @param string $message
 	 * @since 9.1.0
 	 */
-	public function warning($message) {
+	#[\Override]
+	public function warning($message): void {
 		$this->logger->warning($message, ['app' => $this->appName]);
 	}
 
@@ -63,7 +53,8 @@ class SimpleOutput implements IOutput {
 	 * @param int $max
 	 * @since 9.1.0
 	 */
-	public function startProgress($max = 0) {
+	#[\Override]
+	public function startProgress($max = 0): void {
 	}
 
 	/**
@@ -71,12 +62,14 @@ class SimpleOutput implements IOutput {
 	 * @param string $description
 	 * @since 9.1.0
 	 */
-	public function advance($step = 1, $description = '') {
+	#[\Override]
+	public function advance($step = 1, $description = ''): void {
 	}
 
 	/**
 	 * @since 9.1.0
 	 */
-	public function finishProgress() {
+	#[\Override]
+	public function finishProgress(): void {
 	}
 }

@@ -1,24 +1,10 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2017 Kyle Fazzari <kyrofa@ubuntu.com>
- *
- * @author Kyle Fazzari <kyrofa@ubuntu.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- *  This program is free software: you can redistribute it and/or modify
- *  it under the terms of the GNU Affero General Public License as
- *  published by the Free Software Foundation, either version 3 of the
- *  License, or (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU Affero General Public License for more details.
- *
- *  You should have received a copy of the GNU Affero General Public License
- *  along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Template;
@@ -27,46 +13,37 @@ use OC\AppConfig;
 use OC\Files\AppData\AppData;
 use OC\Files\AppData\Factory;
 use OC\Template\CSSResourceLocator;
-use OC\Template\IconsCacher;
-use OC\Template\SCSSCacher;
 use OCA\Theming\ThemingDefaults;
+use OCP\App\IAppManager;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Files\IAppData;
 use OCP\ICacheFactory;
 use OCP\IConfig;
-use OCP\ILogger;
 use OCP\IURLGenerator;
+use OCP\Server;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 
 class CSSResourceLocatorTest extends \Test\TestCase {
-	/** @var IAppData|\PHPUnit\Framework\MockObject\MockObject */
-	protected $appData;
-	/** @var IURLGenerator|\PHPUnit\Framework\MockObject\MockObject */
-	protected $urlGenerator;
-	/** @var IConfig|\PHPUnit\Framework\MockObject\MockObject */
-	protected $config;
-	/** @var ThemingDefaults|\PHPUnit\Framework\MockObject\MockObject */
-	protected $themingDefaults;
-	/** @var ICacheFactory|\PHPUnit\Framework\MockObject\MockObject */
-	protected $cacheFactory;
-	/** @var ILogger|\PHPUnit\Framework\MockObject\MockObject */
-	protected $logger;
-	/** @var IconsCacher|\PHPUnit\Framework\MockObject\MockObject */
-	protected $iconsCacher;
-	/** @var ITimeFactory|\PHPUnit\Framework\MockObject\MockObject */
-	private $timeFactory;
-	/** @var AppConfig|\PHPUnit\Framework\MockObject\MockObject */
-	private $appConfig;
+	private IAppData&MockObject $appData;
+	private IURLGenerator&MockObject $urlGenerator;
+	private IConfig&MockObject $config;
+	private ThemingDefaults&MockObject $themingDefaults;
+	private ICacheFactory&MockObject $cacheFactory;
+	private LoggerInterface&MockObject $logger;
+	private ITimeFactory&MockObject $timeFactory;
+	private AppConfig&MockObject $appConfig;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->logger = $this->createMock(ILogger::class);
+		$this->logger = $this->createMock(LoggerInterface::class);
 		$this->appData = $this->createMock(AppData::class);
 		$this->urlGenerator = $this->createMock(IURLGenerator::class);
 		$this->config = $this->createMock(IConfig::class);
 		$this->cacheFactory = $this->createMock(ICacheFactory::class);
 		$this->themingDefaults = $this->createMock(ThemingDefaults::class);
-		$this->iconsCacher = $this->createMock(IconsCacher::class);
 		$this->timeFactory = $this->createMock(ITimeFactory::class);
 		$this->appConfig = $this->createMock(AppConfig::class);
 	}
@@ -75,24 +52,13 @@ class CSSResourceLocatorTest extends \Test\TestCase {
 		/** @var Factory|\PHPUnit\Framework\MockObject\MockObject $factory */
 		$factory = $this->createMock(Factory::class);
 		$factory->method('get')->with('css')->willReturn($this->appData);
-		$scssCacher = new SCSSCacher(
-			$this->logger,
-			$factory,
-			$this->urlGenerator,
-			$this->config,
-			$this->themingDefaults,
-			\OC::$SERVERROOT,
-			$this->cacheFactory,
-			$this->iconsCacher,
-			$this->timeFactory,
-			$this->appConfig
-		);
 		return new CSSResourceLocator(
 			$this->logger,
+			$this->createMock(IConfig::class),
+			Server::get(IAppManager::class),
 			'theme',
 			['core' => 'map'],
 			['3rd' => 'party'],
-			$scssCacher
 		);
 	}
 
@@ -108,11 +74,11 @@ class CSSResourceLocatorTest extends \Test\TestCase {
 		return rmdir($directory);
 	}
 
-	private function randomString() {
-		return sha1(uniqid(mt_rand(), true));
+	private function randomString(): string {
+		return sha1(random_bytes(10));
 	}
 
-	public function testFindWithAppPathSymlink() {
+	public function testFindWithAppPathSymlink(): void {
 		// First create new apps path, and a symlink to it
 		$apps_dirname = $this->randomString();
 		$new_apps_path = sys_get_temp_dir() . '/' . $apps_dirname;
@@ -121,7 +87,7 @@ class CSSResourceLocatorTest extends \Test\TestCase {
 		symlink($apps_dirname, $new_apps_path_symlink);
 
 		// Create an app within that path
-		mkdir($new_apps_path . '/' . 'test-css-app');
+		mkdir($new_apps_path . '/' . 'test_css_app');
 
 		// Use the symlink as the app path
 		\OC::$APPSROOTS[] = [
@@ -131,7 +97,7 @@ class CSSResourceLocatorTest extends \Test\TestCase {
 		];
 
 		$locator = $this->cssResourceLocator();
-		$locator->find(['test-css-app/test-file']);
+		$locator->find(['test_css_app/test-file']);
 
 		$resources = $locator->getResources();
 		$this->assertCount(1, $resources);
@@ -141,8 +107,8 @@ class CSSResourceLocatorTest extends \Test\TestCase {
 		$webRoot = $resource[1];
 		$file = $resource[2];
 
-		$expectedRoot = $new_apps_path . '/test-css-app';
-		$expectedWebRoot = \OC::$WEBROOT . '/css-apps-test/test-css-app';
+		$expectedRoot = $new_apps_path . '/test_css_app';
+		$expectedWebRoot = \OC::$WEBROOT . '/css-apps-test/test_css_app';
 		$expectedFile = 'test-file.css';
 
 		$this->assertEquals($expectedRoot, $root,

@@ -1,27 +1,11 @@
 <?php
+
 /**
- * @copyright 2018, Denis Mosolov <denismosolov@gmail.com>
- *
- * @author Denis Mosolov <denismosolov@gmail.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Afferoq General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-namespace Test\Core\Command\Group;
+namespace Tests\Core\Command\Group;
 
 use OC\Core\Command\Group\Add;
 use OCP\IGroup;
@@ -31,10 +15,6 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Test\TestCase;
 
 class AddTest extends TestCase {
-
-	/** @var IGroupManager|\PHPUnit\Framework\MockObject\MockObject */
-	private $groupManager;
-
 	/** @var Add */
 	private $command;
 
@@ -44,11 +24,10 @@ class AddTest extends TestCase {
 	/** @var OutputInterface|\PHPUnit\Framework\MockObject\MockObject */
 	private $output;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
-
-		$this->groupManager = $this->createMock(IGroupManager::class);
-		$this->command = new Add($this->groupManager);
+		$this->command = $this->createInstanceWithMocks(Add::class);
 
 		$this->input = $this->createMock(InputInterface::class);
 		$this->input->method('getArgument')
@@ -61,14 +40,14 @@ class AddTest extends TestCase {
 		$this->output = $this->createMock(OutputInterface::class);
 	}
 
-	public function testGroupExists() {
+	public function testGroupExists(): void {
 		$gid = 'myGroup';
 		$group = $this->createMock(IGroup::class);
-		$this->groupManager->method('get')
+		$this->getAutoMock(IGroupManager::class)->method('get')
 			->with($gid)
 			->willReturn($group);
 
-		$this->groupManager->expects($this->never())
+		$this->getAutoMock(IGroupManager::class)->expects($this->never())
 			->method('createGroup');
 		$this->output->expects($this->once())
 			->method('writeln')
@@ -77,15 +56,15 @@ class AddTest extends TestCase {
 		$this->invokePrivate($this->command, 'execute', [$this->input, $this->output]);
 	}
 
-	public function testAdd() {
+	public function testAdd(): void {
 		$gid = 'myGroup';
 		$group = $this->createMock(IGroup::class);
 		$group->method('getGID')
 			->willReturn($gid);
-		$this->groupManager->method('createGroup')
+		$this->getAutoMock(IGroupManager::class)->method('createGroup')
 			->willReturn($group);
 
-		$this->groupManager->expects($this->once())
+		$this->getAutoMock(IGroupManager::class)->expects($this->once())
 			->method('createGroup')
 			->with($this->equalTo($gid));
 		$this->output->expects($this->once())

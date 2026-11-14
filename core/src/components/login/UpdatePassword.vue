@@ -1,34 +1,68 @@
 <!--
-  - @copyright Copyright (c) 2019 Julius Härtl <jus@bitgrid.net>
-  -
-  - @author Julius Härtl <jus@bitgrid.net>
-  -
-  - @license GNU AGPL version 3 or any later version
-  -
-  - This program is free software: you can redistribute it and/or modify
-  - it under the terms of the GNU Affero General Public License as
-  - published by the Free Software Foundation, either version 3 of the
-  - License, or (at your option) any later version.
-  -
-  - This program is distributed in the hope that it will be useful,
-  - but WITHOUT ANY WARRANTY; without even the implied warranty of
-  - MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-  - GNU Affero General Public License for more details.
-  -
-  - You should have received a copy of the GNU Affero General Public License
-  - along with this program. If not, see <http://www.gnu.org/licenses/>.
-  -
-  -->
+  - SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
+<script setup lang="ts">
+import axios from '@nextcloud/axios'
+import { t } from '@nextcloud/l10n'
+import { ref } from 'vue'
+import LoginButton from './LoginButton.vue'
+
+const props = defineProps<{
+	resetPasswordTarget: string
+}>()
+
+const emit = defineEmits<{
+	done: []
+}>()
+
+const loading = ref(false)
+const message = ref('')
+const password = ref('')
+const encrypted = ref(false)
+const proceed = ref(false)
+
+/**
+ * Set the new password, asking for confirmation first if the files are encrypted.
+ */
+async function submit() {
+	loading.value = true
+	message.value = ''
+
+	try {
+		const { data } = await axios.post(props.resetPasswordTarget, {
+			password: password.value,
+			proceed: proceed.value,
+		})
+		if (data?.status === 'success') {
+			emit('done')
+		} else if (data?.encryption) {
+			encrypted.value = true
+		} else {
+			throw new Error(data?.msg)
+		}
+	} catch (error) {
+		message.value = (error instanceof Error && error.message) || t('core', 'Password cannot be changed. Please contact your administrator.')
+	} finally {
+		loading.value = false
+	}
+}
+</script>
 
 <template>
 	<form @submit.prevent="submit">
-		<fieldset>
+		<fieldset :class="$style.updatePassword">
 			<p>
 				<label for="password" class="infield">{{ t('core', 'New password') }}</label>
-				<input id="password"
+				<input
+					id="password"
 					v-model="password"
 					type="password"
 					name="password"
+					autocomplete="new-password"
+					autocapitalize="none"
+					spellcheck="false"
 					required
 					:placeholder="t('core', 'New password')">
 			</p>
@@ -37,7 +71,8 @@
 				<p>
 					{{ t('core', 'Your files are encrypted. There will be no way to get your data back after your password is reset. If you are not sure what to do, please contact your administrator before you continue. Do you really want to continue?') }}
 				</p>
-				<input id="encrypted-continue"
+				<input
+					id="encrypted-continue"
 					v-model="proceed"
 					type="checkbox"
 					class="checkbox">
@@ -46,100 +81,20 @@
 				</label>
 			</div>
 
-			<div id="submit-wrapper">
-				<input id="submit"
-					type="submit"
-					class="login primary"
-					title=""
-					:value="!loading ? t('core', 'Reset password') : t('core', 'Resetting password')">
-				<div class="submit-icon"
-					:class="{
-						'icon-loading-small': loading && invertedColors,
-						'icon-loading-small-dark': loading && !invertedColors
-					}" />
-			</div>
+			<LoginButton
+				:loading="loading"
+				:value="t('core', 'Reset password')"
+				:valueLoading="t('core', 'Resetting password')" />
 
-			<p v-if="error && message" :class="{warning: error}">
+			<p v-if="message" class="warning">
 				{{ message }}
 			</p>
 		</fieldset>
 	</form>
 </template>
 
-<script>
-import Axios from '@nextcloud/axios'
-
-export default {
-	name: 'UpdatePassword',
-	props: {
-		username: {
-			type: String,
-			required: true,
-		},
-		resetPasswordTarget: {
-			type: String,
-			required: true,
-		},
-		invertedColors: {
-			type: Boolean,
-			default: false,
-		},
-	},
-	data() {
-		return {
-			error: false,
-			loading: false,
-			message: undefined,
-			user: this.username,
-			password: '',
-			encrypted: false,
-			proceed: false,
-		}
-	},
-	watch: {
-		username(value) {
-			this.user = value
-		},
-	},
-	methods: {
-		async submit() {
-			this.loading = true
-			this.error = false
-			this.message = ''
-
-			try {
-				const { data } = await Axios.post(this.resetPasswordTarget, {
-					password: this.password,
-					proceed: this.proceed,
-				})
-				if (data && data.status === 'success') {
-					this.message = 'send-success'
-					this.$emit('update:username', this.user)
-					this.$emit('done')
-				} else if (data && data.encryption) {
-					this.encrypted = true
-				} else if (data && data.msg) {
-					throw new Error(data.msg)
-				} else {
-					throw new Error()
-				}
-			} catch (e) {
-				this.error = true
-				this.message = e.message ? e.message : t('core', 'Password cannot be changed. Please contact your administrator.')
-			} finally {
-				this.loading = false
-			}
-		},
-	},
+<style module>
+.updatePassword {
+	text-align: center;
 }
-</script>
-
-<style scoped>
-	fieldset {
-		text-align: center;
-	}
-
-	input[type=submit] {
-		margin-top: 20px;
-	}
 </style>

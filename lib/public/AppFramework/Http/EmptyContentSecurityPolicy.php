@@ -1,29 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Pavel Krasikov <klonishe@gmail.com>
- * @author Pierre Rudloff <contact@rudloff.pro>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Citharel <nextcloud@tcit.fr>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCP\AppFramework\Http;
 
 /**
@@ -37,21 +19,19 @@ namespace OCP\AppFramework\Http;
  * @since 9.0.0
  */
 class EmptyContentSecurityPolicy {
-	/** @var bool Whether inline JS snippets are allowed */
-	protected $inlineScriptAllowed = null;
-	/** @var string Whether JS nonces should be used */
-	protected $useJsNonce = null;
-	/**
-	 * @var bool Whether eval in JS scripts is allowed
-	 * TODO: Disallow per default
-	 * @link https://github.com/owncloud/core/issues/11925
-	 */
-	protected $evalScriptAllowed = null;
+	/** @var ?string JS nonce to be used */
+	protected ?string $jsNonce = null;
+	/** @var bool Whether strict-dynamic should be used */
+	protected $strictDynamicAllowed = null;
+	/** @var bool Whether strict-dynamic should be used on script-src-elem */
+	protected $strictDynamicAllowedOnScripts = null;
+	/** @var bool Whether WebAssembly compilation is allowed */
+	protected ?bool $evalWasmAllowed = null;
 	/** @var array Domains from which scripts can get loaded */
 	protected $allowedScriptDomains = null;
 	/**
 	 * @var bool Whether inline CSS is allowed
-	 * TODO: Disallow per default
+	 *           TODO: Disallow per default
 	 * @link https://github.com/owncloud/core/issues/13458
 	 */
 	protected $inlineStyleAllowed = null;
@@ -69,8 +49,6 @@ class EmptyContentSecurityPolicy {
 	protected $allowedFrameDomains = null;
 	/** @var array Domains from which fonts can be loaded */
 	protected $allowedFontDomains = null;
-	/** @var array Domains from which web-workers and nested browsing content can load elements */
-	protected $allowedChildSrcDomains = null;
 	/** @var array Domains which can embed this Nextcloud instance */
 	protected $allowedFrameAncestors = null;
 	/** @var array Domains from which web-workers can be loaded */
@@ -82,19 +60,29 @@ class EmptyContentSecurityPolicy {
 	protected $reportTo = null;
 
 	/**
-	 * Whether inline JavaScript snippets are allowed or forbidden
 	 * @param bool $state
-	 * @return $this
-	 * @since 8.1.0
-	 * @deprecated 10.0 CSP tokens are now used
+	 * @return EmptyContentSecurityPolicy
+	 * @since 24.0.0
 	 */
-	public function allowInlineScript($state = false) {
-		$this->inlineScriptAllowed = $state;
+	public function useStrictDynamic(bool $state = false): self {
+		$this->strictDynamicAllowed = $state;
 		return $this;
 	}
 
 	/**
-	 * Use the according JS nonce
+	 * In contrast to `useStrictDynamic` this only sets strict-dynamic on script-src-elem
+	 * Meaning only grants trust to all imports of scripts that were loaded in `<script>` tags, and thus weakens less the CSP.
+	 * @param bool $state
+	 * @return EmptyContentSecurityPolicy
+	 * @since 28.0.0
+	 */
+	public function useStrictDynamicOnScripts(bool $state = false): self {
+		$this->strictDynamicAllowedOnScripts = $state;
+		return $this;
+	}
+
+	/**
+	 * The base64 encoded nonce to be used for script source.
 	 * This method is only for CSPMiddleware, custom values are ignored in mergePolicies of ContentSecurityPolicyManager
 	 *
 	 * @param string $nonce
@@ -102,19 +90,18 @@ class EmptyContentSecurityPolicy {
 	 * @since 11.0.0
 	 */
 	public function useJsNonce($nonce) {
-		$this->useJsNonce = $nonce;
+		$this->jsNonce = $nonce;
 		return $this;
 	}
 
 	/**
-	 * Whether eval in JavaScript is allowed or forbidden
+	 * Whether WebAssembly compilation is allowed or forbidden
 	 * @param bool $state
 	 * @return $this
-	 * @since 8.1.0
-	 * @deprecated Eval should not be used anymore. Please update your scripts. This function will stop functioning in a future version of Nextcloud.
+	 * @since 28.0.0
 	 */
-	public function allowEvalScript($state = true) {
-		$this->evalScriptAllowed = $state;
+	public function allowEvalWasm(bool $state = true) {
+		$this->evalWasmAllowed = $state;
 		return $this;
 	}
 
@@ -318,31 +305,6 @@ class EmptyContentSecurityPolicy {
 	}
 
 	/**
-	 * Domains from which web-workers and nested browsing content can load elements
-	 * @param string $domain Domain to whitelist. Any passed value needs to be properly sanitized.
-	 * @return $this
-	 * @since 8.1.0
-	 * @deprecated 15.0.0 use addAllowedWorkerSrcDomains or addAllowedFrameDomain
-	 */
-	public function addAllowedChildSrcDomain($domain) {
-		$this->allowedChildSrcDomains[] = $domain;
-		return $this;
-	}
-
-	/**
-	 * Remove the specified allowed child src domain from the allowed domains.
-	 *
-	 * @param string $domain
-	 * @return $this
-	 * @since 8.1.0
-	 * @deprecated 15.0.0 use the WorkerSrcDomains or FrameDomain
-	 */
-	public function disallowChildSrcDomain($domain) {
-		$this->allowedChildSrcDomains = array_diff($this->allowedChildSrcDomains, [$domain]);
-		return $this;
-	}
-
-	/**
 	 * Domains which can embed an iFrame of the Nextcloud instance
 	 *
 	 * @param string $domain
@@ -435,26 +397,34 @@ class EmptyContentSecurityPolicy {
 		$policy .= "base-uri 'none';";
 		$policy .= "manifest-src 'self';";
 
-		if (!empty($this->allowedScriptDomains) || $this->inlineScriptAllowed || $this->evalScriptAllowed) {
+		if (!empty($this->allowedScriptDomains) || $this->evalWasmAllowed || is_string($this->jsNonce)) {
 			$policy .= 'script-src ';
-			if (is_string($this->useJsNonce)) {
-				$policy .= '\'nonce-'.base64_encode($this->useJsNonce).'\'';
+			$scriptSrc = '';
+			if (is_string($this->jsNonce)) {
+				if ($this->strictDynamicAllowed) {
+					$scriptSrc .= '\'strict-dynamic\' ';
+				}
+				$scriptSrc .= '\'nonce-' . $this->jsNonce . '\'';
 				$allowedScriptDomains = array_flip($this->allowedScriptDomains);
 				unset($allowedScriptDomains['\'self\'']);
 				$this->allowedScriptDomains = array_flip($allowedScriptDomains);
 				if (count($allowedScriptDomains) !== 0) {
-					$policy .= ' ';
+					$scriptSrc .= ' ';
 				}
 			}
 			if (is_array($this->allowedScriptDomains)) {
-				$policy .= implode(' ', $this->allowedScriptDomains);
+				$scriptSrc .= implode(' ', $this->allowedScriptDomains);
 			}
-			if ($this->inlineScriptAllowed) {
-				$policy .= ' \'unsafe-inline\'';
+			if ($this->evalWasmAllowed) {
+				$scriptSrc .= ' \'wasm-unsafe-eval\'';
 			}
-			if ($this->evalScriptAllowed) {
-				$policy .= ' \'unsafe-eval\'';
-			}
+			$policy .= $scriptSrc . ';';
+		}
+
+		// We only need to set this if 'strictDynamicAllowed' is not set because otherwise we can simply fall back to script-src
+		if ($this->strictDynamicAllowedOnScripts && is_string($this->jsNonce) && !$this->strictDynamicAllowed) {
+			$policy .= 'script-src-elem \'strict-dynamic\' ';
+			$policy .= $scriptSrc ?? '';
 			$policy .= ';';
 		}
 
@@ -497,11 +467,6 @@ class EmptyContentSecurityPolicy {
 		if (!empty($this->allowedFrameDomains)) {
 			$policy .= 'frame-src ';
 			$policy .= implode(' ', $this->allowedFrameDomains);
-			$policy .= ';';
-		}
-
-		if (!empty($this->allowedChildSrcDomains)) {
-			$policy .= 'child-src ' . implode(' ', $this->allowedChildSrcDomains);
 			$policy .= ';';
 		}
 

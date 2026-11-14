@@ -1,66 +1,90 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2018, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\BackgroundJob;
 
-use OC\BackgroundJob\JobList;
-use OCP\ILogger;
+use OCP\Server;
+use Psr\Log\LoggerInterface;
 
 /**
  * Simple base class to extend to run periodic background jobs.
  * Call setInterval with your desired interval in seconds from the constructor.
  *
  * @since 15.0.0
+ * @since 25.0.0 deprecated `execute()` method in favor of `start()`
+ * @since 33.0.0 removed deprecated `execute()` method
  */
 abstract class TimedJob extends Job {
-	/** @var int */
-	protected $interval = 0;
+	protected int $interval = 0;
+	protected int $timeSensitivity = IJob::TIME_SENSITIVE;
 
 	/**
-	 * set the interval for the job
+	 * Set the interval for the job
 	 *
 	 * @param int $seconds the time to pass between two runs of the same job in seconds
 	 *
 	 * @since 15.0.0
 	 */
-	public function setInterval(int $seconds) {
+	public function setInterval(int $seconds): void {
 		$this->interval = $seconds;
 	}
 
 	/**
-	 * run the job if the last run is is more than the interval ago
+	 * Get the interval [seconds] for the job
 	 *
-	 * @param JobList $jobList
-	 * @param ILogger|null $logger
-	 *
-	 * @since 15.0.0
+	 * @since 32.0.0
 	 */
-	final public function execute($jobList, ILogger $logger = null) {
+	public function getInterval(): int {
+		return $this->interval;
+	}
+
+	/**
+	 * Whether the background job is time sensitive and needs to run soon after
+	 * the scheduled interval, of if it is okay to be delayed until a later time.
+	 *
+	 * @return bool
+	 * @since 24.0.0
+	 */
+	public function isTimeSensitive(): bool {
+		return $this->timeSensitivity === IJob::TIME_SENSITIVE;
+	}
+
+	/**
+	 * If your background job is not time sensitive (sending instant email
+	 * notifications, etc.) it would be nice to set it to IJob::TIME_INSENSITIVE
+	 * This way the execution can be delayed during high usage times.
+	 *
+	 * @param int $sensitivity
+	 * @psalm-param IJob::TIME_* $sensitivity
+	 * @return void
+	 * @since 24.0.0
+	 */
+	public function setTimeSensitivity(int $sensitivity): void {
+		if ($sensitivity !== self::TIME_SENSITIVE
+			&& $sensitivity !== self::TIME_INSENSITIVE) {
+			throw new \InvalidArgumentException('Invalid sensitivity');
+		}
+
+		$this->timeSensitivity = $sensitivity;
+	}
+
+	/**
+	 * Run the job if the last run is more than the interval ago
+	 *
+	 * @since 25.0.0
+	 */
+	#[\Override]
+	final public function start(IJobList $jobList): void {
 		if (($this->time->getTime() - $this->lastRun) > $this->interval) {
-			parent::execute($jobList, $logger);
+			if ($this->interval >= 12 * 60 * 60 && $this->isTimeSensitive()) {
+				Server::get(LoggerInterface::class)->debug('TimedJob ' . get_class($this) . ' has a configured interval of ' . $this->interval . ' seconds, but is also marked as time sensitive. Please consider marking it as time insensitive to allow more sensitive jobs to run when needed.');
+			}
+			parent::start($jobList);
 		}
 	}
 }

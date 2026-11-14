@@ -1,52 +1,109 @@
 <?php
+
 /**
- * Copyright (c) 2014 Robin Appelman <icewind@owncloud.com>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Files\Storage\Wrapper;
 
+use OC\Files\Storage\Temporary;
+use OC\Files\Storage\Wrapper\PermissionsMask;
 use OC\Files\Storage\Wrapper\Wrapper;
 use OCP\Constants;
 use OCP\Files\Cache\IScanner;
+use OCP\Files\GenericFileException;
+use PHPUnit\Framework\Attributes\DataProvider;
 
-/**
- * @group DB
- */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class PermissionsMaskTest extends \Test\Files\Storage\Storage {
-
 	/**
-	 * @var \OC\Files\Storage\Temporary
+	 * @var Temporary
 	 */
 	private $sourceStorage;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
-		$this->sourceStorage = new \OC\Files\Storage\Temporary([]);
+		$this->sourceStorage = new Temporary([]);
 		$this->instance = $this->getMaskedStorage(Constants::PERMISSION_ALL);
 	}
 
+	#[\Override]
 	protected function tearDown(): void {
 		$this->sourceStorage->cleanUp();
 		parent::tearDown();
 	}
 
 	protected function getMaskedStorage($mask) {
-		return new \OC\Files\Storage\Wrapper\PermissionsMask([
+		return new PermissionsMask([
 			'storage' => $this->sourceStorage,
 			'mask' => $mask
 		]);
 	}
 
-	public function testMkdirNoCreate() {
+	public function testMkdirNoCreate(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_CREATE);
 		$this->assertFalse($storage->mkdir('foo'));
 		$this->assertFalse($storage->file_exists('foo'));
 	}
 
-	public function testRmdirNoDelete() {
+	public static function dataRenamePartFile(): array {
+		$partialFileName = 'x.ocTransferId123.part';
+		return [
+			'renaming partial file in same directory' => [
+				'sourcePath' => $partialFileName,
+				'targetPath' => 'x',
+				'shouldSucceed' => true,
+			],
+			'renaming partial file for file uploaded in parent (part_file_in_storage=false) ' => [
+				'sourcePath' => '/A/' . $partialFileName,
+				'targetPath' => '/A/Share/x',
+				'shouldSucceed' => true,
+			],
+			'renaming partial file for file uploaded in ancestor (part_file_in_storage=false) ' => [
+				'sourcePath' => '/A/' . $partialFileName,
+				'targetPath' => '/A/B/C/Share/x',
+				'shouldSucceed' => true,
+			],
+			'renaming non-partial file in parent' => [
+				'sourcePath' => '/A/foo.ocTransferId123',
+				'targetPath' => '/A/Share/x',
+				'shouldSucceed' => false,
+			],
+			'renaming partial file into existing file' => [
+				'sourcePath' => '/A/' . $partialFileName,
+				'targetPath' => '/A/Share/x',
+				'shouldSucceed' => false,
+				'targetExisting' => true,
+			]
+		];
+	}
+	#[DataProvider(methodName: 'dataRenamePartFile')]
+	public function testRenamePartFile(string $sourcePath, string $targetPath, bool $shouldSucceed, bool $targetExisting = false): void {
+		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_UPDATE);
+		$directories = array_unique([ ...explode('/', dirname($sourcePath)), ...explode('/', dirname($targetPath)) ]);
+		$path = '';
+		foreach ($directories as $part) {
+			if (in_array($part, ['', '.'], true)) {
+				continue;
+			}
+			$path .= $part . '/';
+			$this->assertTrue($storage->mkdir($path));
+		}
+
+		$this->assertNotFalse($this->sourceStorage->file_put_contents($sourcePath, 'bar'));
+		$this->assertTrue($this->sourceStorage->file_exists($sourcePath));
+		if ($targetExisting) {
+			$this->assertNotFalse($this->sourceStorage->file_put_contents($targetPath, 'existing'));
+			$this->assertTrue($this->sourceStorage->file_exists($targetPath));
+		}
+
+		$this->assertEquals($shouldSucceed, $storage->rename($sourcePath, $targetPath), 'Renaming should ' . ($shouldSucceed ? '' : 'not ') . 'succeed');
+	}
+
+	public function testRmdirNoDelete(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_DELETE);
 		$this->assertTrue($storage->mkdir('foo'));
 		$this->assertTrue($storage->file_exists('foo'));
@@ -54,25 +111,25 @@ class PermissionsMaskTest extends \Test\Files\Storage\Storage {
 		$this->assertTrue($storage->file_exists('foo'));
 	}
 
-	public function testTouchNewFileNoCreate() {
+	public function testTouchNewFileNoCreate(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_CREATE);
 		$this->assertFalse($storage->touch('foo'));
 		$this->assertFalse($storage->file_exists('foo'));
 	}
 
-	public function testTouchNewFileNoUpdate() {
+	public function testTouchNewFileNoUpdate(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_UPDATE);
 		$this->assertTrue($storage->touch('foo'));
 		$this->assertTrue($storage->file_exists('foo'));
 	}
 
-	public function testTouchExistingFileNoUpdate() {
+	public function testTouchExistingFileNoUpdate(): void {
 		$this->sourceStorage->touch('foo');
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_UPDATE);
 		$this->assertFalse($storage->touch('foo'));
 	}
 
-	public function testUnlinkNoDelete() {
+	public function testUnlinkNoDelete(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_DELETE);
 		$this->assertTrue($storage->touch('foo'));
 		$this->assertTrue($storage->file_exists('foo'));
@@ -80,35 +137,96 @@ class PermissionsMaskTest extends \Test\Files\Storage\Storage {
 		$this->assertTrue($storage->file_exists('foo'));
 	}
 
-	public function testPutContentsNewFileNoUpdate() {
+	public function testPutContentsNewFileNoUpdate(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_UPDATE);
 		$this->assertEquals(3, $storage->file_put_contents('foo', 'bar'));
 		$this->assertEquals('bar', $storage->file_get_contents('foo'));
 	}
 
-	public function testPutContentsNewFileNoCreate() {
+	public function testPutContentsNewFileNoCreate(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_CREATE);
 		$this->assertFalse($storage->file_put_contents('foo', 'bar'));
 	}
 
-	public function testPutContentsExistingFileNoUpdate() {
+	public function testPutContentsExistingFileNoUpdate(): void {
 		$this->sourceStorage->touch('foo');
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_UPDATE);
 		$this->assertFalse($storage->file_put_contents('foo', 'bar'));
 	}
 
-	public function testFopenExistingFileNoUpdate() {
+	public function testFopenExistingFileNoUpdate(): void {
 		$this->sourceStorage->touch('foo');
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_UPDATE);
 		$this->assertFalse($storage->fopen('foo', 'w'));
 	}
 
-	public function testFopenNewFileNoCreate() {
+	public function testFopenNewFileNoCreate(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_CREATE);
 		$this->assertFalse($storage->fopen('foo', 'w'));
 	}
 
-	public function testScanNewFiles() {
+	public static function dataFromStorage(): array {
+		return [
+			'copy, new file' => ['copyFromStorage', false, Constants::PERMISSION_CREATE],
+			'copy, existing file' => ['copyFromStorage', true, Constants::PERMISSION_UPDATE],
+			'move, new file' => ['moveFromStorage', false, Constants::PERMISSION_CREATE],
+			'move, existing file' => ['moveFromStorage', true, Constants::PERMISSION_UPDATE],
+		];
+	}
+
+	#[DataProvider('dataFromStorage')]
+	public function testFromStorageMasked(string $method, bool $exists, int $permission): void {
+		$otherStorage = new Temporary([]);
+		$otherStorage->file_put_contents('foo', 'new');
+		if ($exists) {
+			$this->sourceStorage->file_put_contents('foo', 'old');
+		}
+
+		$denied = $this->getMaskedStorage(Constants::PERMISSION_ALL - $permission);
+		$this->assertFalse($denied->$method($otherStorage, 'foo', 'foo'));
+		$this->assertTrue($otherStorage->file_exists('foo'));
+		if ($exists) {
+			$this->assertSame('old', $this->sourceStorage->file_get_contents('foo'));
+		} else {
+			$this->assertFalse($this->sourceStorage->file_exists('foo'));
+		}
+
+		$allowed = $this->getMaskedStorage($permission);
+		$this->assertTrue($allowed->$method($otherStorage, 'foo', 'foo'));
+		$this->assertSame('new', $this->sourceStorage->file_get_contents('foo'));
+		$otherStorage->cleanUp();
+	}
+
+	public function testMoveFromStorageSameStorageKeepsRenameRules(): void {
+		$this->sourceStorage->file_put_contents('foo', 'bar');
+		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_CREATE);
+		$this->assertTrue($storage->moveFromStorage($storage, 'foo', 'baz'));
+		$this->assertSame('bar', $this->sourceStorage->file_get_contents('baz'));
+	}
+
+	public function testWriteStreamNoCreate(): void {
+		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_CREATE);
+		$stream = fopen('php://memory', 'r');
+		try {
+			$storage->writeStream('foo', $stream);
+			$this->fail('Expected the write to be refused');
+		} catch (GenericFileException) {
+		}
+		$this->assertFalse(is_resource($stream));
+	}
+
+	public function testWriteStreamExistingFileNoUpdate(): void {
+		$this->sourceStorage->file_put_contents('foo', 'old');
+		$storage = $this->getMaskedStorage(Constants::PERMISSION_ALL - Constants::PERMISSION_UPDATE);
+		try {
+			$storage->writeStream('foo', fopen('php://memory', 'r'));
+			$this->fail('Expected the write to be refused');
+		} catch (GenericFileException) {
+		}
+		$this->assertSame('old', $this->sourceStorage->file_get_contents('foo'));
+	}
+
+	public function testScanNewFiles(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_READ + Constants::PERMISSION_CREATE);
 		$storage->file_put_contents('foo', 'bar');
 		$storage->getScanner()->scan('');
@@ -117,7 +235,7 @@ class PermissionsMaskTest extends \Test\Files\Storage\Storage {
 		$this->assertEquals(Constants::PERMISSION_READ, $storage->getCache()->get('foo')->getPermissions());
 	}
 
-	public function testScanNewWrappedFiles() {
+	public function testScanNewWrappedFiles(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_READ + Constants::PERMISSION_CREATE);
 		$wrappedStorage = new Wrapper(['storage' => $storage]);
 		$wrappedStorage->file_put_contents('foo', 'bar');
@@ -127,9 +245,9 @@ class PermissionsMaskTest extends \Test\Files\Storage\Storage {
 		$this->assertEquals(Constants::PERMISSION_READ, $storage->getCache()->get('foo')->getPermissions());
 	}
 
-	public function testScanNewFilesNested() {
+	public function testScanNewFilesNested(): void {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_READ + Constants::PERMISSION_CREATE + Constants::PERMISSION_UPDATE);
-		$nestedStorage = new \OC\Files\Storage\Wrapper\PermissionsMask([
+		$nestedStorage = new PermissionsMask([
 			'storage' => $storage,
 			'mask' => Constants::PERMISSION_READ + Constants::PERMISSION_CREATE
 		]);
@@ -142,7 +260,7 @@ class PermissionsMaskTest extends \Test\Files\Storage\Storage {
 		$this->assertEquals(Constants::PERMISSION_READ, $wrappedStorage->getCache()->get('foo')->getPermissions());
 	}
 
-	public function testScanUnchanged() {
+	public function testScanUnchanged(): void {
 		$this->sourceStorage->mkdir('foo');
 		$this->sourceStorage->file_put_contents('foo/bar.txt', 'bar');
 
@@ -151,7 +269,7 @@ class PermissionsMaskTest extends \Test\Files\Storage\Storage {
 		$storage = $this->getMaskedStorage(Constants::PERMISSION_READ);
 		$scanner = $storage->getScanner();
 		$called = false;
-		$scanner->listen('\OC\Files\Cache\Scanner', 'addToCache', function () use (&$called) {
+		$scanner->listen('\OC\Files\Cache\Scanner', 'addToCache', function () use (&$called): void {
 			$called = true;
 		});
 		$scanner->scan('foo', IScanner::SCAN_RECURSIVE, IScanner::REUSE_ETAG | IScanner::REUSE_SIZE);
@@ -159,7 +277,7 @@ class PermissionsMaskTest extends \Test\Files\Storage\Storage {
 		$this->assertFalse($called);
 	}
 
-	public function testScanUnchangedWrapped() {
+	public function testScanUnchangedWrapped(): void {
 		$this->sourceStorage->mkdir('foo');
 		$this->sourceStorage->file_put_contents('foo/bar.txt', 'bar');
 
@@ -169,7 +287,7 @@ class PermissionsMaskTest extends \Test\Files\Storage\Storage {
 		$wrappedStorage = new Wrapper(['storage' => $storage]);
 		$scanner = $wrappedStorage->getScanner();
 		$called = false;
-		$scanner->listen('\OC\Files\Cache\Scanner', 'addToCache', function () use (&$called) {
+		$scanner->listen('\OC\Files\Cache\Scanner', 'addToCache', function () use (&$called): void {
 			$called = true;
 		});
 		$scanner->scan('foo', IScanner::SCAN_RECURSIVE, IScanner::REUSE_ETAG | IScanner::REUSE_SIZE);

@@ -1,30 +1,15 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Core\Command\Config\System;
 
 use OC\SystemConfig;
+use OCP\IConfig;
 use Stecman\Component\Symfony\Console\BashCompletion\CompletionContext;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -32,17 +17,14 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class SetConfig extends Base {
-	/** * @var SystemConfig */
-	protected $systemConfig;
-
-	/**
-	 * @param SystemConfig $systemConfig
-	 */
-	public function __construct(SystemConfig $systemConfig) {
-		parent::__construct();
-		$this->systemConfig = $systemConfig;
+	public function __construct(
+		SystemConfig $systemConfig,
+		private CastHelper $castHelper,
+	) {
+		parent::__construct($systemConfig);
 	}
 
+	#[\Override]
 	protected function configure() {
 		parent::configure();
 
@@ -76,10 +58,11 @@ class SetConfig extends Base {
 		;
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$configNames = $input->getArgument('name');
 		$configName = $configNames[0];
-		$configValue = $this->castValue($input->getOption('value'), $input->getOption('type'));
+		$configValue = $this->castHelper->castValue($input->getOption('value'), $input->getOption('type'));
 		$updateOnly = $input->getOption('update-only');
 
 		if (count($configNames) > 1) {
@@ -98,75 +81,36 @@ class SetConfig extends Base {
 			$this->systemConfig->setValue($configName, $configValue['value']);
 		}
 
-		$output->writeln('<info>System config value ' . implode(' => ', $configNames) . ' set to ' . $configValue['readable-value'] . '</info>');
+		$readableValue = $this->getReadableValue($configNames, $configValue);
+
+		$output->writeln('<info>System config value ' . implode(' => ', $configNames) . ' set to ' . $readableValue . '</info>');
 		return 0;
 	}
 
 	/**
-	 * @param string $value
-	 * @param string $type
-	 * @return mixed
-	 * @throws \InvalidArgumentException
+	 * Mask sensitive values
+	 * @param string[] $configNames
+	 * @param array{value: mixed, readable-value: string} $configValue
 	 */
-	protected function castValue($value, $type) {
-		switch ($type) {
-			case 'integer':
-			case 'int':
-				if (!is_numeric($value)) {
-					throw new \InvalidArgumentException('Non-numeric value specified');
-				}
-				return [
-					'value' => (int) $value,
-					'readable-value' => 'integer ' . (int) $value,
-				];
-
-			case 'double':
-			case 'float':
-				if (!is_numeric($value)) {
-					throw new \InvalidArgumentException('Non-numeric value specified');
-				}
-				return [
-					'value' => (double) $value,
-					'readable-value' => 'double ' . (double) $value,
-				];
-
-			case 'boolean':
-			case 'bool':
-				$value = strtolower($value);
-				switch ($value) {
-					case 'true':
-						return [
-							'value' => true,
-							'readable-value' => 'boolean ' . $value,
-						];
-
-					case 'false':
-						return [
-							'value' => false,
-							'readable-value' => 'boolean ' . $value,
-						];
-
-					default:
-						throw new \InvalidArgumentException('Unable to parse value as boolean');
-				}
-
-				// no break
-			case 'null':
-				return [
-					'value' => null,
-					'readable-value' => 'null',
-				];
-
-			case 'string':
-				$value = (string) $value;
-				return [
-					'value' => $value,
-					'readable-value' => ($value === '') ? 'empty string' : 'string ' . $value,
-				];
-
-			default:
-				throw new \InvalidArgumentException('Invalid type');
+	protected function getReadableValue(array $configNames, array $configValue): string {
+		$filteredValue = $this->systemConfig->getFilteredValue($configNames[0]);
+		foreach (array_slice($configNames, 1) as $key) {
+			if (!is_array($filteredValue) || !array_key_exists($key, $filteredValue)) {
+				// Nothing got filtered along this path
+				return $configValue['readable-value'];
+			}
+			$filteredValue = $filteredValue[$key];
 		}
+
+		if ($filteredValue === $configValue['value']) {
+			return $configValue['readable-value'];
+		}
+
+		if ($filteredValue === IConfig::SENSITIVE_VALUE) {
+			return IConfig::SENSITIVE_VALUE;
+		}
+
+		return 'array ' . json_encode($filteredValue);
 	}
 
 	/**
@@ -203,9 +147,10 @@ class SetConfig extends Base {
 	 * @param CompletionContext $context
 	 * @return string[]
 	 */
+	#[\Override]
 	public function completeOptionValues($optionName, CompletionContext $context) {
 		if ($optionName === 'type') {
-			return ['string', 'integer', 'double', 'boolean'];
+			return ['string', 'integer', 'double', 'boolean', 'json', 'null'];
 		}
 		return parent::completeOptionValues($optionName, $context);
 	}

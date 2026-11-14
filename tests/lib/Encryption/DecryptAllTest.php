@@ -1,22 +1,11 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @author Björn Schießle <schiessle@owncloud.com>
- *
- * @copyright Copyright (c) 2015, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Test\Encryption;
@@ -26,9 +15,10 @@ use OC\Encryption\Exceptions\DecryptionFailedException;
 use OC\Encryption\Manager;
 use OC\Files\FileInfo;
 use OC\Files\View;
-use OCP\Files\Storage;
+use OCP\Files\Storage\IStorage;
 use OCP\IUserManager;
 use OCP\UserInterface;
+use PHPUnit\Framework\MockObject\MockObject;
 use Symfony\Component\Console\Formatter\OutputFormatterInterface;
 use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Input\InputInterface;
@@ -38,33 +28,21 @@ use Test\TestCase;
 /**
  * Class DecryptAllTest
  *
- * @group DB
  *
  * @package Test\Encryption
  */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class DecryptAllTest extends TestCase {
+	private IUserManager&MockObject $userManager;
+	private Manager&MockObject $encryptionManager;
+	private View&MockObject $view;
+	private InputInterface&MockObject $inputInterface;
+	private OutputInterface&MockObject $outputInterface;
+	private UserInterface&MockObject $userInterface;
 
-	/** @var \PHPUnit\Framework\MockObject\MockObject | IUserManager */
-	protected $userManager;
+	private DecryptAll $instance;
 
-	/** @var \PHPUnit\Framework\MockObject\MockObject | Manager */
-	protected $encryptionManager;
-
-	/** @var \PHPUnit\Framework\MockObject\MockObject | View */
-	protected $view;
-
-	/** @var  \PHPUnit\Framework\MockObject\MockObject | \Symfony\Component\Console\Input\InputInterface */
-	protected $inputInterface;
-
-	/** @var  \PHPUnit\Framework\MockObject\MockObject | \Symfony\Component\Console\Output\OutputInterface */
-	protected $outputInterface;
-
-	/** @var  \PHPUnit\Framework\MockObject\MockObject | \OCP\UserInterface */
-	protected $userInterface;
-
-	/** @var  DecryptAll */
-	protected $instance;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
@@ -78,11 +56,18 @@ class DecryptAllTest extends TestCase {
 			->disableOriginalConstructor()->getMock();
 		$this->outputInterface = $this->getMockBuilder(OutputInterface::class)
 			->disableOriginalConstructor()->getMock();
+		$this->outputInterface->expects($this->any())->method('isDecorated')
+			->willReturn(false);
 		$this->userInterface = $this->getMockBuilder(UserInterface::class)
 			->disableOriginalConstructor()->getMock();
 
+		/* We need format method to return a string */
+		$outputFormatter = $this->createMock(OutputFormatterInterface::class);
+		$outputFormatter->method('format')->willReturn('foo');
+		$outputFormatter->method('isDecorated')->willReturn(false);
+
 		$this->outputInterface->expects($this->any())->method('getFormatter')
-			->willReturn($this->createMock(OutputFormatterInterface::class));
+			->willReturn($outputFormatter);
 
 		$this->instance = new DecryptAll($this->encryptionManager, $this->userManager, $this->view);
 
@@ -90,7 +75,7 @@ class DecryptAllTest extends TestCase {
 		$this->invokePrivate($this->instance, 'output', [$this->outputInterface]);
 	}
 
-	public function dataDecryptAll() {
+	public static function dataDecryptAll(): array {
 		return [
 			[true, 'user1', true],
 			[false, 'user1', true],
@@ -100,19 +85,14 @@ class DecryptAllTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider dataDecryptAll
-	 * @param bool $prepareResult
-	 * @param string $user
-	 * @param bool $userExistsChecked
-	 */
-	public function testDecryptAll($prepareResult, $user, $userExistsChecked) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataDecryptAll')]
+	public function testDecryptAll(bool $prepareResult, string $user, bool $userExistsChecked): void {
 		if ($userExistsChecked) {
 			$this->userManager->expects($this->once())->method('userExists')->willReturn(true);
 		} else {
 			$this->userManager->expects($this->never())->method('userExists');
 		}
-		/** @var DecryptAll | \PHPUnit\Framework\MockObject\MockObject |  $instance */
+		/** @var DecryptAll&MockObject $instance */
 		$instance = $this->getMockBuilder('OC\Encryption\DecryptAll')
 			->setConstructorArgs(
 				[
@@ -121,18 +101,18 @@ class DecryptAllTest extends TestCase {
 					$this->view
 				]
 			)
-			->setMethods(['prepareEncryptionModules', 'decryptAllUsersFiles'])
+			->onlyMethods(['prepareEncryptionModules', 'decryptAllUsersFiles'])
 			->getMock();
 
 		$instance->expects($this->once())
 			->method('prepareEncryptionModules')
-			->with($user)
+			->with($this->inputInterface, $this->outputInterface, $user)
 			->willReturn($prepareResult);
 
 		if ($prepareResult) {
 			$instance->expects($this->once())
 				->method('decryptAllUsersFiles')
-				->with($user);
+				->with($this->outputInterface, $user);
 		} else {
 			$instance->expects($this->never())->method('decryptAllUsersFiles');
 		}
@@ -143,7 +123,7 @@ class DecryptAllTest extends TestCase {
 	/**
 	 * test decrypt all call with a user who doesn't exists
 	 */
-	public function testDecryptAllWrongUser() {
+	public function testDecryptAllWrongUser(): void {
 		$this->userManager->expects($this->once())->method('userExists')->willReturn(false);
 		$this->outputInterface->expects($this->once())->method('writeln')
 			->with('User "user1" does not exist. Please check the username and try again');
@@ -153,7 +133,7 @@ class DecryptAllTest extends TestCase {
 		);
 	}
 
-	public function dataTrueFalse() {
+	public static function dataTrueFalse(): array {
 		return [
 			[true],
 			[false],
@@ -161,10 +141,10 @@ class DecryptAllTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider dataTrueFalse
 	 * @param bool $success
 	 */
-	public function testPrepareEncryptionModules($success) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTrueFalse')]
+	public function testPrepareEncryptionModules($success): void {
 		$user = 'user1';
 
 		$dummyEncryptionModule = $this->getMockBuilder('OCP\Encryption\IEncryptionModule')
@@ -189,16 +169,13 @@ class DecryptAllTest extends TestCase {
 			->willReturn([$moduleDescription]);
 
 		$this->assertSame($success,
-			$this->invokePrivate($this->instance, 'prepareEncryptionModules', [$user])
+			$this->invokePrivate($this->instance, 'prepareEncryptionModules', [$this->inputInterface, $this->outputInterface, $user])
 		);
 	}
 
-	/**
-	 * @dataProvider dataTestDecryptAllUsersFiles
-	 */
-	public function testDecryptAllUsersFiles($user) {
-
-		/** @var DecryptAll | \PHPUnit\Framework\MockObject\MockObject |  $instance */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestDecryptAllUsersFiles')]
+	public function testDecryptAllUsersFiles($user): void {
+		/** @var DecryptAll&MockObject $instance */
 		$instance = $this->getMockBuilder('OC\Encryption\DecryptAll')
 			->setConstructorArgs(
 				[
@@ -207,11 +184,8 @@ class DecryptAllTest extends TestCase {
 					$this->view
 				]
 			)
-			->setMethods(['decryptUsersFiles'])
+			->onlyMethods(['decryptUsersFiles'])
 			->getMock();
-
-		$this->invokePrivate($instance, 'input', [$this->inputInterface]);
-		$this->invokePrivate($instance, 'output', [$this->outputInterface]);
 
 		if (empty($user)) {
 			$this->userManager->expects($this->once())
@@ -220,29 +194,33 @@ class DecryptAllTest extends TestCase {
 			$this->userInterface->expects($this->any())
 				->method('getUsers')
 				->willReturn(['user1', 'user2']);
-			$instance->expects($this->at(0))
+			$calls = [
+				'user1',
+				'user2',
+			];
+			$instance->expects($this->exactly(2))
 				->method('decryptUsersFiles')
-				->with('user1');
-			$instance->expects($this->at(1))
-				->method('decryptUsersFiles')
-				->with('user2');
+				->willReturnCallback(function ($user) use (&$calls): void {
+					$expected = array_shift($calls);
+					$this->assertEquals($expected, $user);
+				});
 		} else {
 			$instance->expects($this->once())
 				->method('decryptUsersFiles')
 				->with($user);
 		}
 
-		$this->invokePrivate($instance, 'decryptAllUsersFiles', [$user]);
+		$this->invokePrivate($instance, 'decryptAllUsersFiles', [$this->outputInterface, $user]);
 	}
 
-	public function dataTestDecryptAllUsersFiles() {
+	public static function dataTestDecryptAllUsersFiles(): array {
 		return [
 			['user1'],
 			['']
 		];
 	}
 
-	public function testDecryptUsersFiles() {
+	public function testDecryptUsersFiles(): void {
 		/** @var DecryptAll | \PHPUnit\Framework\MockObject\MockObject  $instance */
 		$instance = $this->getMockBuilder('OC\Encryption\DecryptAll')
 			->setConstructorArgs(
@@ -252,34 +230,38 @@ class DecryptAllTest extends TestCase {
 					$this->view
 				]
 			)
-			->setMethods(['decryptFile'])
+			->onlyMethods(['decryptFile'])
 			->getMock();
 
-		$storage = $this->getMockBuilder(Storage::class)
+		$storage = $this->getMockBuilder(IStorage::class)
 			->disableOriginalConstructor()->getMock();
 
-
-		$sharedStorage = $this->getMockBuilder(Storage::class)
+		$sharedStorage = $this->getMockBuilder(IStorage::class)
 			->disableOriginalConstructor()->getMock();
 
-		$sharedStorage->expects($this->once())->method('instanceOfStorage')
-			->with('OCA\Files_Sharing\SharedStorage')->willReturn(true);
+		$sharedStorage->expects($this->once())
+			->method('instanceOfStorage')
+			->with('OCA\Files_Sharing\SharedStorage')
+			->willReturn(true);
 
-		$this->view->expects($this->at(0))->method('getDirectoryContent')
-			->with('/user1/files')->willReturn(
+		$this->view->expects($this->exactly(2))
+			->method('getDirectoryContent')
+			->willReturnMap([
 				[
-					new FileInfo('path', $storage, 'intPath', ['name' => 'foo', 'type' => 'dir'], null),
-					new FileInfo('path', $storage, 'intPath', ['name' => 'bar', 'type' => 'file', 'encrypted' => true], null),
-					new FileInfo('path', $sharedStorage, 'intPath', ['name' => 'shared', 'type' => 'file', 'encrypted' => true], null),
-				]
-			);
-
-		$this->view->expects($this->at(3))->method('getDirectoryContent')
-			->with('/user1/files/foo')->willReturn(
+					'/user1/files', null, null,
+					[
+						new FileInfo('path', $storage, 'intPath', ['name' => 'foo', 'type' => 'dir'], null),
+						new FileInfo('path', $storage, 'intPath', ['name' => 'bar', 'type' => 'file', 'encrypted' => true], null),
+						new FileInfo('path', $sharedStorage, 'intPath', ['name' => 'shared', 'type' => 'file', 'encrypted' => true], null),
+					],
+				],
 				[
-					new FileInfo('path', $storage, 'intPath', ['name' => 'subfile', 'type' => 'file', 'encrypted' => true], null)
-				]
-			);
+					'/user1/files/foo', null, null,
+					[
+						new FileInfo('path', $storage, 'intPath', ['name' => 'subfile', 'type' => 'file', 'encrypted' => true], null)
+					],
+				],
+			]);
 
 		$this->view->expects($this->any())->method('is_dir')
 			->willReturnCallback(
@@ -291,29 +273,37 @@ class DecryptAllTest extends TestCase {
 				}
 			);
 
-		$instance->expects($this->at(0))
+		$calls = [
+			'/user1/files/bar',
+			'/user1/files/foo/subfile',
+		];
+		$instance->expects($this->exactly(2))
 			->method('decryptFile')
-			->with('/user1/files/bar');
-		$instance->expects($this->at(1))
-			->method('decryptFile')
-			->with('/user1/files/foo/subfile');
+			->willReturnCallback(function ($path) use (&$calls): bool {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, $path);
+				return true;
+			});
+
+		/* We need format method to return a string */
+		$outputFormatter = $this->createMock(OutputFormatterInterface::class);
+		$outputFormatter->method('isDecorated')->willReturn(false);
+		$outputFormatter->method('format')->willReturn('foo');
 
 		$output = $this->createMock(OutputInterface::class);
 		$output->expects($this->any())
 			->method('getFormatter')
-			->willReturn($this->createMock(OutputFormatterInterface::class));
+			->willReturn($outputFormatter);
 		$progressBar = new ProgressBar($output);
 
 		$this->invokePrivate($instance, 'decryptUsersFiles', ['user1', $progressBar, '']);
 	}
 
-	/**
-	 * @dataProvider dataTrueFalse
-	 */
-	public function testDecryptFile($isEncrypted) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTrueFalse')]
+	public function testDecryptFile($isEncrypted): void {
 		$path = 'test.txt';
 
-		/** @var DecryptAll | \PHPUnit\Framework\MockObject\MockObject  $instance */
+		/** @var DecryptAll&MockObject $instance */
 		$instance = $this->getMockBuilder('OC\Encryption\DecryptAll')
 			->setConstructorArgs(
 				[
@@ -322,7 +312,7 @@ class DecryptAllTest extends TestCase {
 					$this->view
 				]
 			)
-			->setMethods(['getTimestamp'])
+			->onlyMethods(['getTimestamp'])
 			->getMock();
 
 		$fileInfo = $this->createMock(FileInfo::class);
@@ -350,10 +340,10 @@ class DecryptAllTest extends TestCase {
 		);
 	}
 
-	public function testDecryptFileFailure() {
+	public function testDecryptFileFailure(): void {
 		$path = 'test.txt';
 
-		/** @var DecryptAll | \PHPUnit\Framework\MockObject\MockObject  $instance */
+		/** @var DecryptAll&MockObject $instance */
 		$instance = $this->getMockBuilder('OC\Encryption\DecryptAll')
 			->setConstructorArgs(
 				[
@@ -362,9 +352,8 @@ class DecryptAllTest extends TestCase {
 					$this->view
 				]
 			)
-			->setMethods(['getTimestamp'])
+			->onlyMethods(['getTimestamp'])
 			->getMock();
-
 
 		$fileInfo = $this->createMock(FileInfo::class);
 		$fileInfo->expects($this->any())->method('isEncrypted')
@@ -377,7 +366,7 @@ class DecryptAllTest extends TestCase {
 		$this->view->expects($this->once())
 			->method('copy')
 			->with($path, $path . '.decrypted.42')
-			->willReturnCallback(function () {
+			->willReturnCallback(function (): void {
 				throw new DecryptionFailedException();
 			});
 

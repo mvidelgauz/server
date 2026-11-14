@@ -1,55 +1,42 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2017 Lukas Reschke <lukas@statuscode.ch>
- *
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\OAuth2\Db;
 
-use OCP\AppFramework\Db\Entity;
+use OCP\AppFramework\ORM\Attribute\Column;
+use OCP\AppFramework\ORM\Attribute\Entity;
+use OCP\AppFramework\ORM\Attribute\Id;
+use OCP\DB\Schema\ColumnType;
 
 /**
- * @method int getTokenId()
- * @method void setTokenId(int $identifier)
- * @method int getClientId()
- * @method void setClientId(int $identifier)
- * @method string getEncryptedToken()
- * @method void setEncryptedToken(string $token)
- * @method string getHashedCode()
- * @method void setHashedCode(string $token)
+ * @psalm-suppress MissingConstructor ORM based hydration
  */
-class AccessToken extends Entity {
-	/** @var int */
-	protected $tokenId;
-	/** @var int */
-	protected $clientId;
-	/** @var string */
-	protected $hashedCode;
-	/** @var string */
-	protected $encryptedToken;
+#[Entity(name: 'oauth2_access_tokens')]
+final class AccessToken {
+	#[Id, Column(name: 'id', type: ColumnType::Integer)]
+	public int $id;
 
-	public function __construct() {
-		$this->addType('id', 'int');
-		$this->addType('tokenId', 'int');
-		$this->addType('clientId', 'int');
-		$this->addType('hashedCode', 'string');
-		$this->addType('encryptedToken', 'string');
-	}
+	#[Column(name: 'token_id', type: ColumnType::Integer)]
+	public int $tokenId;
+
+	#[Column(name: 'client_id', type: ColumnType::Integer)]
+	public int $clientId;
+
+	#[Column(name: 'hashed_code', type: ColumnType::String, length: 128)]
+	public string $hashedCode;
+
+	#[Column(name: 'encrypted_token', type: ColumnType::String, length: 786)]
+	public string $encryptedToken;
+
+	#[Column(name: 'code_created_at', type: ColumnType::Bigint, default: 0)]
+	public int $codeCreatedAt = 0;
+
+	#[Column(name: 'token_count', type: ColumnType::Bigint, default: 0)]
+	public int $tokenCount = 0;
 }

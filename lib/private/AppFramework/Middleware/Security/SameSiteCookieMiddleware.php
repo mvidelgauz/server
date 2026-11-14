@@ -1,50 +1,32 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright 2017, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\AppFramework\Middleware\Security;
 
 use OC\AppFramework\Http\Request;
 use OC\AppFramework\Middleware\Security\Exceptions\LaxSameSiteCookieFailedException;
 use OC\AppFramework\Utility\ControllerMethodReflector;
+use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\NoSameSiteCookieRequired;
 use OCP\AppFramework\Http\Response;
 use OCP\AppFramework\Middleware;
 
 class SameSiteCookieMiddleware extends Middleware {
-
-	/** @var Request */
-	private $request;
-
-	/** @var ControllerMethodReflector */
-	private $reflector;
-
-	public function __construct(Request $request,
-								ControllerMethodReflector $reflector) {
-		$this->request = $request;
-		$this->reflector = $reflector;
+	public function __construct(
+		private readonly Request $request,
+		private readonly ControllerMethodReflector $reflector,
+	) {
 	}
 
-	public function beforeController($controller, $methodName) {
+	#[\Override]
+	public function beforeController(Controller $controller, string $methodName): void {
 		$requestUri = $this->request->getScriptName();
 		$processingScript = explode('/', $requestUri);
 		$processingScript = $processingScript[count($processingScript) - 1];
@@ -53,7 +35,7 @@ class SameSiteCookieMiddleware extends Middleware {
 			return;
 		}
 
-		$noSSC = $this->reflector->hasAnnotation('NoSameSiteCookieRequired');
+		$noSSC = $this->reflector->hasAnnotationOrAttribute('NoSameSiteCookieRequired', NoSameSiteCookieRequired::class);
 		if ($noSSC) {
 			return;
 		}
@@ -63,21 +45,22 @@ class SameSiteCookieMiddleware extends Middleware {
 		}
 	}
 
-	public function afterException($controller, $methodName, \Exception $exception) {
+	#[\Override]
+	public function afterException(Controller $controller, string $methodName, \Exception $exception) {
 		if ($exception instanceof LaxSameSiteCookieFailedException) {
-			$respone = new Response();
-			$respone->setStatus(Http::STATUS_FOUND);
-			$respone->addHeader('Location', $this->request->getRequestUri());
+			$response = new Response();
+			$response->setStatus(Http::STATUS_FOUND);
+			$response->addHeader('Location', $this->request->getRequestUri());
 
 			$this->setSameSiteCookie();
 
-			return $respone;
+			return $response;
 		}
 
 		throw $exception;
 	}
 
-	protected function setSameSiteCookie() {
+	protected function setSameSiteCookie(): void {
 		$cookieParams = $this->request->getCookieParams();
 		$secureCookie = ($cookieParams['secure'] === true) ? 'secure; ' : '';
 		$policies = [

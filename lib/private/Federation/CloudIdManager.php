@@ -3,51 +3,68 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2017, Robin Appelman <robin@icewind.nl>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Guillaume Virlet <github@virlet.org>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Federation;
 
+use OCA\DAV\Events\CardUpdatedEvent;
 use OCP\Contacts\IManager;
+use OCP\EventDispatcher\Event;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\Federation\ICloudId;
 use OCP\Federation\ICloudIdManager;
+use OCP\Federation\ICloudIdResolver;
+use OCP\ICache;
+use OCP\ICacheFactory;
 use OCP\IURLGenerator;
 use OCP\IUserManager;
+use OCP\User\Events\UserChangedEvent;
 
 class CloudIdManager implements ICloudIdManager {
-	/** @var IManager */
-	private $contactsManager;
-	/** @var IURLGenerator */
-	private $urlGenerator;
-	/** @var IUserManager */
-	private $userManager;
+	private ICache $memCache;
+	private ICache $displayNameCache;
+	private array $cache = [];
+	/** @var ICloudIdResolver[] */
+	private array $cloudIdResolvers = [];
 
-	public function __construct(IManager $contactsManager, IURLGenerator $urlGenerator, IUserManager $userManager) {
-		$this->contactsManager = $contactsManager;
-		$this->urlGenerator = $urlGenerator;
-		$this->userManager = $userManager;
+	public function __construct(
+		ICacheFactory $cacheFactory,
+		IEventDispatcher $eventDispatcher,
+		private IManager $contactsManager,
+		private IURLGenerator $urlGenerator,
+		private IUserManager $userManager,
+	) {
+		$this->memCache = $cacheFactory->createDistributed('cloud_id_');
+		$this->displayNameCache = $cacheFactory->createDistributed('cloudid_name_');
+		$eventDispatcher->addListener(UserChangedEvent::class, [$this, 'handleUserEvent']);
+		$eventDispatcher->addListener(CardUpdatedEvent::class, [$this, 'handleCardEvent']);
+	}
+
+	public function handleUserEvent(Event $event): void {
+		if ($event instanceof UserChangedEvent && $event->getFeature() === 'displayName') {
+			$userId = $event->getUser()->getUID();
+			$key = $userId . '@local';
+			unset($this->cache[$key]);
+			$this->memCache->remove($key);
+		}
+	}
+
+	public function handleCardEvent(Event $event): void {
+		if ($event instanceof CardUpdatedEvent) {
+			$data = $event->getCardData()['carddata'];
+			foreach (explode("\r\n", $data) as $line) {
+				if (str_starts_with($line, 'CLOUD;')) {
+					$parts = explode(':', $line, 2);
+					if (isset($parts[1])) {
+						$key = $parts[1];
+						unset($this->cache[$key]);
+						$this->memCache->remove($key);
+					}
+				}
+			}
+		}
 	}
 
 	/**
@@ -55,15 +72,22 @@ class CloudIdManager implements ICloudIdManager {
 	 * @return ICloudId
 	 * @throws \InvalidArgumentException
 	 */
+	#[\Override]
 	public function resolveCloudId(string $cloudId): ICloudId {
 		// TODO magic here to get the url and user instead of just splitting on @
+
+		foreach ($this->cloudIdResolvers as $resolver) {
+			if ($resolver->isValidCloudId($cloudId)) {
+				return $resolver->resolveCloudId($cloudId);
+			}
+		}
 
 		if (!$this->isValidCloudId($cloudId)) {
 			throw new \InvalidArgumentException('Invalid cloud id');
 		}
 
 		// Find the first character that is not allowed in user names
-		$id = $this->fixRemoteURL($cloudId);
+		$id = $this->stripShareLinkFragments($cloudId);
 		$posSlash = strpos($id, '/');
 		$posColon = strpos($id, ':');
 
@@ -82,30 +106,83 @@ class CloudIdManager implements ICloudIdManager {
 		if ($lastValidAtPos !== false) {
 			$user = substr($id, 0, $lastValidAtPos);
 			$remote = substr($id, $lastValidAtPos + 1);
+
+			// We accept slightly more chars when working with federationId than with a local userId.
+			// We remove those eventual chars from the UserId before using
+			// the IUserManager API to confirm its format.
+			$this->validateUser($user, $remote);
+
 			if (!empty($user) && !empty($remote)) {
-				return new CloudId($id, $user, $remote, $this->getDisplayNameFromContact($id));
+				$remote = $this->ensureDefaultProtocol($remote);
+				return new CloudId($id, $user, $remote, null);
 			}
 		}
 		throw new \InvalidArgumentException('Invalid cloud id');
 	}
 
-	protected function getDisplayNameFromContact(string $cloudId): ?string {
-		$addressBookEntries = $this->contactsManager->search($cloudId, ['CLOUD']);
+	protected function validateUser(string $user, string $remote): void {
+		// Check the ID for bad characters
+		// Allowed are: "a-z", "A-Z", "0-9", spaces and "_.@-'" (Nextcloud)
+		// Additional: "=" (oCIS)
+		if (preg_match('/[^a-zA-Z0-9 _.@\-\'=]/', $user)) {
+			throw new \InvalidArgumentException('Invalid characters');
+		}
+
+		// No empty user ID
+		if (trim($user) === '') {
+			throw new \InvalidArgumentException('Empty user');
+		}
+
+		// No whitespace at the beginning or at the end
+		if (trim($user) !== $user) {
+			throw new \InvalidArgumentException('User contains whitespace at the beginning or at the end');
+		}
+
+		// User ID only consists of 1 or 2 dots (directory traversal)
+		if ($user === '.' || $user === '..') {
+			throw new \InvalidArgumentException('User must not consist of dots only');
+		}
+
+		// User ID is too long
+		if (strlen($user . '@' . $remote) > 255) {
+			// TRANSLATORS User ID is too long
+			throw new \InvalidArgumentException('Cloud id is too long');
+		}
+	}
+
+	public function getDisplayNameFromContact(string $cloudId): ?string {
+		$cachedName = $this->displayNameCache->get($cloudId);
+		if ($cachedName !== null) {
+			if ($cachedName === $cloudId) {
+				return null;
+			}
+			return $cachedName;
+		}
+
+		$addressBookEntries = $this->contactsManager->search($cloudId, ['CLOUD'], [
+			'limit' => 1,
+			'enumeration' => false,
+			'fullmatch' => false,
+			'strict_search' => true,
+		]);
 		foreach ($addressBookEntries as $entry) {
 			if (isset($entry['CLOUD'])) {
 				foreach ($entry['CLOUD'] as $cloudID) {
 					if ($cloudID === $cloudId) {
-						// Warning, if user decides to make his full name local only,
+						// Warning, if user decides to make their full name local only,
 						// no FN is found on federated servers
 						if (isset($entry['FN'])) {
+							$this->displayNameCache->set($cloudId, $entry['FN'], 15 * 60);
 							return $entry['FN'];
 						} else {
-							return $cloudID;
+							$this->displayNameCache->set($cloudId, $cloudId, 15 * 60);
+							return null;
 						}
 					}
 				}
 			}
 		}
+		$this->displayNameCache->set($cloudId, $cloudId, 15 * 60);
 		return null;
 	}
 
@@ -114,34 +191,70 @@ class CloudIdManager implements ICloudIdManager {
 	 * @param string|null $remote
 	 * @return CloudId
 	 */
+	#[\Override]
 	public function getCloudId(string $user, ?string $remote): ICloudId {
-		if ($remote === null) {
-			$remote = rtrim($this->removeProtocolFromUrl($this->urlGenerator->getAbsoluteURL('/')), '/');
-			$fixedRemote = $this->fixRemoteURL($remote);
-			$localUser = $this->userManager->get($user);
-			$displayName = !is_null($localUser) ? $localUser->getDisplayName() : '';
-		} else {
-			// TODO check what the correct url is for remote (asking the remote)
-			$fixedRemote = $this->fixRemoteURL($remote);
-			$host = $this->removeProtocolFromUrl($fixedRemote);
-			$displayName = $this->getDisplayNameFromContact($user . '@' . $host);
+		$isLocal = $remote === null;
+		if ($isLocal) {
+			$remote = rtrim($this->urlGenerator->getAbsoluteURL('/'), '/');
 		}
-		$id = $user . '@' . $remote;
-		return new CloudId($id, $user, $fixedRemote, $displayName);
+
+		// note that for remote id's we don't strip the protocol for the remote we use to construct the CloudId
+		// this way if a user has an explicit non-https cloud id this will be preserved
+		// we do still use the version without protocol for looking up the display name
+		$remote = $this->stripShareLinkFragments($remote);
+		$host = $this->removeProtocolFromUrl($remote);
+		$remote = $this->ensureDefaultProtocol($remote);
+
+		$key = $user . '@' . ($isLocal ? 'local' : $host);
+		$cached = $this->cache[$key] ?? $this->memCache->get($key);
+		if ($cached) {
+			$this->cache[$key] = $cached; // put items from memcache into local cache
+			return new CloudId($cached['id'], $cached['user'], $cached['remote'], $cached['displayName']);
+		}
+
+		if ($isLocal) {
+			$localUser = $this->userManager->get($user);
+			$displayName = $localUser ? $localUser->getDisplayName() : '';
+		} else {
+			$displayName = null;
+		}
+
+		// For the visible cloudID we only strip away https
+		$id = $user . '@' . $this->removeProtocolFromUrl($remote, true);
+
+		$data = [
+			'id' => $id,
+			'user' => $user,
+			'remote' => $remote,
+			'displayName' => $displayName,
+		];
+		$this->cache[$key] = $data;
+		$this->memCache->set($key, $data, 15 * 60);
+		return new CloudId($id, $user, $remote, $displayName);
 	}
 
 	/**
 	 * @param string $url
 	 * @return string
 	 */
-	private function removeProtocolFromUrl($url) {
-		if (strpos($url, 'https://') === 0) {
-			return substr($url, strlen('https://'));
-		} elseif (strpos($url, 'http://') === 0) {
-			return substr($url, strlen('http://'));
+	#[\Override]
+	public function removeProtocolFromUrl(string $url, bool $httpsOnly = false): string {
+		if (str_starts_with($url, 'https://')) {
+			return substr($url, 8);
+		}
+		if (!$httpsOnly && str_starts_with($url, 'http://')) {
+			return substr($url, 7);
 		}
 
 		return $url;
+	}
+
+	protected function ensureDefaultProtocol(string $remote): string {
+		if (!str_contains($remote, '://')) {
+			$remote = 'https://' . $remote;
+		}
+
+		return $remote;
 	}
 
 	/**
@@ -156,7 +269,7 @@ class CloudIdManager implements ICloudIdManager {
 	 * @param string $remote
 	 * @return string
 	 */
-	protected function fixRemoteURL(string $remote): string {
+	protected function stripShareLinkFragments(string $remote): string {
 		$remote = str_replace('\\', '/', $remote);
 		if ($fileNamePosition = strpos($remote, '/index.php')) {
 			$remote = substr($remote, 0, $fileNamePosition);
@@ -170,7 +283,31 @@ class CloudIdManager implements ICloudIdManager {
 	 * @param string $cloudId
 	 * @return bool
 	 */
+	#[\Override]
 	public function isValidCloudId(string $cloudId): bool {
+		foreach ($this->cloudIdResolvers as $resolver) {
+			if ($resolver->isValidCloudId($cloudId)) {
+				return true;
+			}
+		}
+
 		return strpos($cloudId, '@') !== false;
+	}
+
+	#[\Override]
+	public function createCloudId(string $id, string $user, string $remote, ?string $displayName = null): ICloudId {
+		return new CloudId($id, $user, $remote, $displayName);
+	}
+
+	#[\Override]
+	public function registerCloudIdResolver(ICloudIdResolver $resolver): void {
+		array_unshift($this->cloudIdResolvers, $resolver);
+	}
+
+	#[\Override]
+	public function unregisterCloudIdResolver(ICloudIdResolver $resolver): void {
+		if (($key = array_search($resolver, $this->cloudIdResolvers)) !== false) {
+			array_splice($this->cloudIdResolvers, $key, 1);
+		}
 	}
 }

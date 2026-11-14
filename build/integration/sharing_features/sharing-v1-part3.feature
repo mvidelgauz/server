@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 20198 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 Feature: sharing
   Background:
     Given using api version "1"
@@ -44,7 +46,7 @@ Feature: sharing
   Scenario: Correct webdav share-permissions for owned folder
     Given user "user0" exists
     And user "user0" created a folder "/tmp"
-    When as "user0" gets properties of folder "/" with
+    When as "user0" gets properties of folder "/tmp" with
       |{http://open-collaboration-services.org/ns}share-permissions |
     Then the single response should contain a property "{http://open-collaboration-services.org/ns}share-permissions" with value "31"
 
@@ -447,7 +449,7 @@ Feature: sharing
       | shareType | 3 |
     And Updating last share with
       | publicUpload | true |
-    Then the OCS status code should be "404"
+    Then the OCS status code should be "403"
     And the HTTP status code should be "200"
 
   Scenario: do not allow to increase link share permissions on sub reshare
@@ -469,7 +471,7 @@ Feature: sharing
       | shareType | 3 |
     And Updating last share with
       | publicUpload | true |
-    Then the OCS status code should be "404"
+    Then the OCS status code should be "403"
     And the HTTP status code should be "200"
 
   Scenario: deleting file out of a share as recipient creates a backup for the owner
@@ -514,6 +516,68 @@ Feature: sharing
     Then as "user1" the file "/shared/shared_file.txt" exists
     And as "user0" the file "/shared/shared_file.txt" exists
 
+  Scenario: receiving shares into a configured share_folder
+    Given As an "admin"
+    And invoking occ with "config:system:set share_folder --value received_shares"
+    And user "user0" exists
+    And user "user1" exists
+    And user "user0" created a folder "/shared_folder"
+    And User "user0" moved file "/textfile0.txt" to "/shared_file.txt"
+    When folder "/shared_folder" of user "user0" is shared with user "user1"
+    And user "user1" accepts last share
+    Then as "user1" the file "/received_shares/shared_folder" exists
+    When file "/shared_file.txt" of user "user0" is shared with user "user1"
+    And user "user1" accepts last share
+    Then as "user1" the file "/received_shares/shared_file.txt" exists
+
+  Scenario: Owner of subshares is adjusted after moving into received share
+    Given As an "admin"
+    And user "user0" exists
+    And user "user1" exists
+    And user "user2" exists
+    And user "user0" created a folder "/shared"
+    And folder "/shared" of user "user0" is shared with user "user1"
+    And user "user1" accepts last share
+    And user "user1" created a folder "/movein"
+    And user "user1" created a folder "/movein/subshare"
+    When As an "user1"
+    And folder "/movein" of user "user1" is shared with user "user2"
+    And save last share id
+    Then Getting info of last share
+    And Share fields of last share match with
+      | uid_file_owner | user1 |
+      | share_with     | user2 |
+    When User "user1" moved file "/movein" to "/shared/movein"
+    Then As an "user0"
+    And Getting info of last share
+    And Share fields of last share match with
+      | uid_file_owner | user0 |
+      | share_with     | user2 |
+
+  Scenario: Owner of subshares is adjusted after moving out of received share
+    Given As an "admin"
+    And user "user0" exists
+    And user "user1" exists
+    And user "user2" exists
+    And user "user0" created a folder "/shared"
+    And user "user0" created a folder "/shared/moveout"
+    And user "user0" created a folder "/shared/moveout/subshare"
+    And folder "/shared" of user "user0" is shared with user "user1"
+    And user "user1" accepts last share
+    And As an "user1"
+    And folder "/shared/moveout/subshare" of user "user1" is shared with user "user2"
+    And save last share id
+    When As an "user1"
+    Then Getting info of last share
+    And Share fields of last share match with
+      | uid_file_owner | user0 |
+      | share_with     | user2 |
+    When User "user1" moved file "/shared/moveout" to "/moveout"
+    Then Getting info of last share
+    And Share fields of last share match with
+      | uid_file_owner | user1 |
+      | share_with     | user2 |
+
   Scenario: Link shares inside of group shares keep their original data when the root share is updated
     Given As an "admin"
     And user "user0" exists
@@ -543,6 +607,6 @@ Feature: sharing
       | id | A_NUMBER |
       | item_source | A_NUMBER |
       | share_type | 3 |
-      | permissions | 23 |
+      | permissions | 31 |
       | file_target | /subfolder |
       | expireDate  |            |

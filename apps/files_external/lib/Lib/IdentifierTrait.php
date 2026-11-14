@@ -1,25 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_External\Lib;
 
 /**
@@ -28,27 +14,17 @@ namespace OCA\Files_External\Lib;
  */
 trait IdentifierTrait {
 
-	/** @var string */
-	protected $identifier;
+	protected string $identifier = '';
 
 	/** @var string[] */
-	protected $identifierAliases = [];
+	protected array $identifierAliases = [];
+	protected ?IIdentifier $deprecateTo = null;
 
-	/** @var IdentifierTrait */
-	protected $deprecateTo = null;
-
-	/**
-	 * @return string
-	 */
-	public function getIdentifier() {
+	public function getIdentifier(): string {
 		return $this->identifier;
 	}
 
-	/**
-	 * @param string $identifier
-	 * @return $this
-	 */
-	public function setIdentifier($identifier) {
+	public function setIdentifier(string $identifier): self {
 		$this->identifier = $identifier;
 		$this->identifierAliases[] = $identifier;
 		return $this;
@@ -57,39 +33,25 @@ trait IdentifierTrait {
 	/**
 	 * @return string[]
 	 */
-	public function getIdentifierAliases() {
+	public function getIdentifierAliases(): array {
 		return $this->identifierAliases;
 	}
 
-	/**
-	 * @param string $alias
-	 * @return $this
-	 */
-	public function addIdentifierAlias($alias) {
+	public function addIdentifierAlias(string $alias): self {
 		$this->identifierAliases[] = $alias;
 		return $this;
 	}
 
-	/**
-	 * @return object|null
-	 */
-	public function getDeprecateTo() {
+	public function getDeprecateTo(): ?IIdentifier {
 		return $this->deprecateTo;
 	}
 
-	/**
-	 * @param object $destinationObject
-	 * @return self
-	 */
-	public function deprecateTo($destinationObject) {
+	public function deprecateTo(IIdentifier $destinationObject): self {
 		$this->deprecateTo = $destinationObject;
 		return $this;
 	}
 
-	/**
-	 * @return array
-	 */
-	public function jsonSerializeIdentifier() {
+	public function jsonSerializeIdentifier(): array {
 		$data = [
 			'identifier' => $this->identifier,
 			'identifierAliases' => $this->identifierAliases,

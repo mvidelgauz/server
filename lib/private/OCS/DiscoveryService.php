@@ -3,29 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2017 Bjoern Schiessle <bjoern@schiessle.org>
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\OCS;
 
 use OCP\AppFramework\Http;
@@ -36,24 +17,22 @@ use OCP\ICacheFactory;
 use OCP\OCS\IDiscoveryService;
 
 class DiscoveryService implements IDiscoveryService {
-
 	/** @var ICache */
-	private $cache;
+	private ICache $cache;
 
 	/** @var IClient */
-	private $client;
+	private IClient $client;
 
 	/**
 	 * @param ICacheFactory $cacheFactory
 	 * @param IClientService $clientService
 	 */
 	public function __construct(ICacheFactory $cacheFactory,
-								IClientService $clientService
+		IClientService $clientService,
 	) {
 		$this->cache = $cacheFactory->createDistributed('ocs-discovery');
 		$this->client = $clientService->newClient();
 	}
-
 
 	/**
 	 * Discover OCS end-points
@@ -62,9 +41,10 @@ class DiscoveryService implements IDiscoveryService {
 	 *
 	 * @param string $remote
 	 * @param string $service the service you want to discover
-	 * @param bool $skipCache We won't check if the data is in the cache. This is usefull if a background job is updating the status
+	 * @param bool $skipCache We won't check if the data is in the cache. This is useful if a background job is updating the status
 	 * @return array
 	 */
+	#[\Override]
 	public function discover(string $remote, string $service, bool $skipCache = false): array {
 		// Check the cache first
 		if ($skipCache === false) {

@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2021 Thomas Citharel <nextcloud@tcit.fr>
- *
- * @author Thomas Citharel <nextcloud@tcit.fr>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Tests\unit\DAV\Migration;
 
 use OCA\DAV\Migration\RemoveDeletedUsersCalendarSubscriptions;
@@ -39,24 +23,10 @@ use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class RemoveDeletedUsersCalendarSubscriptionsTest extends TestCase {
-	/**
-	 * @var IDBConnection|MockObject
-	 */
-	private $dbConnection;
-	/**
-	 * @var IUserManager|MockObject
-	 */
-	private $userManager;
-
-	/**
-	 * @var IOutput|MockObject
-	 */
-	private $output;
-	/**
-	 * @var RemoveDeletedUsersCalendarSubscriptions
-	 */
-	private $migration;
-
+	private IDBConnection&MockObject $dbConnection;
+	private IUserManager&MockObject $userManager;
+	private IOutput&MockObject $output;
+	private RemoveDeletedUsersCalendarSubscriptions $migration;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -75,13 +45,7 @@ class RemoveDeletedUsersCalendarSubscriptionsTest extends TestCase {
 		);
 	}
 
-	/**
-	 * @dataProvider dataTestRun
-	 * @param array $subscriptions
-	 * @param array $userExists
-	 * @param int $deletions
-	 * @throws \Exception
-	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataTestRun')]
 	public function testRun(array $subscriptions, array $userExists, int $deletions): void {
 		$qb = $this->createMock(IQueryBuilder::class);
 
@@ -108,15 +72,15 @@ class RemoveDeletedUsersCalendarSubscriptionsTest extends TestCase {
 
 		$result = $this->createMock(IResult::class);
 
-		$qb->method('execute')
+		$qb->method('executeQuery')
 			->willReturn($result);
 
-		$result->expects($this->at(0))
+		$result->expects($this->once())
 			->method('fetchOne')
 			->willReturn(count($subscriptions));
 
 		$result
-			->method('fetch')
+			->method('fetchAssociative')
 			->willReturnOnConsecutiveCalls(...$subscriptions);
 
 		$qb->method('delete')
@@ -133,7 +97,6 @@ class RemoveDeletedUsersCalendarSubscriptionsTest extends TestCase {
 
 		$this->dbConnection->method('getQueryBuilder')->willReturn($qb);
 
-
 		$this->output->expects($this->once())->method('startProgress');
 
 		$this->output->expects($subscriptions === [] ? $this->never(): $this->once())->method('advance');
@@ -149,21 +112,28 @@ class RemoveDeletedUsersCalendarSubscriptionsTest extends TestCase {
 		$this->migration->run($this->output);
 	}
 
-	public function dataTestRun(): array {
+	public static function dataTestRun(): array {
 		return [
 			[[], [], 0],
-			[[[
-				'id' => 1,
-				'principaluri' => 'users/principals/foo1',
-			],
+			[
 				[
-					'id' => 2,
-					'principaluri' => 'users/principals/bar1',
+					[
+						'id' => 1,
+						'principaluri' => 'users/principals/foo1',
+					],
+					[
+						'id' => 2,
+						'principaluri' => 'users/principals/bar1',
+					],
+					[
+						'id' => 3,
+						'principaluri' => 'users/principals/bar1',
+					],
+					[],
 				],
-				[
-					'id' => 3,
-					'principaluri' => 'users/principals/bar1',
-				]], ['foo1' => true, 'bar1' => false], 2]
+				['foo1' => true, 'bar1' => false],
+				2
+			],
 		];
 	}
 }

@@ -1,49 +1,33 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2019 Julius Härtl <jus@bitgrid.net>
- *
- * @author Julius Härtl <jus@bitgrid.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\DirectEditing;
 
 use OCP\DirectEditing\IToken;
 use OCP\Files\File;
 
 class Token implements IToken {
-
-	/** @var Manager */
-	private $manager;
-	private $data;
-
-	public function __construct(Manager $manager, $data) {
-		$this->manager = $manager;
-		$this->data = $data;
+	public function __construct(
+		private Manager $manager,
+		private $data,
+	) {
 	}
 
+	#[\Override]
 	public function extend(): void {
 		$this->manager->refreshToken($this->data['token']);
 	}
 
+	#[\Override]
 	public function invalidate(): void {
 		$this->manager->invalidateToken($this->data['token']);
 	}
 
+	#[\Override]
 	public function getFile(): File {
 		if ($this->data['share_id'] !== null) {
 			return $this->manager->getShareForToken($this->data['share_id']);
@@ -51,22 +35,27 @@ class Token implements IToken {
 		return $this->manager->getFileForToken($this->data['user_id'], $this->data['file_id'], $this->data['file_path']);
 	}
 
+	#[\Override]
 	public function getToken(): string {
 		return $this->data['token'];
 	}
 
+	#[\Override]
 	public function useTokenScope(): void {
 		$this->manager->invokeTokenScope($this->data['user_id']);
 	}
 
+	#[\Override]
 	public function hasBeenAccessed(): bool {
-		return (bool) $this->data['accessed'];
+		return (bool)$this->data['accessed'];
 	}
 
+	#[\Override]
 	public function getEditor(): string {
 		return $this->data['editor_id'];
 	}
 
+	#[\Override]
 	public function getUser(): string {
 		return $this->data['user_id'];
 	}

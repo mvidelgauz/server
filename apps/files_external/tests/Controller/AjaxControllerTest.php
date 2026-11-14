@@ -1,63 +1,58 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016 Lukas Reschke <lukas@statuscode.ch>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_External\Tests\Controller;
 
+use OC\Settings\AuthorizedGroupMapper;
 use OCA\Files_External\Controller\AjaxController;
 use OCA\Files_External\Lib\Auth\Password\GlobalAuth;
 use OCA\Files_External\Lib\Auth\PublicKey\RSA;
+use OCA\Files_External\Settings\Admin;
 use OCP\AppFramework\Http\JSONResponse;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\IGroup;
 use OCP\IGroupManager;
+use OCP\IL10N;
 use OCP\IRequest;
 use OCP\IUser;
+use OCP\IUserManager;
 use OCP\IUserSession;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
+use phpseclib3\Crypt\RSA as CryptRSA;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class AjaxControllerTest extends TestCase {
-	/** @var IRequest */
-	private $request;
-	/** @var RSA */
-	private $rsa;
-	/** @var GlobalAuth */
-	private $globalAuth;
-	/** @var IUserSession */
-	private $userSession;
-	/** @var IGroupManager */
-	private $groupManager;
-	/** @var AjaxController */
-	private $ajaxController;
+	private IRequest&MockObject $request;
+	private RSA&MockObject $rsa;
+	private GlobalAuth&MockObject $globalAuth;
+	private IUserSession&MockObject $userSession;
+	private IGroupManager&MockObject $groupManager;
+	private IUserManager&MockObject $userManager;
+	private IL10N&MockObject $l10n;
+	private AuthorizedGroupMapper&MockObject $authorizedGroupMapper;
+	private IEventDispatcher&MockObject $eventDispatcher;
+	private AjaxController $ajaxController;
 
 	protected function setUp(): void {
 		$this->request = $this->createMock(IRequest::class);
-		$this->rsa = $this->getMockBuilder('\\OCA\\Files_External\\Lib\\Auth\\PublicKey\\RSA')
+		$this->rsa = $this->getMockBuilder(RSA::class)
 			->disableOriginalConstructor()
 			->getMock();
-		$this->globalAuth = $this->getMockBuilder('\\OCA\\Files_External\\Lib\\Auth\\Password\GlobalAuth')
+		$this->globalAuth = $this->getMockBuilder(GlobalAuth::class)
 			->disableOriginalConstructor()
 			->getMock();
 		$this->userSession = $this->createMock(IUserSession::class);
 		$this->groupManager = $this->createMock(IGroupManager::class);
+		$this->userManager = $this->createMock(IUserManager::class);
+		$this->l10n = $this->createMock(IL10N::class);
+		$this->authorizedGroupMapper = $this->createMock(AuthorizedGroupMapper::class);
+		$this->eventDispatcher = $this->createMock(IEventDispatcher::class);
 
 		$this->ajaxController = new AjaxController(
 			'files_external',
@@ -65,34 +60,99 @@ class AjaxControllerTest extends TestCase {
 			$this->rsa,
 			$this->globalAuth,
 			$this->userSession,
-			$this->groupManager
+			$this->groupManager,
+			$this->userManager,
+			$this->l10n,
+			$this->authorizedGroupMapper,
+			$this->eventDispatcher,
 		);
+
+		$this->l10n->expects($this->any())
+			->method('t')
+			->willReturnCallback(function ($string, $args) {
+				if (!is_array($args)) {
+					$args = [$args];
+				}
+				return vsprintf($string, $args);
+			});
 
 		parent::setUp();
 	}
 
-	public function testGetSshKeys() {
+	public function testGetApplicableEntitiesReturnsGroupsAndUsers(): void {
+		$group = $this->createMock(IGroup::class);
+		$group->method('getGID')->willReturn('group1');
+		$group->method('getDisplayName')->willReturn('Group One');
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('user1');
+		$user->method('getDisplayName')->willReturn('User One');
+
+		$this->groupManager
+			->expects($this->once())
+			->method('search')
+			->with('test', 10, 0)
+			->willReturn([$group]);
+		$this->userManager
+			->expects($this->once())
+			->method('searchDisplayName')
+			->with('test', 10, 0)
+			->willReturn([$user]);
+
+		$response = $this->ajaxController->getApplicableEntities('test', 10, 0);
+		$this->assertSame(200, $response->getStatus());
+		$this->assertSame(['group1' => 'Group One'], $response->getData()['groups']);
+		$this->assertSame(['user1' => 'User One'], $response->getData()['users']);
+	}
+
+	public function testGetApplicableEntitiesWithNoResults(): void {
+		$this->groupManager
+			->expects($this->once())
+			->method('search')
+			->with('', null, null)
+			->willReturn([]);
+		$this->userManager
+			->expects($this->once())
+			->method('searchDisplayName')
+			->with('', null, null)
+			->willReturn([]);
+
+		$response = $this->ajaxController->getApplicableEntities();
+		$this->assertSame(200, $response->getStatus());
+		$this->assertSame([], $response->getData()['groups']);
+		$this->assertSame([], $response->getData()['users']);
+	}
+
+	public function testGetSshKeys(): void {
+		// phpseclib3's PrivateKey/PublicKey are final and cannot be mocked, so
+		// generate a real key pair and assert the controller serialises it.
+		$privateKey = CryptRSA::createKey(1024);
+
 		$this->rsa
 			->expects($this->once())
 			->method('createKey')
-			->willReturn([
-				'privatekey' => 'MyPrivateKey',
-				'publickey' => 'MyPublicKey',
-			]);
+			->willReturn($privateKey);
 
-		$expected = new JSONResponse(
-			[
-				'data' => [
-					'private_key' => 'MyPrivateKey',
-					'public_key' => 'MyPublicKey',
-				],
-				'status' => 'success',
-			]
+		$response = $this->ajaxController->getSshKeys();
+
+		$this->assertInstanceOf(JSONResponse::class, $response);
+		$data = $response->getData();
+		$this->assertSame('success', $data['status']);
+		$this->assertSame(
+			$privateKey->toString('PKCS1'),
+			$data['data']['private_key'],
 		);
-		$this->assertEquals($expected, $this->ajaxController->getSshKeys());
+		$this->assertSame(
+			str_replace(
+				'phpseclib-generated-key',
+				gethostname(),
+				$privateKey->getPublicKey()->toString('OpenSSH'),
+			),
+			$data['data']['public_key'],
+		);
 	}
 
-	public function testSaveGlobalCredentialsAsAdminForAnotherUser() {
+	public function testSaveGlobalCredentialsAsAdminForAnotherUser(): void {
 		$user = $this->createMock(IUser::class);
 		$user
 			->expects($this->once())
@@ -102,20 +162,19 @@ class AjaxControllerTest extends TestCase {
 			->expects($this->once())
 			->method('getUser')
 			->willReturn($user);
-		$this->groupManager
-			->expects($this->once())
-			->method('isAdmin')
-			->with('MyAdminUid')
-			->willReturn(true);
 		$this->globalAuth
-			->expects($this->once())
-			->method('saveAuth')
-			->with('UidOfTestUser', 'test', 'password');
+			->expects($this->never())
+			->method('saveAuth');
+		$this->eventDispatcher
+			->expects($this->never())
+			->method('dispatchTyped');
 
-		$this->assertSame(true, $this->ajaxController->saveGlobalCredentials('UidOfTestUser', 'test', 'password'));
+		$response = $this->ajaxController->saveGlobalCredentials('UidOfTestUser', 'test', 'password');
+		$this->assertSame($response->getStatus(), 403);
+		$this->assertSame('Permission denied', $response->getData()['message']);
 	}
 
-	public function testSaveGlobalCredentialsAsAdminForSelf() {
+	public function testSaveGlobalCredentialsAsAdminForSelf(): void {
 		$user = $this->createMock(IUser::class);
 		$user
 			->expects($this->once())
@@ -125,58 +184,153 @@ class AjaxControllerTest extends TestCase {
 			->expects($this->once())
 			->method('getUser')
 			->willReturn($user);
-		$this->groupManager
-			->expects($this->once())
-			->method('isAdmin')
-			->with('MyAdminUid')
-			->willReturn(true);
 		$this->globalAuth
 			->expects($this->once())
 			->method('saveAuth')
 			->with('MyAdminUid', 'test', 'password');
+		$this->expectCredentialsAuditEvent('MyAdminUid', 'Global credentials for external storages of user "%s" were updated');
 
-		$this->assertSame(true, $this->ajaxController->saveGlobalCredentials('MyAdminUid', 'test', 'password'));
+		$response = $this->ajaxController->saveGlobalCredentials('MyAdminUid', 'test', 'password');
+		$this->assertSame($response->getStatus(), 200);
 	}
 
-	public function testSaveGlobalCredentialsAsNormalUserForSelf() {
+	public function testSaveGlobalCredentialsAsNormalUserForSelf(): void {
 		$user = $this->createMock(IUser::class);
 		$user
-			->expects($this->exactly(2))
 			->method('getUID')
 			->willReturn('MyUserUid');
 		$this->userSession
-			->expects($this->once())
 			->method('getUser')
 			->willReturn($user);
-		$this->groupManager
-			->expects($this->once())
-			->method('isAdmin')
-			->with('MyUserUid')
-			->willReturn(false);
 		$this->globalAuth
-			->expects($this->once())
 			->method('saveAuth')
 			->with('MyUserUid', 'test', 'password');
 
-		$this->assertSame(true, $this->ajaxController->saveGlobalCredentials('MyUserUid', 'test', 'password'));
+		$response = $this->ajaxController->saveGlobalCredentials('MyUserUid', 'test', 'password');
+		$this->assertSame($response->getStatus(), 200);
 	}
 
-	public function testSaveGlobalCredentialsAsNormalUserForAnotherUser() {
+	public function testSaveGlobalCredentialsAsNormalUserForAnotherUser(): void {
 		$user = $this->createMock(IUser::class);
 		$user
-			->expects($this->exactly(2))
 			->method('getUID')
 			->willReturn('MyUserUid');
 		$this->userSession
-			->expects($this->once())
 			->method('getUser')
 			->willReturn($user);
+		$this->globalAuth
+			->expects($this->never())
+			->method('saveAuth');
+		$this->eventDispatcher
+			->expects($this->never())
+			->method('dispatchTyped');
+
+		$response = $this->ajaxController->saveGlobalCredentials('AnotherUserUid', 'test', 'password');
+		$this->assertSame($response->getStatus(), 403);
+		$this->assertSame('Permission denied', $response->getData()['message']);
+	}
+
+	public function testSaveGlobalCredentialsAsAdminForGlobal(): void {
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('MyAdminUid');
+		$this->userSession->method('getUser')->willReturn($user);
 		$this->groupManager
 			->expects($this->once())
 			->method('isAdmin')
-			->with('MyUserUid')
-			->willReturn(false);
+			->with('MyAdminUid')
+			->willReturn(true);
+		$this->authorizedGroupMapper
+			->expects($this->never())
+			->method('findAllClassesForUser');
+		$this->globalAuth
+			->expects($this->once())
+			->method('saveAuth')
+			->with('', 'test', 'password');
+		$this->expectCredentialsAuditEvent('', 'Admin-defined global credentials for external storages were updated');
 
-		$this->assertSame(false, $this->ajaxController->saveGlobalCredentials('AnotherUserUid', 'test', 'password'));
+		$response = $this->ajaxController->saveGlobalCredentials('', 'test', 'password');
+		$this->assertSame(200, $response->getStatus());
+	}
+
+	public function testSaveGlobalCredentialsAsDelegatedAdminForGlobal(): void {
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('DelegatedUid');
+		$this->userSession->method('getUser')->willReturn($user);
+		$this->groupManager
+			->expects($this->once())
+			->method('isAdmin')
+			->with('DelegatedUid')
+			->willReturn(false);
+		$this->authorizedGroupMapper
+			->expects($this->once())
+			->method('findAllClassesForUser')
+			->with($user)
+			->willReturn([Admin::class]);
+		$this->globalAuth
+			->expects($this->once())
+			->method('saveAuth')
+			->with('', 'test', 'password');
+
+		$response = $this->ajaxController->saveGlobalCredentials('', 'test', 'password');
+		$this->assertSame(200, $response->getStatus());
+	}
+
+	public function testSaveGlobalCredentialsAsDelegatedAdminForAnotherUser(): void {
+		// Delegated admins may only set global (uid='') credentials, not impersonate other users.
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('DelegatedUid');
+		$this->userSession->method('getUser')->willReturn($user);
+		$this->groupManager
+			->expects($this->never())
+			->method('isAdmin');
+		$this->authorizedGroupMapper
+			->expects($this->never())
+			->method('findAllClassesForUser');
+		$this->globalAuth
+			->expects($this->never())
+			->method('saveAuth');
+		$this->eventDispatcher
+			->expects($this->never())
+			->method('dispatchTyped');
+
+		$response = $this->ajaxController->saveGlobalCredentials('OtherUserUid', 'test', 'password');
+		$this->assertSame(403, $response->getStatus());
+		$this->assertSame('Permission denied', $response->getData()['message']);
+	}
+
+	public function testSaveGlobalCredentialsAsNormalUserForGlobal(): void {
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('NormalUid');
+		$this->userSession->method('getUser')->willReturn($user);
+		$this->groupManager
+			->expects($this->once())
+			->method('isAdmin')
+			->with('NormalUid')
+			->willReturn(false);
+		$this->authorizedGroupMapper
+			->expects($this->once())
+			->method('findAllClassesForUser')
+			->with($user)
+			->willReturn([]);
+		$this->globalAuth
+			->expects($this->never())
+			->method('saveAuth');
+		$this->eventDispatcher
+			->expects($this->never())
+			->method('dispatchTyped');
+
+		$response = $this->ajaxController->saveGlobalCredentials('', 'test', 'password');
+		$this->assertSame(403, $response->getStatus());
+		$this->assertSame('Permission denied', $response->getData()['message']);
+	}
+
+	private function expectCredentialsAuditEvent(string $uid, string $message): void {
+		$this->eventDispatcher
+			->expects($this->once())
+			->method('dispatchTyped')
+			->with($this->callback(fn (CriticalActionPerformedEvent $event): bool
+				=> $event->getOperation() === 'files_external.credentials.updated'
+				&& $event->getParameters() === ['targetUserId' => $uid]
+				&& $event->getLogMessage() === $message));
 	}
 }

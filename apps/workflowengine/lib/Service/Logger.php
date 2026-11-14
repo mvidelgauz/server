@@ -3,32 +3,15 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Julius Härtl <jus@bitgrid.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\WorkflowEngine\Service;
 
 use OCA\WorkflowEngine\AppInfo\Application;
 use OCA\WorkflowEngine\Helper\LogContext;
+use OCP\AppFramework\Services\IAppConfig;
 use OCP\IConfig;
 use OCP\ILogger;
 use OCP\Log\IDataLogger;
@@ -36,32 +19,26 @@ use OCP\Log\ILogFactory;
 use Psr\Log\LoggerInterface;
 
 class Logger {
-	/** @var ILogger */
-	protected $generalLogger;
-	/** @var LoggerInterface */
-	protected $flowLogger;
-	/** @var IConfig */
-	private $config;
-	/** @var ILogFactory */
-	private $logFactory;
+	protected ?LoggerInterface $flowLogger = null;
 
-	public function __construct(ILogger $generalLogger, IConfig $config, ILogFactory $logFactory) {
-		$this->generalLogger = $generalLogger;
-		$this->config = $config;
-		$this->logFactory = $logFactory;
-
+	public function __construct(
+		protected LoggerInterface $generalLogger,
+		private IConfig $config,
+		private ILogFactory $logFactory,
+		private IAppConfig $appConfig,
+	) {
 		$this->initLogger();
 	}
 
-	protected function initLogger() {
+	protected function initLogger(): void {
 		$default = $this->config->getSystemValue('datadirectory', \OC::$SERVERROOT . '/data') . '/flow.log';
-		$logFile = trim((string)$this->config->getAppValue(Application::APP_ID, 'logfile', $default));
+		$logFile = trim($this->appConfig->getAppValueString('logfile', $default));
 		if ($logFile !== '') {
 			$this->flowLogger = $this->logFactory->getCustomPsrLogger($logFile);
 		}
 	}
 
-	public function logFlowRequests(LogContext $logContext) {
+	public function logFlowRequests(LogContext $logContext): void {
 		$message = 'Flow activation: rules were requested for operation {op}';
 		$context = ['op' => $logContext->getDetails()['operation']['name'], 'level' => ILogger::DEBUG];
 
@@ -70,7 +47,7 @@ class Logger {
 		$this->log($message, $context, $logContext);
 	}
 
-	public function logScopeExpansion(LogContext $logContext) {
+	public function logScopeExpansion(LogContext $logContext): void {
 		$message = 'Flow rule of a different user is legit for operation {op}';
 		$context = ['op' => $logContext->getDetails()['operation']['name']];
 
@@ -79,7 +56,7 @@ class Logger {
 		$this->log($message, $context, $logContext);
 	}
 
-	public function logPassedCheck(LogContext $logContext) {
+	public function logPassedCheck(LogContext $logContext): void {
 		$message = 'Flow rule qualified to run {op}, config: {config}';
 		$context = [
 			'op' => $logContext->getDetails()['operation']['name'],
@@ -92,7 +69,7 @@ class Logger {
 		$this->log($message, $context, $logContext);
 	}
 
-	public function logRunSingle(LogContext $logContext) {
+	public function logRunSingle(LogContext $logContext): void {
 		$message = 'Last qualified flow configuration is going to run {op}';
 		$context = [
 			'op' => $logContext->getDetails()['operation']['name'],
@@ -103,7 +80,7 @@ class Logger {
 		$this->log($message, $context, $logContext);
 	}
 
-	public function logRunAll(LogContext $logContext) {
+	public function logRunAll(LogContext $logContext): void {
 		$message = 'All qualified flow configurations are going to run {op}';
 		$context = [
 			'op' => $logContext->getDetails()['operation']['name'],
@@ -114,7 +91,7 @@ class Logger {
 		$this->log($message, $context, $logContext);
 	}
 
-	public function logRunNone(LogContext $logContext) {
+	public function logRunNone(LogContext $logContext): void {
 		$message = 'No flow configurations is going to run {op}';
 		$context = [
 			'op' => $logContext->getDetails()['operation']['name'],
@@ -126,7 +103,7 @@ class Logger {
 		$this->log($message, $context, $logContext);
 	}
 
-	public function logEventInit(LogContext $logContext) {
+	public function logEventInit(LogContext $logContext): void {
 		$message = 'Flow activated by event {ev}';
 
 		$context = [
@@ -139,7 +116,7 @@ class Logger {
 		$this->log($message, $context, $logContext);
 	}
 
-	public function logEventDone(LogContext $logContext) {
+	public function logEventDone(LogContext $logContext): void {
 		$message = 'Flow handling done for event {ev}';
 
 		$context = [
@@ -154,7 +131,7 @@ class Logger {
 	protected function log(
 		string $message,
 		array $context,
-		LogContext $logContext
+		LogContext $logContext,
 	): void {
 		if (!isset($context['app'])) {
 			$context['app'] = Application::APP_ID;

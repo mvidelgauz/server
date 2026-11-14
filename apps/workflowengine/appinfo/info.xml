@@ -1,11 +1,15 @@
 <?xml version="1.0"?>
+<!--
+  - SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 <info xmlns:xsi= "http://www.w3.org/2001/XMLSchema-instance"
 	  xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
 	<id>workflowengine</id>
 	<name>Nextcloud workflow engine</name>
 	<summary>Nextcloud workflow engine</summary>
 	<description>Nextcloud workflow engine</description>
-	<version>2.5.0</version>
+	<version>4.0.0-dev.0</version>
 	<licence>agpl</licence>
 	<author>Arthur Schiwon</author>
 	<author>Julius Härtl</author>
@@ -22,7 +26,7 @@
 	<repository>https://github.com/nextcloud/server.git</repository>
 
 	<dependencies>
-		<nextcloud min-version="23" max-version="23"/>
+		<nextcloud min-version="36" max-version="36"/>
 	</dependencies>
 
 	<background-jobs>
@@ -37,6 +41,7 @@
 
 	<commands>
 		<command>OCA\WorkflowEngine\Command\Index</command>
+		<command>OCA\WorkflowEngine\Command\Runtime</command>
 	</commands>
 
 	<settings>

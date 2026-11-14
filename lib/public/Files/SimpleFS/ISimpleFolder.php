@@ -1,26 +1,10 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\Files\SimpleFS;
 
 use OCP\Files\NotFoundException;
@@ -38,7 +22,7 @@ interface ISimpleFolder {
 	 * @return ISimpleFile[]
 	 * @since 11.0.0
 	 */
-	public function getDirectoryListing();
+	public function getDirectoryListing(): array;
 
 	/**
 	 * Check if a file with $name exists
@@ -47,28 +31,24 @@ interface ISimpleFolder {
 	 * @return bool
 	 * @since 11.0.0
 	 */
-	public function fileExists($name);
+	public function fileExists(string $name): bool;
 
 	/**
 	 * Get the file named $name from the folder
 	 *
-	 * @param string $name
-	 * @return ISimpleFile
 	 * @throws NotFoundException
 	 * @since 11.0.0
 	 */
-	public function getFile($name);
+	public function getFile(string $name): ISimpleFile;
 
 	/**
 	 * Creates a new file with $name in the folder
 	 *
-	 * @param string $name
 	 * @param string|resource|null $content @since 19.0.0
-	 * @return ISimpleFile
 	 * @throws NotPermittedException
 	 * @since 11.0.0
 	 */
-	public function newFile($name, $content = null);
+	public function newFile(string $name, $content = null): ISimpleFile;
 
 	/**
 	 * Remove the folder and all the files in it
@@ -76,13 +56,38 @@ interface ISimpleFolder {
 	 * @throws NotPermittedException
 	 * @since 11.0.0
 	 */
-	public function delete();
+	public function delete(): void;
 
 	/**
 	 * Get the folder name
 	 *
-	 * @return string
 	 * @since 11.0.0
 	 */
-	public function getName();
+	public function getName(): string;
+
+	/**
+	 * Get the folder named $name from the current folder
+	 *
+	 * @throws NotFoundException
+	 * @since 25.0.0
+	 */
+	public function getFolder(string $name): ISimpleFolder;
+
+	/**
+	 * Creates a new folder with $name in the current folder
+	 *
+	 * @param string|resource|null $content @since 19.0.0
+	 * @throws NotPermittedException
+	 * @since 25.0.0
+	 */
+	public function newFolder(string $path): ISimpleFolder;
+
+	/**
+	 * Get or create new folder if the folder does not already exist.
+	 *
+	 * @param string $path relative path of the file or folder
+	 * @throw NotPermittedException
+	 * @since 35.0.0
+	 */
+	public function getOrCreateFolder(string $path, int $maxRetries = 5): ISimpleFolder;
 }

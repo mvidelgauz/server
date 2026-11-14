@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020, Georg Ehrke
- *
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\UserStatus\Tests\Controller;
 
 use OCA\UserStatus\Controller\StatusesController;
@@ -30,24 +14,28 @@ use OCA\UserStatus\Db\UserStatus;
 use OCA\UserStatus\Service\StatusService;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\OCS\OCSNotFoundException;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IRequest;
+use OCP\IURLGenerator;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class StatusesControllerTest extends TestCase {
-
-	/** @var StatusService|\PHPUnit\Framework\MockObject\MockObject */
-	private $service;
-
-	/** @var StatusesController */
-	private $controller;
+	private StatusService&MockObject $service;
+	private IEventDispatcher&MockObject $eventDispatcher;
+	private IRequest&MockObject $request;
+	private IURLGenerator&MockObject $urlGenerator;
+	private StatusesController $controller;
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		$request = $this->createMock(IRequest::class);
+		$this->request = $this->createMock(IRequest::class);
 		$this->service = $this->createMock(StatusService::class);
+		$this->eventDispatcher = $this->createMock(IEventDispatcher::class);
+		$this->urlGenerator = $this->createMock(IURLGenerator::class);
 
-		$this->controller = new StatusesController('user_status', $request, $this->service);
+		$this->controller = new StatusesController('user_status', $this->request, $this->service, $this->eventDispatcher, $this->urlGenerator);
 	}
 
 	public function testFindAll(): void {
@@ -66,6 +54,49 @@ class StatusesControllerTest extends TestCase {
 			'message' => 'On vacation',
 			'clearAt' => 60000,
 		]], $response->getData());
+		$this->assertArrayNotHasKey('Link', $response->getHeaders());
+	}
+
+	public function testFindAllWithLastId(): void {
+		$userStatus = $this->getUserStatus();
+
+		$this->service->expects($this->once())
+			->method('findAllAfterId')
+			->with(20, 1336)
+			->willReturn([$userStatus]);
+		$this->service->expects($this->never())
+			->method('findAll');
+
+		$response = $this->controller->findAll(20, null, 1336);
+		$this->assertEquals([[
+			'userId' => 'john.doe',
+			'status' => 'offline',
+			'icon' => '🏝',
+			'message' => 'On vacation',
+			'clearAt' => 60000,
+		]], $response->getData());
+		$this->assertArrayNotHasKey('Link', $response->getHeaders());
+	}
+
+	public function testFindAllWithLastIdHasMoreResults(): void {
+		$userStatus = $this->getUserStatus();
+
+		$this->service->expects($this->once())
+			->method('findAllAfterId')
+			->with(1, 1336)
+			->willReturn([$userStatus]);
+
+		$this->request->method('getRequestUri')
+			->willReturn('/ocs/v2.php/apps/user_status/api/v1/statuses?limit=1&lastId=1336');
+		$this->urlGenerator->method('getAbsoluteURL')
+			->with('/ocs/v2.php/apps/user_status/api/v1/statuses')
+			->willReturn('https://cloud.example.com/ocs/v2.php/apps/user_status/api/v1/statuses');
+
+		$response = $this->controller->findAll(1, null, 1336);
+		$this->assertSame(
+			'<https://cloud.example.com/ocs/v2.php/apps/user_status/api/v1/statuses?limit=1&lastId=1337>; rel="next"',
+			$response->getHeaders()['Link']
+		);
 	}
 
 	public function testFind(): void {

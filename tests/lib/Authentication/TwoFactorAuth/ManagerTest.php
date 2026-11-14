@@ -1,34 +1,22 @@
 <?php
 
 /**
- * @author Christoph Wurst <christoph@owncloud.com>
- *
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Test\Authentication\TwoFactorAuth;
 
-use OC;
+use OC\Authentication\Exceptions\InvalidTokenException;
 use OC\Authentication\Token\IProvider as TokenProvider;
+use OC\Authentication\Token\IToken;
 use OC\Authentication\TwoFactorAuth\Manager;
 use OC\Authentication\TwoFactorAuth\MandatoryTwoFactor;
 use OC\Authentication\TwoFactorAuth\ProviderLoader;
 use OCP\Activity\IEvent;
 use OCP\Activity\IManager;
+use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\Authentication\TwoFactorAuth\IActivatableAtLogin;
 use OCP\Authentication\TwoFactorAuth\IProvider;
@@ -39,86 +27,26 @@ use OCP\ISession;
 use OCP\IUser;
 use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Log\LoggerInterface;
-use function reset;
-use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Test\TestCase;
+use function reset;
 
 class ManagerTest extends TestCase {
+	private IUser&MockObject $user;
+	private IProvider&MockObject $fakeProvider;
+	private IProvider&MockObject $backupProvider;
 
-	/** @var IUser|MockObject */
-	private $user;
+	private Manager $manager;
 
-	/** @var ProviderLoader|MockObject */
-	private $providerLoader;
-
-	/** @var IRegistry|MockObject */
-	private $providerRegistry;
-
-	/** @var MandatoryTwoFactor|MockObject */
-	private $mandatoryTwoFactor;
-
-	/** @var ISession|MockObject */
-	private $session;
-
-	/** @var Manager */
-	private $manager;
-
-	/** @var IConfig|MockObject */
-	private $config;
-
-	/** @var IManager|MockObject */
-	private $activityManager;
-
-	/** @var LoggerInterface|MockObject */
-	private $logger;
-
-	/** @var IProvider|MockObject */
-	private $fakeProvider;
-
-	/** @var IProvider|MockObject */
-	private $backupProvider;
-
-	/** @var TokenProvider|MockObject */
-	private $tokenProvider;
-
-	/** @var ITimeFactory|MockObject */
-	private $timeFactory;
-
-	/** @var IEventDispatcher|MockObject */
-	private $newDispatcher;
-
-	/** @var EventDispatcherInterface|MockObject */
-	private $eventDispatcher;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
 		$this->user = $this->createMock(IUser::class);
-		$this->providerLoader = $this->createMock(ProviderLoader::class);
-		$this->providerRegistry = $this->createMock(IRegistry::class);
-		$this->mandatoryTwoFactor = $this->createMock(MandatoryTwoFactor::class);
-		$this->session = $this->createMock(ISession::class);
-		$this->config = $this->createMock(IConfig::class);
-		$this->activityManager = $this->createMock(IManager::class);
-		$this->logger = $this->createMock(LoggerInterface::class);
-		$this->tokenProvider = $this->createMock(TokenProvider::class);
-		$this->timeFactory = $this->createMock(ITimeFactory::class);
-		$this->newDispatcher = $this->createMock(IEventDispatcher::class);
-		$this->eventDispatcher = $this->createMock(EventDispatcherInterface::class);
+		$this->user->expects($this->any())
+			->method('getUID')
+			->willReturn('user-uid');
 
-		$this->manager = new Manager(
-			$this->providerLoader,
-			$this->providerRegistry,
-			$this->mandatoryTwoFactor,
-			$this->session,
-			$this->config,
-			$this->activityManager,
-			$this->logger,
-			$this->tokenProvider,
-			$this->timeFactory,
-			$this->newDispatcher,
-			$this->eventDispatcher
-		);
+		$this->manager = $this->createInstanceWithMocks(Manager::class);
 
 		$this->fakeProvider = $this->createMock(IProvider::class);
 		$this->fakeProvider->method('getId')->willReturn('email');
@@ -129,26 +57,26 @@ class ManagerTest extends TestCase {
 	}
 
 	private function prepareNoProviders() {
-		$this->providerLoader->method('getProviders')
+		$this->getAutoMock(ProviderLoader::class)->method('getProviders')
 			->with($this->user)
 			->willReturn([]);
 	}
 
 	private function prepareProviders() {
-		$this->providerRegistry->expects($this->once())
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('getProviderStates')
 			->with($this->user)
 			->willReturn([
 				$this->fakeProvider->getId() => true,
 			]);
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->with($this->user)
 			->willReturn([$this->fakeProvider]);
 	}
 
 	private function prepareProvidersWitBackupProvider() {
-		$this->providerLoader->method('getProviders')
+		$this->getAutoMock(ProviderLoader::class)->method('getProviders')
 			->with($this->user)
 			->willReturn([
 				$this->fakeProvider,
@@ -156,8 +84,8 @@ class ManagerTest extends TestCase {
 			]);
 	}
 
-	public function testIsTwoFactorAuthenticatedEnforced() {
-		$this->mandatoryTwoFactor->expects($this->once())
+	public function testIsTwoFactorAuthenticatedEnforced(): void {
+		$this->getAutoMock(MandatoryTwoFactor::class)->expects($this->once())
 			->method('isEnforcedFor')
 			->with($this->user)
 			->willReturn(true);
@@ -167,27 +95,27 @@ class ManagerTest extends TestCase {
 		$this->assertTrue($enabled);
 	}
 
-	public function testIsTwoFactorAuthenticatedNoProviders() {
-		$this->mandatoryTwoFactor->expects($this->once())
+	public function testIsTwoFactorAuthenticatedNoProviders(): void {
+		$this->getAutoMock(MandatoryTwoFactor::class)->expects($this->once())
 			->method('isEnforcedFor')
 			->with($this->user)
 			->willReturn(false);
-		$this->providerRegistry->expects($this->once())
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('getProviderStates')
 			->willReturn([]); // No providers registered
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->willReturn([]); // No providers loadable
 
 		$this->assertFalse($this->manager->isTwoFactorAuthenticated($this->user));
 	}
 
-	public function testIsTwoFactorAuthenticatedOnlyBackupCodes() {
-		$this->mandatoryTwoFactor->expects($this->once())
+	public function testIsTwoFactorAuthenticatedOnlyBackupCodes(): void {
+		$this->getAutoMock(MandatoryTwoFactor::class)->expects($this->once())
 			->method('isEnforcedFor')
 			->with($this->user)
 			->willReturn(false);
-		$this->providerRegistry->expects($this->once())
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('getProviderStates')
 			->willReturn([
 				'backup_codes' => true,
@@ -196,7 +124,7 @@ class ManagerTest extends TestCase {
 		$backupCodesProvider
 			->method('getId')
 			->willReturn('backup_codes');
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->willReturn([
 				$backupCodesProvider,
@@ -205,18 +133,18 @@ class ManagerTest extends TestCase {
 		$this->assertFalse($this->manager->isTwoFactorAuthenticated($this->user));
 	}
 
-	public function testIsTwoFactorAuthenticatedFailingProviders() {
-		$this->mandatoryTwoFactor->expects($this->once())
+	public function testIsTwoFactorAuthenticatedFailingProviders(): void {
+		$this->getAutoMock(MandatoryTwoFactor::class)->expects($this->once())
 			->method('isEnforcedFor')
 			->with($this->user)
 			->willReturn(false);
-		$this->providerRegistry->expects($this->once())
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('getProviderStates')
 			->willReturn([
 				'twofactor_totp' => true,
 				'twofactor_u2f' => false,
 			]); // Two providers registered, but …
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->willReturn([]); // … none of them is able to load, however …
 
@@ -224,7 +152,7 @@ class ManagerTest extends TestCase {
 		$this->assertTrue($this->manager->isTwoFactorAuthenticated($this->user));
 	}
 
-	public function providerStatesFixData(): array {
+	public static function providerStatesFixData(): array {
 		return [
 			[false, false],
 			[true, true],
@@ -237,14 +165,13 @@ class ManagerTest extends TestCase {
 	 * enabled providers.
 	 *
 	 * If any of these providers is active, 2FA is enabled
-	 *
-	 * @dataProvider providerStatesFixData
 	 */
-	public function testIsTwoFactorAuthenticatedFixesProviderStates(bool $providerEnabled, bool $expected) {
-		$this->providerRegistry->expects($this->once())
+	#[\PHPUnit\Framework\Attributes\DataProvider('providerStatesFixData')]
+	public function testIsTwoFactorAuthenticatedFixesProviderStates(bool $providerEnabled, bool $expected): void {
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('getProviderStates')
 			->willReturn([]); // Nothing registered yet
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->willReturn([
 				$this->fakeProvider
@@ -254,14 +181,14 @@ class ManagerTest extends TestCase {
 			->with($this->user)
 			->willReturn($providerEnabled);
 		if ($providerEnabled) {
-			$this->providerRegistry->expects($this->once())
+			$this->getAutoMock(IRegistry::class)->expects($this->once())
 				->method('enableProviderFor')
 				->with(
 					$this->fakeProvider,
 					$this->user
 				);
 		} else {
-			$this->providerRegistry->expects($this->once())
+			$this->getAutoMock(IRegistry::class)->expects($this->once())
 				->method('disableProviderFor')
 				->with(
 					$this->fakeProvider,
@@ -272,14 +199,14 @@ class ManagerTest extends TestCase {
 		$this->assertEquals($expected, $this->manager->isTwoFactorAuthenticated($this->user));
 	}
 
-	public function testGetProvider() {
-		$this->providerRegistry->expects($this->once())
+	public function testGetProvider(): void {
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('getProviderStates')
 			->with($this->user)
 			->willReturn([
 				$this->fakeProvider->getId() => true,
 			]);
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->with($this->user)
 			->willReturn([$this->fakeProvider]);
@@ -289,12 +216,12 @@ class ManagerTest extends TestCase {
 		$this->assertSame($this->fakeProvider, $provider);
 	}
 
-	public function testGetInvalidProvider() {
-		$this->providerRegistry->expects($this->once())
+	public function testGetInvalidProvider(): void {
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('getProviderStates')
 			->with($this->user)
 			->willReturn([]);
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->with($this->user)
 			->willReturn([]);
@@ -304,10 +231,10 @@ class ManagerTest extends TestCase {
 		$this->assertNull($provider);
 	}
 
-	public function testGetLoginSetupProviders() {
+	public function testGetLoginSetupProviders(): void {
 		$provider1 = $this->createMock(IProvider::class);
 		$provider2 = $this->createMock(IActivatableAtLogin::class);
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->with($this->user)
 			->willReturn([
@@ -321,14 +248,14 @@ class ManagerTest extends TestCase {
 		$this->assertSame($provider2, reset($providers));
 	}
 
-	public function testGetProviders() {
-		$this->providerRegistry->expects($this->once())
+	public function testGetProviders(): void {
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('getProviderStates')
 			->with($this->user)
 			->willReturn([
 				$this->fakeProvider->getId() => true,
 			]);
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->with($this->user)
 			->willReturn([$this->fakeProvider]);
@@ -343,14 +270,14 @@ class ManagerTest extends TestCase {
 		$this->assertFalse($providerSet->isProviderMissing());
 	}
 
-	public function testGetProvidersOneMissing() {
-		$this->providerRegistry->expects($this->once())
+	public function testGetProvidersOneMissing(): void {
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('getProviderStates')
 			->with($this->user)
 			->willReturn([
 				$this->fakeProvider->getId() => true,
 			]);
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->with($this->user)
 			->willReturn([]);
@@ -363,7 +290,7 @@ class ManagerTest extends TestCase {
 		$this->assertTrue($providerSet->isProviderMissing());
 	}
 
-	public function testVerifyChallenge() {
+	public function testVerifyChallenge(): void {
 		$this->prepareProviders();
 
 		$challenge = 'passme';
@@ -372,27 +299,30 @@ class ManagerTest extends TestCase {
 			->method('verifyChallenge')
 			->with($this->user, $challenge)
 			->willReturn(true);
-		$this->session->expects($this->once())
+		$this->getAutoMock(ISession::class)->expects($this->once())
 			->method('get')
 			->with('two_factor_remember_login')
 			->willReturn(false);
-		$this->session->expects($this->at(1))
+
+		$calls = [
+			['two_factor_auth_uid'],
+			['two_factor_remember_login'],
+		];
+		$this->getAutoMock(ISession::class)->expects($this->exactly(2))
 			->method('remove')
-			->with('two_factor_auth_uid');
-		$this->session->expects($this->at(2))
-			->method('remove')
-			->with('two_factor_remember_login');
-		$this->session->expects($this->at(3))
+			->willReturnCallback(function () use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, func_get_args());
+			});
+
+		$this->getAutoMock(ISession::class)->expects($this->once())
 			->method('set')
-			->with(Manager::SESSION_UID_DONE, 'jos');
-		$this->session->method('getId')
+			->with(Manager::SESSION_UID_DONE, $this->user->getUID());
+		$this->getAutoMock(ISession::class)->method('getId')
 			->willReturn('mysessionid');
-		$this->activityManager->expects($this->once())
+		$this->getAutoMock(IManager::class)->expects($this->once())
 			->method('generateEvent')
 			->willReturn($event);
-		$this->user->expects($this->any())
-			->method('getUID')
-			->willReturn('jos');
 		$event->expects($this->once())
 			->method('setApp')
 			->with($this->equalTo('core'))
@@ -403,11 +333,11 @@ class ManagerTest extends TestCase {
 			->willReturnSelf();
 		$event->expects($this->once())
 			->method('setAuthor')
-			->with($this->equalTo('jos'))
+			->with($this->equalTo($this->user->getUID()))
 			->willReturnSelf();
 		$event->expects($this->once())
 			->method('setAffectedUser')
-			->with($this->equalTo('jos'))
+			->with($this->equalTo($this->user->getUID()))
 			->willReturnSelf();
 		$this->fakeProvider
 			->method('getDisplayName')
@@ -418,35 +348,35 @@ class ManagerTest extends TestCase {
 				'provider' => 'Fake 2FA',
 			]))
 			->willReturnSelf();
-		$token = $this->createMock(OC\Authentication\Token\IToken::class);
-		$this->tokenProvider->method('getToken')
+		$token = $this->createMock(IToken::class);
+		$this->getAutoMock(TokenProvider::class)->method('getToken')
 			->with('mysessionid')
 			->willReturn($token);
 		$token->method('getId')
 			->willReturn(42);
-		$this->config->expects($this->once())
+		$this->getAutoMock(IConfig::class)->expects($this->once())
 			->method('deleteUserValue')
-			->with('jos', 'login_token_2fa', '42');
+			->with($this->user->getUID(), 'login_token_2fa', '42');
 
 		$result = $this->manager->verifyChallenge('email', $this->user, $challenge);
 
 		$this->assertTrue($result);
 	}
 
-	public function testVerifyChallengeInvalidProviderId() {
+	public function testVerifyChallengeInvalidProviderId(): void {
 		$this->prepareProviders();
 
 		$challenge = 'passme';
 		$this->fakeProvider->expects($this->never())
 			->method('verifyChallenge')
 			->with($this->user, $challenge);
-		$this->session->expects($this->never())
+		$this->getAutoMock(ISession::class)->expects($this->never())
 			->method('remove');
 
 		$this->assertFalse($this->manager->verifyChallenge('dontexist', $this->user, $challenge));
 	}
 
-	public function testVerifyInvalidChallenge() {
+	public function testVerifyInvalidChallenge(): void {
 		$this->prepareProviders();
 
 		$challenge = 'dontpassme';
@@ -455,14 +385,11 @@ class ManagerTest extends TestCase {
 			->method('verifyChallenge')
 			->with($this->user, $challenge)
 			->willReturn(false);
-		$this->session->expects($this->never())
+		$this->getAutoMock(ISession::class)->expects($this->never())
 			->method('remove');
-		$this->activityManager->expects($this->once())
+		$this->getAutoMock(IManager::class)->expects($this->once())
 			->method('generateEvent')
 			->willReturn($event);
-		$this->user->expects($this->any())
-			->method('getUID')
-			->willReturn('jos');
 		$event->expects($this->once())
 			->method('setApp')
 			->with($this->equalTo('core'))
@@ -473,11 +400,11 @@ class ManagerTest extends TestCase {
 			->willReturnSelf();
 		$event->expects($this->once())
 			->method('setAuthor')
-			->with($this->equalTo('jos'))
+			->with($this->equalTo($this->user->getUID()))
 			->willReturnSelf();
 		$event->expects($this->once())
 			->method('setAffectedUser')
-			->with($this->equalTo('jos'))
+			->with($this->equalTo($this->user->getUID()))
 			->willReturnSelf();
 		$this->fakeProvider
 			->method('getDisplayName')
@@ -492,25 +419,26 @@ class ManagerTest extends TestCase {
 		$this->assertFalse($this->manager->verifyChallenge('email', $this->user, $challenge));
 	}
 
-	public function testNeedsSecondFactor() {
+	public function testNeedsSecondFactor(): void {
 		$user = $this->createMock(IUser::class);
-		$this->session->expects($this->at(0))
-			->method('exists')
-			->with('app_password')
-			->willReturn(false);
-		$this->session->expects($this->at(1))
-			->method('exists')
-			->with('two_factor_auth_uid')
-			->willReturn(false);
-		$this->session->expects($this->at(2))
-			->method('exists')
-			->with(Manager::SESSION_UID_DONE)
-			->willReturn(false);
 
-		$this->session->method('getId')
+		$calls = [
+			['app_password'],
+			['two_factor_auth_uid'],
+			[Manager::SESSION_UID_DONE],
+		];
+		$this->getAutoMock(ISession::class)->expects($this->exactly(3))
+			->method('exists')
+			->willReturnCallback(function () use (&$calls) {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, func_get_args());
+				return false;
+			});
+
+		$this->getAutoMock(ISession::class)->method('getId')
 			->willReturn('mysessionid');
-		$token = $this->createMock(OC\Authentication\Token\IToken::class);
-		$this->tokenProvider->method('getToken')
+		$token = $this->createMock(IToken::class);
+		$this->getAutoMock(TokenProvider::class)->method('getToken')
 			->with('mysessionid')
 			->willReturn($token);
 		$token->method('getId')
@@ -518,7 +446,7 @@ class ManagerTest extends TestCase {
 
 		$user->method('getUID')
 			->willReturn('user');
-		$this->config->method('getUserKeys')
+		$this->getAutoMock(IConfig::class)->method('getUserKeys')
 			->with('user', 'login_token_2fa')
 			->willReturn([
 				'42'
@@ -526,19 +454,18 @@ class ManagerTest extends TestCase {
 
 		$manager = $this->getMockBuilder(Manager::class)
 			->setConstructorArgs([
-				$this->providerLoader,
-				$this->providerRegistry,
-				$this->mandatoryTwoFactor,
-				$this->session,
-				$this->config,
-				$this->activityManager,
-				$this->logger,
-				$this->tokenProvider,
-				$this->timeFactory,
-				$this->newDispatcher,
-				$this->eventDispatcher
+				$this->getAutoMock(ProviderLoader::class),
+				$this->getAutoMock(IRegistry::class),
+				$this->getAutoMock(MandatoryTwoFactor::class),
+				$this->getAutoMock(ISession::class),
+				$this->getAutoMock(IConfig::class),
+				$this->getAutoMock(IManager::class),
+				$this->getAutoMock(LoggerInterface::class),
+				$this->getAutoMock(TokenProvider::class),
+				$this->getAutoMock(ITimeFactory::class),
+				$this->getAutoMock(IEventDispatcher::class),
 			])
-			->setMethods(['loadTwoFactorApp', 'isTwoFactorAuthenticated'])// Do not actually load the apps
+			->onlyMethods(['isTwoFactorAuthenticated'])// Do not actually load the apps
 			->getMock();
 
 		$manager->method('isTwoFactorAuthenticated')
@@ -548,168 +475,255 @@ class ManagerTest extends TestCase {
 		$this->assertTrue($manager->needsSecondFactor($user));
 	}
 
-	public function testNeedsSecondFactorUserIsNull() {
+	public function testNeedsSecondFactorUserIsNull(): void {
 		$user = null;
-		$this->session->expects($this->never())
+		$this->getAutoMock(ISession::class)->expects($this->never())
 			->method('exists');
 
 		$this->assertFalse($this->manager->needsSecondFactor($user));
 	}
 
-	public function testNeedsSecondFactorWithNoProviderAvailableAnymore() {
+	public function testNeedsSecondFactorWithNoProviderAvailableAnymore(): void {
 		$this->prepareNoProviders();
 
 		$user = null;
-		$this->session->expects($this->never())
+		$this->getAutoMock(ISession::class)->expects($this->never())
 			->method('exists')
 			->with('two_factor_auth_uid')
 			->willReturn(true);
-		$this->session->expects($this->never())
+		$this->getAutoMock(ISession::class)->expects($this->never())
 			->method('remove')
 			->with('two_factor_auth_uid');
 
 		$this->assertFalse($this->manager->needsSecondFactor($user));
 	}
 
-	public function testPrepareTwoFactorLogin() {
-		$this->user->method('getUID')
-			->willReturn('ferdinand');
-
-		$this->session->expects($this->at(0))
+	public function testPrepareTwoFactorLogin(): void {
+		$calls = [
+			['two_factor_auth_uid', $this->user->getUID()],
+			['two_factor_remember_login', true],
+		];
+		$this->getAutoMock(ISession::class)->expects($this->exactly(2))
 			->method('set')
-			->with('two_factor_auth_uid', 'ferdinand');
-		$this->session->expects($this->at(1))
-			->method('set')
-			->with('two_factor_remember_login', true);
+			->willReturnCallback(function () use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, func_get_args());
+			});
 
-		$this->session->method('getId')
+		$this->getAutoMock(ISession::class)->method('getId')
 			->willReturn('mysessionid');
-		$token = $this->createMock(OC\Authentication\Token\IToken::class);
-		$this->tokenProvider->method('getToken')
+		$token = $this->createMock(IToken::class);
+		$this->getAutoMock(TokenProvider::class)->method('getToken')
 			->with('mysessionid')
 			->willReturn($token);
 		$token->method('getId')
 			->willReturn(42);
 
-		$this->timeFactory->method('getTime')
+		$this->getAutoMock(ITimeFactory::class)->method('getTime')
 			->willReturn(1337);
 
-		$this->config->method('setUserValue')
-			->with('ferdinand', 'login_token_2fa', '42', '1337');
-
+		$this->getAutoMock(IConfig::class)->method('setUserValue')
+			->with($this->user->getUID(), 'login_token_2fa', '42', '1337');
 
 		$this->manager->prepareTwoFactorLogin($this->user, true);
 	}
 
-	public function testPrepareTwoFactorLoginDontRemember() {
-		$this->user->method('getUID')
-			->willReturn('ferdinand');
-
-		$this->session->expects($this->at(0))
+	public function testPrepareTwoFactorLoginDontRemember(): void {
+		$calls = [
+			['two_factor_auth_uid', $this->user->getUID()],
+			['two_factor_remember_login', false],
+		];
+		$this->getAutoMock(ISession::class)->expects($this->exactly(2))
 			->method('set')
-			->with('two_factor_auth_uid', 'ferdinand');
-		$this->session->expects($this->at(1))
-			->method('set')
-			->with('two_factor_remember_login', false);
+			->willReturnCallback(function () use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, func_get_args());
+			});
 
-		$this->session->method('getId')
+		$this->getAutoMock(ISession::class)->method('getId')
 			->willReturn('mysessionid');
-		$token = $this->createMock(OC\Authentication\Token\IToken::class);
-		$this->tokenProvider->method('getToken')
+		$token = $this->createMock(IToken::class);
+		$this->getAutoMock(TokenProvider::class)->method('getToken')
 			->with('mysessionid')
 			->willReturn($token);
 		$token->method('getId')
 			->willReturn(42);
 
-		$this->timeFactory->method('getTime')
+		$this->getAutoMock(ITimeFactory::class)->method('getTime')
 			->willReturn(1337);
 
-		$this->config->method('setUserValue')
-			->with('ferdinand', 'login_token_2fa', '42', '1337');
+		$this->getAutoMock(IConfig::class)->method('setUserValue')
+			->with($this->user->getUID(), 'login_token_2fa', '42', '1337');
 
 		$this->manager->prepareTwoFactorLogin($this->user, false);
 	}
 
-	public function testNeedsSecondFactorSessionAuth() {
+	public function testNeedsSecondFactorSessionAuth(): void {
 		$user = $this->createMock(IUser::class);
 		$user->method('getUID')
 			->willReturn('user');
 
-		$this->session->method('exists')
+		$this->getAutoMock(ISession::class)->method('exists')
 			->willReturnCallback(function ($var) {
 				if ($var === Manager::SESSION_UID_KEY) {
 					return false;
 				} elseif ($var === 'app_password') {
 					return false;
+				} elseif ($var === 'app_api') {
+					return false;
 				}
 				return true;
 			});
-		$this->session->expects($this->once())
+		$this->getAutoMock(ISession::class)->method('get')
+			->willReturnCallback(function ($var) {
+				if ($var === Manager::SESSION_UID_KEY) {
+					return 'user';
+				} elseif ($var === 'app_api') {
+					return true;
+				}
+				return null;
+			});
+		$this->getAutoMock(ISession::class)->expects($this->once())
 			->method('get')
-			->with(Manager::SESSION_UID_DONE)
-			->willReturn('user');
+			->willReturnMap([
+				[Manager::SESSION_UID_DONE, 'user'],
+				['app_api', true]
+			]);
 
 		$this->assertFalse($this->manager->needsSecondFactor($user));
 	}
 
-	public function testNeedsSecondFactorSessionAuthFailDBPass() {
+	public function testNeedsSecondFactorSessionAuthFailDBPass(): void {
 		$user = $this->createMock(IUser::class);
 		$user->method('getUID')
 			->willReturn('user');
 
-		$this->session->method('exists')
+		$this->getAutoMock(ISession::class)->method('exists')
 			->willReturn(false);
-		$this->session->method('getId')
+		$this->getAutoMock(ISession::class)->method('getId')
 			->willReturn('mysessionid');
 
-		$token = $this->createMock(OC\Authentication\Token\IToken::class);
+		$token = $this->createMock(IToken::class);
 		$token->method('getId')
 			->willReturn(40);
 
-		$this->tokenProvider->method('getToken')
+		$this->getAutoMock(TokenProvider::class)->method('getToken')
 			->with('mysessionid')
 			->willReturn($token);
 
-		$this->config->method('getUserKeys')
+		$this->getAutoMock(IConfig::class)->method('getUserKeys')
 			->with('user', 'login_token_2fa')
 			->willReturn([
 				'42', '43', '44'
 			]);
 
-		$this->session->expects($this->once())
+		$this->getAutoMock(ISession::class)->expects($this->once())
 			->method('set')
 			->with(Manager::SESSION_UID_DONE, 'user');
 
 		$this->assertFalse($this->manager->needsSecondFactor($user));
 	}
 
-	public function testNeedsSecondFactorInvalidToken() {
+	public function testNeedsSecondFactorInvalidToken(): void {
 		$this->prepareNoProviders();
 
 		$user = $this->createMock(IUser::class);
 		$user->method('getUID')
 			->willReturn('user');
 
-		$this->session->method('exists')
+		$this->getAutoMock(ISession::class)->method('exists')
 			->willReturn(false);
-		$this->session->method('getId')
+		$this->getAutoMock(ISession::class)->method('getId')
 			->willReturn('mysessionid');
 
-		$this->tokenProvider->method('getToken')
+		$this->getAutoMock(TokenProvider::class)->method('getToken')
 			->with('mysessionid')
-			->willThrowException(new OC\Authentication\Exceptions\InvalidTokenException());
+			->willThrowException(new InvalidTokenException());
 
-		$this->config->method('getUserKeys')->willReturn([]);
+		$this->getAutoMock(IConfig::class)->method('getUserKeys')->willReturn([]);
 
 		$this->assertFalse($this->manager->needsSecondFactor($user));
 	}
 
-	public function testNeedsSecondFactorAppPassword() {
+	public function testNeedsSecondFactorAppPassword(): void {
 		$user = $this->createMock(IUser::class);
-		$this->session->method('exists')
-			->with('app_password')
-			->willReturn(true);
+		$this->getAutoMock(ISession::class)->method('exists')
+			->willReturnMap([
+				['app_password', true],
+				['app_api', true]
+			]);
 
 		$this->assertFalse($this->manager->needsSecondFactor($user));
+	}
+
+	public function testClearTwoFactorPending() {
+		$this->getAutoMock(IConfig::class)->method('getUserKeys')
+			->with('theUserId', 'login_token_2fa')
+			->willReturn([
+				'42', '43', '44'
+			]);
+
+		$deleteUserValueCalls = [
+			['theUserId', 'login_token_2fa', '42'],
+			['theUserId', 'login_token_2fa', '43'],
+			['theUserId', 'login_token_2fa', '44'],
+		];
+		$this->getAutoMock(IConfig::class)->expects($this->exactly(3))
+			->method('deleteUserValue')
+			->willReturnCallback(function () use (&$deleteUserValueCalls): void {
+				$expected = array_shift($deleteUserValueCalls);
+				$this->assertEquals($expected, func_get_args());
+			});
+
+		$invalidateCalls = [
+			['theUserId', 42],
+			['theUserId', 43],
+			['theUserId', 44],
+		];
+		$this->getAutoMock(TokenProvider::class)->expects($this->exactly(3))
+			->method('invalidateTokenById')
+			->willReturnCallback(function () use (&$invalidateCalls): void {
+				$expected = array_shift($invalidateCalls);
+				$this->assertEquals($expected, func_get_args());
+			});
+
+		$this->manager->clearTwoFactorPending('theUserId');
+	}
+
+	public function testClearTwoFactorPendingTokenDoesNotExist() {
+		$this->getAutoMock(IConfig::class)->method('getUserKeys')
+			->with('theUserId', 'login_token_2fa')
+			->willReturn([
+				'42', '43', '44'
+			]);
+
+		$deleteUserValueCalls = [
+			['theUserId', 'login_token_2fa', '42'],
+			['theUserId', 'login_token_2fa', '43'],
+			['theUserId', 'login_token_2fa', '44'],
+		];
+		$this->getAutoMock(IConfig::class)->expects($this->exactly(3))
+			->method('deleteUserValue')
+			->willReturnCallback(function () use (&$deleteUserValueCalls): void {
+				$expected = array_shift($deleteUserValueCalls);
+				$this->assertEquals($expected, func_get_args());
+			});
+
+		$invalidateCalls = [
+			['theUserId', 42],
+			['theUserId', 43],
+			['theUserId', 44],
+		];
+		$this->getAutoMock(TokenProvider::class)->expects($this->exactly(3))
+			->method('invalidateTokenById')
+			->willReturnCallback(function ($user, $tokenId) use (&$invalidateCalls): void {
+				$expected = array_shift($invalidateCalls);
+				$this->assertEquals($expected, func_get_args());
+				if ($tokenId === 43) {
+					throw new DoesNotExistException('token does not exist');
+				}
+			});
+
+		$this->manager->clearTwoFactorPending('theUserId');
 	}
 }

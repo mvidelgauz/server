@@ -3,63 +3,37 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2016 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\TwoFactorBackupCodes\Tests\Db;
 
 use OCA\TwoFactorBackupCodes\Db\BackupCode;
 use OCA\TwoFactorBackupCodes\Db\BackupCodeMapper;
 use OCP\IDBConnection;
 use OCP\IUser;
+use OCP\Server;
 use Test\TestCase;
 
-/**
- * @group DB
- */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class BackupCodeMapperTest extends TestCase {
-
-	/** @var IDBConnection */
-	private $db;
-
-	/** @var BackupCodeMapper */
-	private $mapper;
-
-	/** @var string */
-	private $testUID = 'test123456';
+	private IDBConnection $db;
+	private BackupCodeMapper $mapper;
+	private string $testUID = 'test123456';
 
 	private function resetDB() {
 		$qb = $this->db->getQueryBuilder();
 		$qb->delete($this->mapper->getTableName())
 			->where($qb->expr()->eq('user_id', $qb->createNamedParameter($this->testUID)));
-		$qb->execute();
+		$qb->executeStatement();
 	}
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->db = \OC::$server->getDatabaseConnection();
-		$this->mapper = \OC::$server->query(BackupCodeMapper::class);
+		$this->db = Server::get(IDBConnection::class);
+		$this->mapper = Server::get(BackupCodeMapper::class);
 
 		$this->resetDB();
 	}
@@ -70,16 +44,16 @@ class BackupCodeMapperTest extends TestCase {
 		$this->resetDB();
 	}
 
-	public function testGetBackupCodes() {
+	public function testGetBackupCodes(): void {
 		$code1 = new BackupCode();
-		$code1->setUserId($this->testUID);
-		$code1->setCode('1|$2y$10$Fyo.DkMtkaHapVvRVbQBeeIdi5x/6nmPnxiBzD0GDKa08NMus5xze');
-		$code1->setUsed(1);
+		$code1->userId = $this->testUID;
+		$code1->code = '1|$2y$10$Fyo.DkMtkaHapVvRVbQBeeIdi5x/6nmPnxiBzD0GDKa08NMus5xze';
+		$code1->used = 1;
 
 		$code2 = new BackupCode();
-		$code2->setUserId($this->testUID);
-		$code2->setCode('1|$2y$10$nj3sZaCqGN8t6.SsnNADt.eX34UCkdX6FPx.r.rIwE6Jj3vi5wyt2');
-		$code2->setUsed(0);
+		$code2->userId = $this->testUID;
+		$code2->code = '1|$2y$10$nj3sZaCqGN8t6.SsnNADt.eX34UCkdX6FPx.r.rIwE6Jj3vi5wyt2';
+		$code2->used = 0;
 
 		$this->mapper->insert($code1);
 		$this->mapper->insert($code2);
@@ -89,18 +63,18 @@ class BackupCodeMapperTest extends TestCase {
 			->method('getUID')
 			->willReturn($this->testUID);
 
-		$dbCodes = $this->mapper->getBackupCodes($user);
+		$dbCodes = iterator_to_array($this->mapper->findByUser($user));
 
 		$this->assertCount(2, $dbCodes);
 		$this->assertInstanceOf(BackupCode::class, $dbCodes[0]);
 		$this->assertInstanceOf(BackupCode::class, $dbCodes[1]);
 	}
 
-	public function testDeleteCodes() {
+	public function testDeleteCodes(): void {
 		$code = new BackupCode();
-		$code->setUserId($this->testUID);
-		$code->setCode('1|$2y$10$CagG8pEhZL.xDirtCCP/KuuWtnsAasgq60zY9rU46dBK4w8yW0Z/y');
-		$code->setUsed(1);
+		$code->userId = $this->testUID;
+		$code->code = '1|$2y$10$CagG8pEhZL.xDirtCCP/KuuWtnsAasgq60zY9rU46dBK4w8yW0Z/y';
+		$code->used = 1;
 		$user = $this->getMockBuilder(IUser::class)->getMock();
 		$user->expects($this->any())
 			->method('getUID')
@@ -108,24 +82,24 @@ class BackupCodeMapperTest extends TestCase {
 
 		$this->mapper->insert($code);
 
-		$this->assertCount(1, $this->mapper->getBackupCodes($user));
+		$this->assertCount(1, iterator_to_array($this->mapper->findByUser($user)));
 
-		$this->mapper->deleteCodes($user);
+		$this->mapper->deleteByUser($user);
 
-		$this->assertCount(0, $this->mapper->getBackupCodes($user));
+		$this->assertCount(0, iterator_to_array($this->mapper->findByUser($user)));
 	}
 
-	public function testInsertArgonEncryptedCodes() {
+	public function testInsertArgonEncryptedCodes(): void {
 		$code = new BackupCode();
-		$code->setUserId($this->testUID);
-		$code->setCode('2|$argon2i$v=19$m=1024,t=2,p=2$MjJWUjRFWndtMm5BWGxOag$BusVxLeFyiLLWtaVvX/JRFBiPdZcjRrzpQ/rAhn6vqY');
-		$code->setUsed(1);
+		$code->userId = $this->testUID;
+		$code->code = '2|$argon2i$v=19$m=1024,t=2,p=2$MjJWUjRFWndtMm5BWGxOag$BusVxLeFyiLLWtaVvX/JRFBiPdZcjRrzpQ/rAhn6vqY';
+		$code->used = 1;
 		$user = $this->getMockBuilder(IUser::class)->getMock();
 		$user->expects($this->any())
 			->method('getUID')
 			->willReturn($this->testUID);
 
 		$this->mapper->insert($code);
-		$this->assertCount(1, $this->mapper->getBackupCodes($user));
+		$this->assertCount(1, iterator_to_array($this->mapper->findByUser($user)));
 	}
 }

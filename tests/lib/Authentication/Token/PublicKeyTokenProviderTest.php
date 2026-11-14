@@ -1,93 +1,100 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2018 Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Authentication\Token;
 
 use OC\Authentication\Exceptions\ExpiredTokenException;
 use OC\Authentication\Exceptions\InvalidTokenException;
-use OC\Authentication\Token\DefaultToken;
-use OC\Authentication\Token\IToken;
+use OC\Authentication\Exceptions\PasswordlessTokenException;
 use OC\Authentication\Token\PublicKeyToken;
 use OC\Authentication\Token\PublicKeyTokenMapper;
 use OC\Authentication\Token\PublicKeyTokenProvider;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\Authentication\Token\IToken;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\ICacheFactory;
 use OCP\IConfig;
+use OCP\IDBConnection;
 use OCP\Security\ICrypto;
+use OCP\Security\IHasher;
+use OCP\Server;
+use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Log\LoggerInterface;
 use Test\TestCase;
 
 class PublicKeyTokenProviderTest extends TestCase {
+	private PublicKeyTokenProvider $tokenProvider;
 
-	/** @var PublicKeyTokenProvider|\PHPUnit\Framework\MockObject\MockObject */
-	private $tokenProvider;
-	/** @var PublicKeyTokenMapper|\PHPUnit\Framework\MockObject\MockObject */
-	private $mapper;
-	/** @var ICrypto */
-	private $crypto;
-	/** @var IConfig|\PHPUnit\Framework\MockObject\MockObject */
-	private $config;
-	/** @var LoggerInterface|\PHPUnit\Framework\MockObject\MockObject */
-	private $logger;
-	/** @var ITimeFactory|\PHPUnit\Framework\MockObject\MockObject */
-	private $timeFactory;
-	/** @var int */
-	private $time;
+	private PublicKeyTokenMapper&MockObject $mapper;
+	private IConfig&MockObject $config;
+	private IDBConnection&MockObject $db;
+	private LoggerInterface&MockObject $logger;
+	private ITimeFactory&MockObject $timeFactory;
+	private ICacheFactory&MockObject $cacheFactory;
 
+	private int $time;
+	private IHasher $hasher;
+	private ICrypto $crypto;
+	private IEventDispatcher $eventDispatcher;
+
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
 		$this->mapper = $this->createMock(PublicKeyTokenMapper::class);
-		$this->crypto = \OC::$server->getCrypto();
 		$this->config = $this->createMock(IConfig::class);
 		$this->config->method('getSystemValue')
 			->willReturnMap([
-				['session_lifetime', 60 * 60 * 24, 150],
-				['remember_login_cookie_lifetime', 60 * 60 * 24 * 15, 300],
-				['secret', '', '1f4h9s'],
 				['openssl', [], []],
 			]);
+		$this->config->method('getSystemValueString')
+			->willReturnMap([
+				['secret', '', '1f4h9s'],
+			]);
+		$this->db = $this->createMock(IDBConnection::class);
 		$this->logger = $this->createMock(LoggerInterface::class);
 		$this->timeFactory = $this->createMock(ITimeFactory::class);
 		$this->time = 1313131;
 		$this->timeFactory->method('getTime')
 			->willReturn($this->time);
+		$this->cacheFactory = $this->createMock(ICacheFactory::class);
 
-		$this->tokenProvider = new PublicKeyTokenProvider($this->mapper, $this->crypto, $this->config, $this->logger,
-			$this->timeFactory);
+		$this->hasher = Server::get(IHasher::class);
+		$this->crypto = Server::get(ICrypto::class);
+		$this->eventDispatcher = Server::get(IEventDispatcher::class);
+
+		$this->tokenProvider = new PublicKeyTokenProvider(
+			$this->mapper,
+			$this->crypto,
+			$this->config,
+			$this->db,
+			$this->logger,
+			$this->timeFactory,
+			$this->hasher,
+			$this->cacheFactory,
+			$this->eventDispatcher,
+		);
 	}
 
-	public function testGenerateToken() {
-		$token = 'token';
+	public function testGenerateToken(): void {
+		$token = 'tokentokentokentokentoken';
 		$uid = 'user';
 		$user = 'User';
 		$password = 'passme';
-		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
 		$type = IToken::PERMANENT_TOKEN;
 
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, true],
+			]);
 		$actual = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
 
 		$this->assertInstanceOf(PublicKeyToken::class, $actual);
@@ -98,35 +105,106 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->assertSame($password, $this->tokenProvider->getPassword($actual, $token));
 	}
 
-	public function testUpdateToken() {
+	public function testGenerateTokenNoPassword(): void {
+		$token = 'tokentokentokentokentoken';
+		$uid = 'user';
+		$user = 'User';
+		$password = 'passme';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$type = IToken::PERMANENT_TOKEN;
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, false],
+			]);
+		$this->expectException(PasswordlessTokenException::class);
+
+		$actual = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
+
+		$this->assertInstanceOf(PublicKeyToken::class, $actual);
+		$this->assertSame($uid, $actual->getUID());
+		$this->assertSame($user, $actual->getLoginName());
+		$this->assertSame($name, $actual->getName());
+		$this->assertSame(IToken::DO_NOT_REMEMBER, $actual->getRemember());
+		$this->tokenProvider->getPassword($actual, $token);
+	}
+
+	public function testGenerateTokenLongPassword(): void {
+		$token = 'tokentokentokentokentoken';
+		$uid = 'user';
+		$user = 'User';
+		$password = '';
+		for ($i = 0; $i < 500; $i++) {
+			$password .= 'e';
+		}
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$type = IToken::PERMANENT_TOKEN;
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, true],
+			]);
+		$this->expectException(\RuntimeException::class);
+
+		$actual = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
+	}
+
+	public function testGenerateTokenInvalidName(): void {
+		$token = 'tokentokentokentokentoken';
+		$uid = 'user';
+		$user = 'User';
+		$password = 'passme';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
+			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
+			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
+			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$type = IToken::PERMANENT_TOKEN;
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, true],
+			]);
+
+		$actual = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
+
+		$this->assertInstanceOf(PublicKeyToken::class, $actual);
+		$this->assertSame($uid, $actual->getUID());
+		$this->assertSame($user, $actual->getLoginName());
+		$this->assertSame('User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12User-Agent: Mozill…', $actual->getName());
+		$this->assertSame(IToken::DO_NOT_REMEMBER, $actual->getRemember());
+		$this->assertSame($password, $this->tokenProvider->getPassword($actual, $token));
+	}
+
+	public function testUpdateToken(): void {
 		$tk = new PublicKeyToken();
-		$tk->setLastActivity($this->time - 200);
 		$this->mapper->expects($this->once())
-			->method('update')
-			->with($tk);
+			->method('updateActivity')
+			->with($tk, $this->time);
+		$tk->setLastActivity($this->time - 200);
+		$tk->setToken('token');
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, true],
+			]);
 
 		$this->tokenProvider->updateTokenActivity($tk);
 
 		$this->assertEquals($this->time, $tk->getLastActivity());
 	}
 
-	public function testUpdateTokenDebounce() {
+	public function testUpdateTokenDebounce(): void {
 		$tk = new PublicKeyToken();
-
 		$this->config->method('getSystemValueInt')
 			->willReturnCallback(function ($value, $default) {
 				return $default;
 			});
-
 		$tk->setLastActivity($this->time - 30);
+
 		$this->mapper->expects($this->never())
-			->method('update')
-			->with($tk);
+			->method('updateActivity')
+			->with($tk, $this->time);
 
 		$this->tokenProvider->updateTokenActivity($tk);
 	}
 
-	public function testGetTokenByUser() {
+	public function testGetTokenByUser(): void {
 		$this->mapper->expects($this->once())
 			->method('getTokenByUser')
 			->with('uid')
@@ -135,25 +213,25 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->assertEquals(['token'], $this->tokenProvider->getTokenByUser('uid'));
 	}
 
-	public function testGetPassword() {
-		$token = 'token';
+	public function testGetPassword(): void {
+		$token = 'tokentokentokentokentoken';
 		$uid = 'user';
 		$user = 'User';
 		$password = 'passme';
-		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
 		$type = IToken::PERMANENT_TOKEN;
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, true],
+			]);
 
 		$actual = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
 
 		$this->assertSame($password, $this->tokenProvider->getPassword($actual, $token));
 	}
 
-
-	public function testGetPasswordPasswordLessToken() {
-		$this->expectException(\OC\Authentication\Exceptions\PasswordlessTokenException::class);
+	public function testGetPasswordPasswordLessToken(): void {
+		$this->expectException(PasswordlessTokenException::class);
 
 		$token = 'token1234';
 		$tk = new PublicKeyToken();
@@ -162,35 +240,36 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->tokenProvider->getPassword($tk, $token);
 	}
 
+	public function testGetPasswordInvalidToken(): void {
+		$this->expectException(InvalidTokenException::class);
 
-	public function testGetPasswordInvalidToken() {
-		$this->expectException(\OC\Authentication\Exceptions\InvalidTokenException::class);
-
-		$token = 'token';
+		$token = 'tokentokentokentokentoken';
 		$uid = 'user';
 		$user = 'User';
 		$password = 'passme';
-		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
 		$type = IToken::PERMANENT_TOKEN;
 
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, true],
+			]);
 		$actual = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
 
 		$this->tokenProvider->getPassword($actual, 'wrongtoken');
 	}
 
-	public function testSetPassword() {
-		$token = 'token';
+	public function testSetPassword(): void {
+		$token = 'tokentokentokentokentoken';
 		$uid = 'user';
 		$user = 'User';
 		$password = 'passme';
-		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
 		$type = IToken::PERMANENT_TOKEN;
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, true],
+			]);
 
 		$actual = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
 
@@ -202,18 +281,16 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->mapper->expects($this->once())
 			->method('update')
 			->with($this->callback(function ($token) use ($newpass) {
-				return $newpass === $this->tokenProvider->getPassword($token, 'token');
+				return $newpass === $this->tokenProvider->getPassword($token, 'tokentokentokentokentoken');
 			}));
-
 
 		$this->tokenProvider->setPassword($actual, $token, $newpass);
 
-		$this->assertSame($newpass, $this->tokenProvider->getPassword($actual, 'token'));
+		$this->assertSame($newpass, $this->tokenProvider->getPassword($actual, 'tokentokentokentokentoken'));
 	}
 
-
-	public function testSetPasswordInvalidToken() {
-		$this->expectException(\OC\Authentication\Exceptions\InvalidTokenException::class);
+	public function testSetPasswordInvalidToken(): void {
+		$this->expectException(InvalidTokenException::class);
 
 		$token = $this->createMock(IToken::class);
 		$tokenId = 'token123';
@@ -222,124 +299,150 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->tokenProvider->setPassword($token, $tokenId, $password);
 	}
 
-	public function testInvalidateToken() {
-		$this->mapper->expects($this->once())
+	public function testInvalidateToken(): void {
+		$calls = [
+			[hash('sha512', 'token7' . '1f4h9s')],
+			[hash('sha512', 'token7')]
+		];
+
+		$this->mapper->expects($this->exactly(2))
 			->method('invalidate')
-			->with(hash('sha512', 'token7'.'1f4h9s'));
+			->willReturnCallback(function () use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, func_get_args());
+			});
 
 		$this->tokenProvider->invalidateToken('token7');
 	}
 
-	public function testInvaildateTokenById() {
+	public function testInvalidateTokenById(): void {
 		$id = 123;
 
 		$this->mapper->expects($this->once())
-			->method('deleteById')
-			->with('uid', $id);
+			->method('getTokenById')
+			->with($id);
 
 		$this->tokenProvider->invalidateTokenById('uid', $id);
 	}
 
-	public function testInvalidateOldTokens() {
+	public function testInvalidateOldTokens(): void {
 		$defaultSessionLifetime = 60 * 60 * 24;
 		$defaultRememberMeLifetime = 60 * 60 * 24 * 15;
-		$this->config->expects($this->exactly(2))
-			->method('getSystemValue')
+		$wipeTokenLifetime = 60 * 60 * 24 * 60;
+		$this->config->expects($this->exactly(4))
+			->method('getSystemValueInt')
 			->willReturnMap([
 				['session_lifetime', $defaultSessionLifetime, 150],
 				['remember_login_cookie_lifetime', $defaultRememberMeLifetime, 300],
+				['token_auth_wipe_token_retention', $wipeTokenLifetime, 500],
+				['token_auth_token_retention', 60 * 60 * 24 * 365, 800],
 			]);
-		$this->mapper->expects($this->at(0))
+
+		$calls = [
+			[$this->time - 150, IToken::TEMPORARY_TOKEN, IToken::DO_NOT_REMEMBER],
+			[$this->time - 300, IToken::TEMPORARY_TOKEN, IToken::REMEMBER],
+			[$this->time - 500, IToken::WIPE_TOKEN, null],
+			[$this->time - 800, IToken::PERMANENT_TOKEN, null],
+		];
+		$this->mapper->expects($this->exactly(4))
 			->method('invalidateOld')
-			->with($this->time - 150);
-		$this->mapper->expects($this->at(1))
-			->method('invalidateOld')
-			->with($this->time - 300);
+			->willReturnCallback(function () use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, func_get_args());
+			});
 
 		$this->tokenProvider->invalidateOldTokens();
 	}
 
-	public function testRenewSessionTokenWithoutPassword() {
-		$token = 'oldId';
+	public function testInvalidateLastUsedBefore(): void {
+		$this->mapper->expects($this->once())
+			->method('invalidateLastUsedBefore')
+			->with('user', 946684800);
+
+		$this->tokenProvider->invalidateLastUsedBefore('user', 946684800);
+	}
+
+	public function testRenewSessionTokenWithoutPassword(): void {
+		$token = 'oldIdtokentokentokentoken';
 		$uid = 'user';
 		$user = 'User';
 		$password = null;
-		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
 		$type = IToken::PERMANENT_TOKEN;
 
 		$oldToken = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
 
 		$this->mapper
-			->expects($this->at(0))
+			->expects($this->once())
 			->method('getToken')
-			->with(hash('sha512', 'oldId' . '1f4h9s'))
+			->with(hash('sha512', 'oldIdtokentokentokentoken' . '1f4h9s'))
 			->willReturn($oldToken);
 		$this->mapper
-			->expects($this->at(1))
+			->expects($this->once())
 			->method('insert')
 			->with($this->callback(function (PublicKeyToken $token) use ($user, $uid, $name) {
-				return $token->getUID() === $uid &&
-					$token->getLoginName() === $user &&
-					$token->getName() === $name &&
-					$token->getType() === IToken::DO_NOT_REMEMBER &&
-					$token->getLastActivity() === $this->time &&
-					$token->getPassword() === null;
+				return $token->getUID() === $uid
+					&& $token->getLoginName() === $user
+					&& $token->getName() === $name
+					&& $token->getType() === IToken::DO_NOT_REMEMBER
+					&& $token->getLastActivity() === $this->time
+					&& $token->getPassword() === null;
 			}));
 		$this->mapper
-			->expects($this->at(2))
+			->expects($this->once())
 			->method('delete')
 			->with($this->callback(function ($token) use ($oldToken) {
 				return $token === $oldToken;
 			}));
 
-		$this->tokenProvider->renewSessionToken('oldId', 'newId');
+		$this->tokenProvider->renewSessionToken('oldIdtokentokentokentoken', 'newIdtokentokentokentoken');
 	}
 
-	public function testRenewSessionTokenWithPassword() {
-		$token = 'oldId';
+	public function testRenewSessionTokenWithPassword(): void {
+		$token = 'oldIdtokentokentokentoken';
 		$uid = 'user';
 		$user = 'User';
 		$password = 'password';
-		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
 		$type = IToken::PERMANENT_TOKEN;
 
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, true],
+			]);
 		$oldToken = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
 
 		$this->mapper
-			->expects($this->at(0))
+			->expects($this->once())
 			->method('getToken')
-			->with(hash('sha512', 'oldId' . '1f4h9s'))
+			->with(hash('sha512', 'oldIdtokentokentokentoken' . '1f4h9s'))
 			->willReturn($oldToken);
 		$this->mapper
-			->expects($this->at(1))
+			->expects($this->once())
 			->method('insert')
-			->with($this->callback(function (PublicKeyToken $token) use ($user, $uid, $name) {
-				return $token->getUID() === $uid &&
-					$token->getLoginName() === $user &&
-					$token->getName() === $name &&
-					$token->getType() === IToken::DO_NOT_REMEMBER &&
-					$token->getLastActivity() === $this->time &&
-					$token->getPassword() !== null &&
-					$this->tokenProvider->getPassword($token, 'newId') === 'password';
+			->with($this->callback(function (PublicKeyToken $token) use ($user, $uid, $name): bool {
+				return $token->getUID() === $uid
+					&& $token->getLoginName() === $user
+					&& $token->getName() === $name
+					&& $token->getType() === IToken::DO_NOT_REMEMBER
+					&& $token->getLastActivity() === $this->time
+					&& $token->getPassword() !== null
+					&& $this->tokenProvider->getPassword($token, 'newIdtokentokentokentoken') === 'password';
 			}));
 		$this->mapper
-			->expects($this->at(2))
+			->expects($this->once())
 			->method('delete')
-			->with($this->callback(function ($token) use ($oldToken) {
+			->with($this->callback(function ($token) use ($oldToken): bool {
 				return $token === $oldToken;
 			}));
 
-		$this->tokenProvider->renewSessionToken('oldId', 'newId');
+		$this->tokenProvider->renewSessionToken('oldIdtokentokentokentoken', 'newIdtokentokentokentoken');
 	}
 
-	public function testGetToken() {
+	public function testGetToken(): void {
 		$token = new PublicKeyToken();
+		$token->setToken('token');
+		$token->setType(IToken::TEMPORARY_TOKEN);
 
 		$this->config->method('getSystemValue')
 			->with('secret')
@@ -348,35 +451,37 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->mapper->method('getToken')
 			->with(
 				$this->callback(function (string $token) {
-					return hash('sha512', 'unhashedToken'.'1f4h9s') === $token;
+					return hash('sha512', 'unhashedTokentokentokentokentoken' . '1f4h9s') === $token;
 				})
 			)->willReturn($token);
 
-		$this->assertSame($token, $this->tokenProvider->getToken('unhashedToken'));
+		$this->assertSame($token, $this->tokenProvider->getToken('unhashedTokentokentokentokentoken'));
 	}
 
-	public function testGetInvalidToken() {
+	public function testGetInvalidToken(): void {
 		$this->expectException(InvalidTokenException::class);
 
-		$this->mapper->method('getToken')
-			->with(
-				$this->callback(function (string $token) {
-					return hash('sha512', 'unhashedToken'.'1f4h9s') === $token;
-				})
-			)->willThrowException(new DoesNotExistException('nope'));
+		$calls = [
+			'unhashedTokentokentokentokentoken' . '1f4h9s',
+			'unhashedTokentokentokentokentoken',
+		];
+		$this->mapper->expects($this->exactly(2))
+			->method('getToken')
+			->willReturnCallback(function (string $token) use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals(hash('sha512', $expected), $token);
+				throw new DoesNotExistException('nope');
+			});
 
-		$this->tokenProvider->getToken('unhashedToken');
+		$this->tokenProvider->getToken('unhashedTokentokentokentokentoken');
 	}
 
-	public function testGetExpiredToken() {
-		$token = 'token';
+	public function testGetExpiredToken(): void {
+		$token = 'tokentokentokentokentoken';
 		$uid = 'user';
 		$user = 'User';
 		$password = 'passme';
-		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
 		$type = IToken::PERMANENT_TOKEN;
 
 		$actual = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
@@ -385,19 +490,19 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->mapper->method('getToken')
 			->with(
 				$this->callback(function (string $token) {
-					return hash('sha512', 'token'.'1f4h9s') === $token;
+					return hash('sha512', 'tokentokentokentokentoken' . '1f4h9s') === $token;
 				})
 			)->willReturn($actual);
 
 		try {
-			$this->tokenProvider->getToken('token');
+			$this->tokenProvider->getToken('tokentokentokentokentoken');
 			$this->fail();
 		} catch (ExpiredTokenException $e) {
 			$this->assertSame($actual, $e->getToken());
 		}
 	}
 
-	public function testGetTokenById() {
+	public function testGetTokenById(): void {
 		$token = $this->createMock(PublicKeyToken::class);
 
 		$this->mapper->expects($this->once())
@@ -408,7 +513,7 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->assertSame($token, $this->tokenProvider->getTokenById(42));
 	}
 
-	public function testGetInvalidTokenById() {
+	public function testGetInvalidTokenById(): void {
 		$this->expectException(InvalidTokenException::class);
 
 		$this->mapper->expects($this->once())
@@ -419,7 +524,7 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->tokenProvider->getTokenById(42);
 	}
 
-	public function testGetExpiredTokenById() {
+	public function testGetExpiredTokenById(): void {
 		$token = new PublicKeyToken();
 		$token->setExpires(42);
 
@@ -436,40 +541,38 @@ class PublicKeyTokenProviderTest extends TestCase {
 		}
 	}
 
-	public function testRotate() {
-		$token = 'oldtoken';
+	public function testRotate(): void {
+		$token = 'oldtokentokentokentokentoken';
 		$uid = 'user';
 		$user = 'User';
 		$password = 'password';
-		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
 		$type = IToken::PERMANENT_TOKEN;
 
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, true],
+			]);
 		$actual = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
 
-		$new = $this->tokenProvider->rotate($actual, 'oldtoken', 'newtoken');
+		$new = $this->tokenProvider->rotate($actual, 'oldtokentokentokentokentoken', 'newtokentokentokentokentoken');
 
-		$this->assertSame('password', $this->tokenProvider->getPassword($new, 'newtoken'));
+		$this->assertSame('password', $this->tokenProvider->getPassword($new, 'newtokentokentokentokentoken'));
 	}
 
-	public function testRotateNoPassword() {
-		$token = 'oldtoken';
+	public function testRotateNoPassword(): void {
+		$token = 'oldtokentokentokentokentoken';
 		$uid = 'user';
 		$user = 'User';
 		$password = null;
-		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12'
-			. 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
+		$name = 'User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.2.12) Gecko/20101026 Firefox/3.6.12';
 		$type = IToken::PERMANENT_TOKEN;
 
 		$actual = $this->tokenProvider->generateToken($token, $uid, $user, $password, $name, $type, IToken::DO_NOT_REMEMBER);
 
 		$oldPrivate = $actual->getPrivateKey();
 
-		$new = $this->tokenProvider->rotate($actual, 'oldtoken', 'newtoken');
+		$new = $this->tokenProvider->rotate($actual, 'oldtokentokentokentokentoken', 'newtokentokentokentokentoken');
 
 		$newPrivate = $new->getPrivateKey();
 
@@ -477,47 +580,19 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->assertNull($new->getPassword());
 	}
 
-	public function testConvertToken() {
-		$defaultToken = new DefaultToken();
-		$defaultToken->setId(42);
-		$defaultToken->setPassword('oldPass');
-		$defaultToken->setExpires(1337);
-		$defaultToken->setToken('oldToken');
-		$defaultToken->setUid('uid');
-		$defaultToken->setLoginName('loginName');
-		$defaultToken->setLastActivity(999);
-		$defaultToken->setName('name');
-		$defaultToken->setRemember(IToken::REMEMBER);
-		$defaultToken->setType(IToken::PERMANENT_TOKEN);
-
-		$this->mapper->expects($this->once())
-			->method('update')
-			->willReturnArgument(0);
-
-		$newToken = $this->tokenProvider->convertToken($defaultToken, 'newToken', 'newPassword');
-
-		$this->assertSame(42, $newToken->getId());
-		$this->assertSame('newPassword', $this->tokenProvider->getPassword($newToken, 'newToken'));
-		$this->assertSame(1337, $newToken->getExpires());
-		$this->assertSame('uid', $newToken->getUID());
-		$this->assertSame('loginName', $newToken->getLoginName());
-		$this->assertSame(1313131, $newToken->getLastActivity());
-		$this->assertSame(1313131, $newToken->getLastCheck());
-		$this->assertSame('name', $newToken->getName());
-		$this->assertSame(IToken::REMEMBER, $newToken->getRemember());
-		$this->assertSame(IToken::PERMANENT_TOKEN, $newToken->getType());
-	}
-
-	public function testMarkPasswordInvalidInvalidToken() {
-		$token = $this->createMock(DefaultToken::class);
+	public function testMarkPasswordInvalidInvalidToken(): void {
+		$token = $this->createMock(IToken::class);
 
 		$this->expectException(InvalidTokenException::class);
 
 		$this->tokenProvider->markPasswordInvalid($token, 'tokenId');
 	}
 
-	public function testMarkPasswordInvalid() {
+	public function testMarkPasswordInvalid(): void {
 		$token = $this->createMock(PublicKeyToken::class);
+		$token->expects($this->once())
+			->method('getToken')
+			->willReturn('token');
 
 		$token->expects($this->once())
 			->method('setPasswordInvalid')
@@ -529,10 +604,10 @@ class PublicKeyTokenProviderTest extends TestCase {
 		$this->tokenProvider->markPasswordInvalid($token, 'tokenId');
 	}
 
-	public function testUpdatePasswords() {
+	public function testUpdatePasswords(): void {
 		$uid = 'myUID';
 		$token1 = $this->tokenProvider->generateToken(
-			'foo',
+			'foobetokentokentokentoken',
 			$uid,
 			$uid,
 			'bar',
@@ -540,13 +615,17 @@ class PublicKeyTokenProviderTest extends TestCase {
 			IToken::PERMANENT_TOKEN,
 			IToken::REMEMBER);
 		$token2 = $this->tokenProvider->generateToken(
-			'foobar',
+			'foobartokentokentokentoken',
 			$uid,
 			$uid,
 			'bar',
 			'random2',
 			IToken::PERMANENT_TOKEN,
 			IToken::REMEMBER);
+		$this->config->method('getSystemValueBool')
+			->willReturnMap([
+				['auth.storeCryptedPassword', true, true],
+			]);
 
 		$this->mapper->method('hasExpiredTokens')
 			->with($uid)

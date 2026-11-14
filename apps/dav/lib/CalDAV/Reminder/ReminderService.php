@@ -3,68 +3,35 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2019, Thomas Citharel
- * @copyright Copyright (c) 2019, Georg Ehrke
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Citharel <nextcloud@tcit.fr>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV\Reminder;
 
 use DateTimeImmutable;
+use DateTimeZone;
 use OCA\DAV\CalDAV\CalDavBackend;
+use OCA\DAV\Connector\Sabre\Principal;
 use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\IConfig;
 use OCP\IGroup;
 use OCP\IGroupManager;
 use OCP\IUser;
 use OCP\IUserManager;
+use Psr\Log\LoggerInterface;
 use Sabre\VObject;
 use Sabre\VObject\Component\VAlarm;
 use Sabre\VObject\Component\VEvent;
 use Sabre\VObject\InvalidDataException;
 use Sabre\VObject\ParseException;
 use Sabre\VObject\Recur\EventIterator;
+use Sabre\VObject\Recur\MaxInstancesExceededException;
 use Sabre\VObject\Recur\NoInstancesException;
+use function count;
 use function strcasecmp;
 
 class ReminderService {
-
-	/** @var Backend */
-	private $backend;
-
-	/** @var NotificationProviderManager */
-	private $notificationProviderManager;
-
-	/** @var IUserManager */
-	private $userManager;
-
-	/** @var IGroupManager */
-	private $groupManager;
-
-	/** @var CalDavBackend */
-	private $caldavBackend;
-
-	/** @var ITimeFactory */
-	private $timeFactory;
 
 	public const REMINDER_TYPE_EMAIL = 'EMAIL';
 	public const REMINDER_TYPE_DISPLAY = 'DISPLAY';
@@ -81,28 +48,17 @@ class ReminderService {
 		self::REMINDER_TYPE_AUDIO
 	];
 
-	/**
-	 * ReminderService constructor.
-	 *
-	 * @param Backend $backend
-	 * @param NotificationProviderManager $notificationProviderManager
-	 * @param IUserManager $userManager
-	 * @param IGroupManager $groupManager
-	 * @param CalDavBackend $caldavBackend
-	 * @param ITimeFactory $timeFactory
-	 */
-	public function __construct(Backend $backend,
-								NotificationProviderManager $notificationProviderManager,
-								IUserManager $userManager,
-								IGroupManager $groupManager,
-								CalDavBackend $caldavBackend,
-								ITimeFactory $timeFactory) {
-		$this->backend = $backend;
-		$this->notificationProviderManager = $notificationProviderManager;
-		$this->userManager = $userManager;
-		$this->groupManager = $groupManager;
-		$this->caldavBackend = $caldavBackend;
-		$this->timeFactory = $timeFactory;
+	public function __construct(
+		private Backend $backend,
+		private NotificationProviderManager $notificationProviderManager,
+		private IUserManager $userManager,
+		private IGroupManager $groupManager,
+		private CalDavBackend $caldavBackend,
+		private ITimeFactory $timeFactory,
+		private IConfig $config,
+		private LoggerInterface $logger,
+		private Principal $principalConnector,
+	) {
 	}
 
 	/**
@@ -111,44 +67,100 @@ class ReminderService {
 	 * @throws NotificationProvider\ProviderNotAvailableException
 	 * @throws NotificationTypeDoesNotExistException
 	 */
-	public function processReminders():void {
+	public function processReminders() :void {
 		$reminders = $this->backend->getRemindersToProcess();
+		$this->logger->debug('{numReminders} reminders to process', [
+			'numReminders' => count($reminders),
+		]);
 
 		foreach ($reminders as $reminder) {
 			$calendarData = is_resource($reminder['calendardata'])
 				? stream_get_contents($reminder['calendardata'])
 				: $reminder['calendardata'];
 
+			if (!$calendarData) {
+				continue;
+			}
+
 			$vcalendar = $this->parseCalendarData($calendarData);
 			if (!$vcalendar) {
+				$this->logger->debug('Reminder {id} does not belong to a valid calendar', [
+					'id' => $reminder['id'],
+				]);
 				$this->backend->removeReminder($reminder['id']);
 				continue;
 			}
 
-			$vevent = $this->getVEventByRecurrenceId($vcalendar, $reminder['recurrence_id'], $reminder['is_recurrence_exception']);
+			try {
+				$vevent = $this->getVEventByRecurrenceId($vcalendar, $reminder['recurrence_id'], $reminder['is_recurrence_exception']);
+			} catch (MaxInstancesExceededException $e) {
+				$this->logger->debug('Recurrence with too many instances detected, skipping VEVENT', ['exception' => $e]);
+				$this->backend->removeReminder($reminder['id']);
+				continue;
+			}
+
 			if (!$vevent) {
+				$this->logger->debug('Reminder {id} does not belong to a valid event', [
+					'id' => $reminder['id'],
+				]);
 				$this->backend->removeReminder($reminder['id']);
 				continue;
 			}
 
 			if ($this->wasEventCancelled($vevent)) {
+				$this->logger->debug('Reminder {id} belongs to a cancelled event', [
+					'id' => $reminder['id'],
+				]);
 				$this->deleteOrProcessNext($reminder, $vevent);
 				continue;
 			}
 
 			if (!$this->notificationProviderManager->hasProvider($reminder['type'])) {
+				$this->logger->debug('Reminder {id} does not belong to a valid notification provider', [
+					'id' => $reminder['id'],
+				]);
 				$this->deleteOrProcessNext($reminder, $vevent);
 				continue;
 			}
 
-			$users = $this->getAllUsersWithWriteAccessToCalendar($reminder['calendar_id']);
-			$user = $this->getUserFromPrincipalURI($reminder['principaluri']);
-			if ($user) {
-				$users[] = $user;
+			if ($this->config->getAppValue('dav', 'sendEventRemindersToSharedUsers', 'yes') === 'yes') {
+				$users = $this->getAllUsersWithWriteAccessToCalendar($reminder['calendar_id']);
+			} else {
+				$users = [];
 			}
 
+			$ownerUser = $this->getUserFromPrincipalURI($reminder['principaluri']);
+			if ($ownerUser !== null) {
+				$users[] = $ownerUser;
+			}
+
+			// Filter out any users who have muted reminders for this calendar
+			$users = array_values(array_filter($users, function (IUser $u) use ($reminder): bool {
+				$principalUri = 'principals/users/' . $u->getUID();
+				return !$this->backend->isReminderMutedForPrincipal($reminder, $principalUri);
+			}));
+
+			if (count($users) === 0) {
+				$this->logger->debug('Reminder {id} is ignored by all recipient users for calendar {calendarId}', [
+					'id' => $reminder['id'],
+					'calendarId' => $reminder['calendar_id'],
+				]);
+				$this->deleteOrProcessNext($reminder, $vevent);
+				continue;
+			}
+
+			$userPrincipalEmailAddresses = [];
+			$userPrincipal = $this->principalConnector->getPrincipalByPath($reminder['principaluri']);
+			if ($userPrincipal) {
+				$userPrincipalEmailAddresses = $this->principalConnector->getEmailAddressesOfPrincipal($userPrincipal);
+			}
+
+			$this->logger->debug('Reminder {id} will be sent to {numUsers} users', [
+				'id' => $reminder['id'],
+				'numUsers' => count($users),
+			]);
 			$notificationProvider = $this->notificationProviderManager->getProvider($reminder['type']);
-			$notificationProvider->send($vevent, $reminder['displayname'], $users);
+			$notificationProvider->send($vevent, $reminder['displayname'], $userPrincipalEmailAddresses, $users);
 
 			$this->deleteOrProcessNext($reminder, $vevent);
 		}
@@ -168,18 +180,22 @@ class ReminderService {
 			? stream_get_contents($objectData['calendardata'])
 			: $objectData['calendardata'];
 
-		/** @var VObject\Component\VCalendar $vcalendar */
+		if (!$calendarData) {
+			return;
+		}
+
 		$vcalendar = $this->parseCalendarData($calendarData);
 		if (!$vcalendar) {
 			return;
 		}
+		$calendarTimeZone = $this->getCalendarTimeZone((int)$objectData['calendarid']);
 
 		$vevents = $this->getAllVEventsFromVCalendar($vcalendar);
 		if (count($vevents) === 0) {
 			return;
 		}
 
-		$uid = (string) $vevents[0]->UID;
+		$uid = (string)$vevents[0]->UID;
 		$recurrenceExceptions = $this->getRecurrenceExceptionFromListOfVEvents($vevents);
 		$masterItem = $this->getMasterItemFromListOfVEvents($vevents);
 		$now = $this->timeFactory->getDateTime();
@@ -201,7 +217,7 @@ class ReminderService {
 					continue;
 				}
 
-				$alarms = $this->getRemindersForVAlarm($valarm, $objectData,
+				$alarms = $this->getRemindersForVAlarm($valarm, $objectData, $calendarTimeZone,
 					$eventHash, $alarmHash, true, true);
 				$this->writeRemindersToDatabase($alarms);
 			}
@@ -227,6 +243,10 @@ class ReminderService {
 				// instance. We are skipping this event from the output
 				// entirely.
 				return;
+			} catch (MaxInstancesExceededException $e) {
+				// The event has more than 3500 recurring-instances
+				// so we can ignore it
+				return;
 			}
 
 			while ($iterator->valid() && count($processedAlarms) < count($masterAlarms)) {
@@ -245,7 +265,7 @@ class ReminderService {
 						continue;
 					}
 
-					if (!\in_array((string) $valarm->ACTION, self::REMINDER_TYPES, true)) {
+					if (!\in_array((string)$valarm->ACTION, self::REMINDER_TYPES, true)) {
 						// Action allows x-name, we don't insert reminders
 						// into the database if they are not standard
 						$processedAlarms[] = $alarmHash;
@@ -254,6 +274,16 @@ class ReminderService {
 
 					try {
 						$triggerTime = $valarm->getEffectiveTriggerTime();
+						/**
+						 * @psalm-suppress DocblockTypeContradiction
+						 *   https://github.com/vimeo/psalm/issues/9244
+						 */
+						if ($triggerTime->getTimezone() === false || $triggerTime->getTimezone()->getName() === 'UTC') {
+							$triggerTime = new DateTimeImmutable(
+								$triggerTime->format('Y-m-d H:i:s'),
+								$calendarTimeZone
+							);
+						}
 					} catch (InvalidDataException $e) {
 						continue;
 					}
@@ -272,7 +302,7 @@ class ReminderService {
 						continue;
 					}
 
-					$alarms = $this->getRemindersForVAlarm($valarm, $objectData, $masterHash, $alarmHash, $isRecurring, false);
+					$alarms = $this->getRemindersForVAlarm($valarm, $objectData, $calendarTimeZone, $masterHash, $alarmHash, $isRecurring, false);
 					$this->writeRemindersToDatabase($alarms);
 					$processedAlarms[] = $alarmHash;
 				}
@@ -305,12 +335,13 @@ class ReminderService {
 			return;
 		}
 
-		$this->backend->cleanRemindersForEvent((int) $objectData['id']);
+		$this->backend->cleanRemindersForEvent((int)$objectData['id']);
 	}
 
 	/**
 	 * @param VAlarm $valarm
 	 * @param array $objectData
+	 * @param DateTimeZone $calendarTimeZone
 	 * @param string|null $eventHash
 	 * @param string|null $alarmHash
 	 * @param bool $isRecurring
@@ -318,11 +349,12 @@ class ReminderService {
 	 * @return array
 	 */
 	private function getRemindersForVAlarm(VAlarm $valarm,
-										   array $objectData,
-										   string $eventHash = null,
-										   string $alarmHash = null,
-										   bool $isRecurring = false,
-										   bool $isRecurrenceException = false):array {
+		array $objectData,
+		DateTimeZone $calendarTimeZone,
+		?string $eventHash = null,
+		?string $alarmHash = null,
+		bool $isRecurring = false,
+		bool $isRecurrenceException = false):array {
 		if ($eventHash === null) {
 			$eventHash = $this->getEventHash($valarm->parent);
 		}
@@ -334,6 +366,16 @@ class ReminderService {
 		$isRelative = $this->isAlarmRelative($valarm);
 		/** @var DateTimeImmutable $notificationDate */
 		$notificationDate = $valarm->getEffectiveTriggerTime();
+		/**
+		 * @psalm-suppress DocblockTypeContradiction
+		 *   https://github.com/vimeo/psalm/issues/9244
+		 */
+		if ($notificationDate->getTimezone() === false || $notificationDate->getTimezone()->getName() === 'UTC') {
+			$notificationDate = new DateTimeImmutable(
+				$notificationDate->format('Y-m-d H:i:s'),
+				$calendarTimeZone
+			);
+		}
 		$clonedNotificationDate = new \DateTime('now', $notificationDate->getTimezone());
 		$clonedNotificationDate->setTimestamp($notificationDate->getTimestamp());
 
@@ -342,19 +384,19 @@ class ReminderService {
 		$alarms[] = [
 			'calendar_id' => $objectData['calendarid'],
 			'object_id' => $objectData['id'],
-			'uid' => (string) $valarm->parent->UID,
+			'uid' => (string)$valarm->parent->UID,
 			'is_recurring' => $isRecurring,
 			'recurrence_id' => $recurrenceId,
 			'is_recurrence_exception' => $isRecurrenceException,
 			'event_hash' => $eventHash,
 			'alarm_hash' => $alarmHash,
-			'type' => (string) $valarm->ACTION,
+			'type' => (string)$valarm->ACTION,
 			'is_relative' => $isRelative,
 			'notification_date' => $notificationDate->getTimestamp(),
 			'is_repeat_based' => false,
 		];
 
-		$repeat = isset($valarm->REPEAT) ? (int) $valarm->REPEAT->getValue() : 0;
+		$repeat = isset($valarm->REPEAT) ? (int)$valarm->REPEAT->getValue() : 0;
 		for ($i = 0; $i < $repeat; $i++) {
 			if ($valarm->DURATION === null) {
 				continue;
@@ -364,13 +406,13 @@ class ReminderService {
 			$alarms[] = [
 				'calendar_id' => $objectData['calendarid'],
 				'object_id' => $objectData['id'],
-				'uid' => (string) $valarm->parent->UID,
+				'uid' => (string)$valarm->parent->UID,
 				'is_recurring' => $isRecurring,
 				'recurrence_id' => $recurrenceId,
 				'is_recurrence_exception' => $isRecurrenceException,
 				'event_hash' => $eventHash,
 				'alarm_hash' => $alarmHash,
-				'type' => (string) $valarm->ACTION,
+				'type' => (string)$valarm->ACTION,
 				'is_relative' => $isRelative,
 				'notification_date' => $clonedNotificationDate->getTimestamp(),
 				'is_repeat_based' => true,
@@ -384,19 +426,26 @@ class ReminderService {
 	 * @param array $reminders
 	 */
 	private function writeRemindersToDatabase(array $reminders): void {
+		$uniqueReminders = [];
 		foreach ($reminders as $reminder) {
+			$key = $reminder['notification_date'] . $reminder['event_hash'] . $reminder['type'];
+			if (!isset($uniqueReminders[$key])) {
+				$uniqueReminders[$key] = $reminder;
+			}
+		}
+		foreach (array_values($uniqueReminders) as $reminder) {
 			$this->backend->insertReminder(
-				(int) $reminder['calendar_id'],
-				(int) $reminder['object_id'],
+				(int)$reminder['calendar_id'],
+				(int)$reminder['object_id'],
 				$reminder['uid'],
 				$reminder['is_recurring'],
-				(int) $reminder['recurrence_id'],
+				(int)$reminder['recurrence_id'],
 				$reminder['is_recurrence_exception'],
 				$reminder['event_hash'],
 				$reminder['alarm_hash'],
 				$reminder['type'],
 				$reminder['is_relative'],
-				(int) $reminder['notification_date'],
+				(int)$reminder['notification_date'],
 				$reminder['is_repeat_based']
 			);
 		}
@@ -407,11 +456,11 @@ class ReminderService {
 	 * @param VEvent $vevent
 	 */
 	private function deleteOrProcessNext(array $reminder,
-										 VObject\Component\VEvent $vevent):void {
-		if ($reminder['is_repeat_based'] ||
-			!$reminder['is_recurring'] ||
-			!$reminder['is_relative'] ||
-			$reminder['is_recurrence_exception']) {
+		VObject\Component\VEvent $vevent):void {
+		if ($reminder['is_repeat_based']
+			|| !$reminder['is_recurring']
+			|| !$reminder['is_relative']
+			|| $reminder['is_recurrence_exception']) {
 			$this->backend->removeReminder($reminder['id']);
 			return;
 		}
@@ -419,6 +468,7 @@ class ReminderService {
 		$vevents = $this->getAllVEventsFromVCalendar($vevent->parent);
 		$recurrenceExceptions = $this->getRecurrenceExceptionFromListOfVEvents($vevents);
 		$now = $this->timeFactory->getDateTime();
+		$calendarTimeZone = $this->getCalendarTimeZone((int)$reminder['calendar_id']);
 
 		try {
 			$iterator = new EventIterator($vevents, $reminder['uid']);
@@ -429,49 +479,54 @@ class ReminderService {
 			return;
 		}
 
-		while ($iterator->valid()) {
-			$event = $iterator->getEventObject();
+		try {
+			while ($iterator->valid()) {
+				$event = $iterator->getEventObject();
 
-			// Recurrence-exceptions are handled separately, so just ignore them here
-			if (\in_array($event, $recurrenceExceptions, true)) {
-				$iterator->next();
-				continue;
-			}
-
-			$recurrenceId = $this->getEffectiveRecurrenceIdOfVEvent($event);
-			if ($reminder['recurrence_id'] >= $recurrenceId) {
-				$iterator->next();
-				continue;
-			}
-
-			foreach ($event->VALARM as $valarm) {
-				/** @var VAlarm $valarm */
-				$alarmHash = $this->getAlarmHash($valarm);
-				if ($alarmHash !== $reminder['alarm_hash']) {
+				// Recurrence-exceptions are handled separately, so just ignore them here
+				if (\in_array($event, $recurrenceExceptions, true)) {
+					$iterator->next();
 					continue;
 				}
 
-				$triggerTime = $valarm->getEffectiveTriggerTime();
-
-				// If effective trigger time is in the past
-				// just skip and generate for next event
-				$diff = $now->diff($triggerTime);
-				if ($diff->invert === 1) {
+				$recurrenceId = $this->getEffectiveRecurrenceIdOfVEvent($event);
+				if ($reminder['recurrence_id'] >= $recurrenceId) {
+					$iterator->next();
 					continue;
 				}
 
-				$this->backend->removeReminder($reminder['id']);
-				$alarms = $this->getRemindersForVAlarm($valarm, [
-					'calendarid' => $reminder['calendar_id'],
-					'id' => $reminder['object_id'],
-				], $reminder['event_hash'], $alarmHash, true, false);
-				$this->writeRemindersToDatabase($alarms);
+				foreach ($event->VALARM as $valarm) {
+					/** @var VAlarm $valarm */
+					$alarmHash = $this->getAlarmHash($valarm);
+					if ($alarmHash !== $reminder['alarm_hash']) {
+						continue;
+					}
 
-				// Abort generating reminders after creating one successfully
-				return;
+					$triggerTime = $valarm->getEffectiveTriggerTime();
+
+					// If effective trigger time is in the past
+					// just skip and generate for next event
+					$diff = $now->diff($triggerTime);
+					if ($diff->invert === 1) {
+						continue;
+					}
+
+					$this->backend->removeReminder($reminder['id']);
+					$alarms = $this->getRemindersForVAlarm($valarm, [
+						'calendarid' => $reminder['calendar_id'],
+						'id' => $reminder['object_id'],
+					], $calendarTimeZone, $reminder['event_hash'], $alarmHash, true, false);
+					$this->writeRemindersToDatabase($alarms);
+
+					// Abort generating reminders after creating one successfully
+					return;
+				}
+
+				$iterator->next();
 			}
-
-			$iterator->next();
+		} catch (MaxInstancesExceededException $e) {
+			// Using debug logger as this isn't really an error
+			$this->logger->debug('Recurrence with too many instances detected, skipping VEVENT', ['exception' => $e]);
 		}
 
 		$this->backend->removeReminder($reminder['id']);
@@ -529,26 +584,26 @@ class ReminderService {
 	 */
 	private function getEventHash(VEvent $vevent):string {
 		$properties = [
-			(string) $vevent->DTSTART->serialize(),
+			(string)$vevent->DTSTART->serialize(),
 		];
 
 		if ($vevent->DTEND) {
-			$properties[] = (string) $vevent->DTEND->serialize();
+			$properties[] = (string)$vevent->DTEND->serialize();
 		}
 		if ($vevent->DURATION) {
-			$properties[] = (string) $vevent->DURATION->serialize();
+			$properties[] = (string)$vevent->DURATION->serialize();
 		}
 		if ($vevent->{'RECURRENCE-ID'}) {
-			$properties[] = (string) $vevent->{'RECURRENCE-ID'}->serialize();
+			$properties[] = (string)$vevent->{'RECURRENCE-ID'}->serialize();
 		}
 		if ($vevent->RRULE) {
-			$properties[] = (string) $vevent->RRULE->serialize();
+			$properties[] = (string)$vevent->RRULE->serialize();
 		}
 		if ($vevent->EXDATE) {
-			$properties[] = (string) $vevent->EXDATE->serialize();
+			$properties[] = (string)$vevent->EXDATE->serialize();
 		}
 		if ($vevent->RDATE) {
-			$properties[] = (string) $vevent->RDATE->serialize();
+			$properties[] = (string)$vevent->RDATE->serialize();
 		}
 
 		return md5(implode('::', $properties));
@@ -563,15 +618,15 @@ class ReminderService {
 	 */
 	private function getAlarmHash(VAlarm $valarm):string {
 		$properties = [
-			(string) $valarm->ACTION->serialize(),
-			(string) $valarm->TRIGGER->serialize(),
+			(string)$valarm->ACTION->serialize(),
+			(string)$valarm->TRIGGER->serialize(),
 		];
 
 		if ($valarm->DURATION) {
-			$properties[] = (string) $valarm->DURATION->serialize();
+			$properties[] = (string)$valarm->DURATION->serialize();
 		}
 		if ($valarm->REPEAT) {
-			$properties[] = (string) $valarm->REPEAT->serialize();
+			$properties[] = (string)$valarm->REPEAT->serialize();
 		}
 
 		return md5(implode('::', $properties));
@@ -584,14 +639,14 @@ class ReminderService {
 	 * @return VEvent|null
 	 */
 	private function getVEventByRecurrenceId(VObject\Component\VCalendar $vcalendar,
-											 int $recurrenceId,
-											 bool $isRecurrenceException):?VEvent {
+		int $recurrenceId,
+		bool $isRecurrenceException):?VEvent {
 		$vevents = $this->getAllVEventsFromVCalendar($vcalendar);
 		if (count($vevents) === 0) {
 			return null;
 		}
 
-		$uid = (string) $vevents[0]->UID;
+		$uid = (string)$vevents[0]->UID;
 		$recurrenceExceptions = $this->getRecurrenceExceptionFromListOfVEvents($vevents);
 		$masterItem = $this->getMasterItemFromListOfVEvents($vevents);
 
@@ -642,7 +697,7 @@ class ReminderService {
 	 */
 	private function getStatusOfEvent(VEvent $vevent):string {
 		if ($vevent->STATUS) {
-			return (string) $vevent->STATUS;
+			return (string)$vevent->STATUS;
 		}
 
 		// Doesn't say so in the standard,
@@ -702,6 +757,10 @@ class ReminderService {
 			}
 
 			if ($child->name !== 'VEVENT') {
+				continue;
+			}
+			// Ignore invalid events with no DTSTART
+			if ($child->DTSTART === null) {
 				continue;
 			}
 
@@ -767,5 +826,27 @@ class ReminderService {
 	 */
 	private function isRecurring(VEvent $vevent):bool {
 		return isset($vevent->RRULE) || isset($vevent->RDATE);
+	}
+
+	/**
+	 * @param int $calendarid
+	 *
+	 * @return DateTimeZone
+	 */
+	private function getCalendarTimeZone(int $calendarid): DateTimeZone {
+		$calendarInfo = $this->caldavBackend->getCalendarById($calendarid);
+		$tzProp = '{urn:ietf:params:xml:ns:caldav}calendar-timezone';
+		if (empty($calendarInfo[$tzProp])) {
+			// Defaulting to UTC
+			return new DateTimeZone('UTC');
+		}
+		// This property contains a VCALENDAR with a single VTIMEZONE
+		/** @var string $timezoneProp */
+		$timezoneProp = $calendarInfo[$tzProp];
+		/** @var VObject\Component\VCalendar $vtimezoneObj */
+		$vtimezoneObj = VObject\Reader::read($timezoneProp);
+		/** @var VObject\Component\VTimeZone $vtimezone */
+		$vtimezone = $vtimezoneObj->VTIMEZONE;
+		return $vtimezone->getTimeZone();
 	}
 }

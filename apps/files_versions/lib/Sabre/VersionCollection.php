@@ -3,27 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2018, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Versions\Sabre;
 
 use OCA\Files_Versions\Versions\IVersion;
@@ -36,29 +19,24 @@ use Sabre\DAV\ICollection;
 
 class VersionCollection implements ICollection {
 
-	/** @var File */
-	private $file;
-
-	/** @var IUser */
-	private $user;
-
-	/** @var IVersionManager */
-	private $versionManager;
-
-	public function __construct(File $file, IUser $user, IVersionManager $versionManager) {
-		$this->file = $file;
-		$this->user = $user;
-		$this->versionManager = $versionManager;
+	public function __construct(
+		private File $file,
+		private IUser $user,
+		private IVersionManager $versionManager,
+	) {
 	}
 
+	#[\Override]
 	public function createFile($name, $data = null) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function createDirectory($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getChild($name) {
 		/** @var VersionFile[] $versions */
 		$versions = $this->getChildren();
@@ -72,6 +50,7 @@ class VersionCollection implements ICollection {
 		throw new NotFound();
 	}
 
+	#[\Override]
 	public function getChildren(): array {
 		$versions = $this->versionManager->getVersionsForFile($this->user, $this->file);
 
@@ -80,6 +59,7 @@ class VersionCollection implements ICollection {
 		}, $versions);
 	}
 
+	#[\Override]
 	public function childExists($name): bool {
 		try {
 			$this->getChild($name);
@@ -89,18 +69,22 @@ class VersionCollection implements ICollection {
 		}
 	}
 
+	#[\Override]
 	public function delete() {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getName(): string {
 		return (string)$this->file->getId();
 	}
 
+	#[\Override]
 	public function setName($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getLastModified(): int {
 		return 0;
 	}

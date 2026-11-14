@@ -3,62 +3,84 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Sharing\Controller;
 
+use NCU\AppFramework\Http\Attribute\TokenScope;
+use OCA\Files\TokenScopes;
 use OCA\Files_Sharing\AppInfo\Application;
 use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
+use OCP\AppFramework\Http\Attribute\OpenAPI;
 use OCP\AppFramework\Http\NotFoundResponse;
 use OCP\AppFramework\Http\RedirectResponse;
 use OCP\AppFramework\Http\Response;
+use OCP\AppFramework\Http\TemplateResponse;
+use OCP\Files\NotFoundException;
+use OCP\IGroupManager;
 use OCP\IRequest;
 use OCP\IURLGenerator;
+use OCP\IUser;
+use OCP\IUserManager;
 use OCP\IUserSession;
 use OCP\Share\Exceptions\ShareNotFound;
 use OCP\Share\IManager as ShareManager;
+use OCP\Share\IShare;
 
+#[OpenAPI(scope: OpenAPI::SCOPE_IGNORE)]
 class AcceptController extends Controller {
 
-	/** @var ShareManager */
-	private $shareManager;
-
-	/** @var IUserSession */
-	private $userSession;
-
-	/** @var IURLGenerator */
-	private $urlGenerator;
-
-	public function __construct(IRequest $request, ShareManager $shareManager, IUserSession $userSession, IURLGenerator $urlGenerator) {
+	public function __construct(
+		IRequest $request,
+		private ShareManager $shareManager,
+		private IUserSession $userSession,
+		private IURLGenerator $urlGenerator,
+		private IUserManager $userManager,
+		private IGroupManager $groupManager,
+	) {
 		parent::__construct(Application::APP_ID, $request);
-
-		$this->shareManager = $shareManager;
-		$this->userSession = $userSession;
-		$this->urlGenerator = $urlGenerator;
 	}
 
-	/**
-	 * @NoAdminRequired
-	 * @NoCSRFRequired
-	 */
+	#[NoAdminRequired]
+	#[NoCSRFRequired]
+	public function showAccept(string $shareId): Response {
+		try {
+			$share = $this->shareManager->getShareById($shareId);
+		} catch (ShareNotFound $e) {
+			return new NotFoundResponse();
+		}
+
+		$user = $this->userSession->getUser();
+		if ($user === null || !$this->isRecipient($share, $user)) {
+			return new NotFoundResponse();
+		}
+
+		try {
+			$filename = $share->getNode()->getName();
+		} catch (NotFoundException) {
+			return new NotFoundResponse();
+		}
+
+		$sharer = $this->userManager->get($share->getSharedBy());
+		$sharerDisplayName = $sharer !== null ? $sharer->getDisplayName() : $share->getSharedBy();
+
+		return new TemplateResponse(
+			Application::APP_ID,
+			'accept-share',
+			[
+				'filename' => $filename,
+				'sharerDisplayName' => $sharerDisplayName,
+			],
+			TemplateResponse::RENDER_AS_GUEST,
+		);
+	}
+
+	#[NoAdminRequired]
+	#[TokenScope(scope: TokenScopes::FILES_WRITE)]
 	public function accept(string $shareId): Response {
 		try {
 			$share = $this->shareManager->getShareById($shareId);
@@ -74,11 +96,24 @@ class AcceptController extends Controller {
 		try {
 			$share = $this->shareManager->acceptShare($share, $user->getUID());
 		} catch (\Exception $e) {
-			// Just ignore
+			return new NotFoundResponse();
 		}
 
 		$url = $this->urlGenerator->linkToRouteAbsolute('files.viewcontroller.showFile', ['fileid' => $share->getNode()->getId()]);
 
 		return new RedirectResponse($url);
+	}
+
+	private function isRecipient(IShare $share, IUser $user): bool {
+		if ($share->getShareType() === IShare::TYPE_USER) {
+			return $share->getSharedWith() === $user->getUID();
+		}
+
+		if ($share->getShareType() === IShare::TYPE_GROUP) {
+			$group = $this->groupManager->get($share->getSharedWith());
+			return $group !== null && $group->inGroup($user);
+		}
+
+		return false;
 	}
 }

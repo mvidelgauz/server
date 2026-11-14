@@ -3,30 +3,15 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2021 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV\Trashbin;
 
 use OCA\DAV\CalDAV\CalDavBackend;
 use OCA\DAV\CalDAV\IRestorable;
+use OCA\DAV\DAV\Sharing\Backend;
 use Sabre\CalDAV\ICalendarObject;
 use Sabre\DAV\Exception\Forbidden;
 use Sabre\DAVACL\ACLTrait;
@@ -35,29 +20,20 @@ use Sabre\DAVACL\IACL;
 class DeletedCalendarObject implements IACL, ICalendarObject, IRestorable {
 	use ACLTrait;
 
-	/** @var string */
-	private $name;
-
-	/** @var mixed[] */
-	private $objectData;
-
-	/** @var string */
-	private $principalUri;
-
-	/** @var CalDavBackend */
-	private $calDavBackend;
-
-	public function __construct(string $name,
-								array $objectData,
-								string $principalUri,
-								CalDavBackend $calDavBackend) {
-		$this->name = $name;
-		$this->objectData = $objectData;
-		$this->calDavBackend = $calDavBackend;
-		$this->principalUri = $principalUri;
+	public function __construct(
+		private string $name,
+		/** @var mixed[] */
+		private array $objectData,
+		private string $principalUri,
+		private CalDavBackend $calDavBackend,
+	) {
 	}
 
+	#[\Override]
 	public function delete() {
+		if (!$this->canModify()) {
+			throw new Forbidden('Read-only sharees cannot permanently delete trashbin entries');
+		}
 		$this->calDavBackend->deleteCalendarObject(
 			$this->objectData['calendarid'],
 			$this->objectData['uri'],
@@ -66,70 +42,131 @@ class DeletedCalendarObject implements IACL, ICalendarObject, IRestorable {
 		);
 	}
 
+	private function isShared(): bool {
+		$calendarOwner = $this->objectData['calendarprincipaluri'] ?? null;
+		return $calendarOwner !== null && $calendarOwner !== $this->principalUri;
+	}
+
+	private function canModify(): bool {
+		if (!$this->isShared()) {
+			return true;
+		}
+		// For shared entries, only write sharees may delete/restore.
+		return ($this->objectData['shared_access'] ?? null) === Backend::ACCESS_READ_WRITE;
+	}
+
+	#[\Override]
 	public function getName() {
 		return $this->name;
 	}
 
+	#[\Override]
 	public function setName($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getLastModified() {
 		return 0;
 	}
 
+	#[\Override]
 	public function put($data) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function get() {
 		return $this->objectData['calendardata'];
 	}
 
+	#[\Override]
 	public function getContentType() {
 		$mime = 'text/calendar; charset=utf-8';
 		if (isset($this->objectData['component']) && $this->objectData['component']) {
-			$mime .= '; component='.$this->objectData['component'];
+			$mime .= '; component=' . $this->objectData['component'];
 		}
 
 		return $mime;
 	}
 
+	#[\Override]
 	public function getETag() {
 		return $this->objectData['etag'];
 	}
 
+	#[\Override]
 	public function getSize() {
-		return (int) $this->objectData['size'];
+		return (int)$this->objectData['size'];
 	}
 
+	#[\Override]
 	public function restore(): void {
+		if (!$this->canModify()) {
+			throw new Forbidden('Read-only sharees cannot restore trashbin entries');
+		}
 		$this->calDavBackend->restoreCalendarObject($this->objectData);
 	}
 
 	public function getDeletedAt(): ?int {
-		return $this->objectData['deleted_at'] ? (int) $this->objectData['deleted_at'] : null;
+		return $this->objectData['deleted_at'] ? (int)$this->objectData['deleted_at'] : null;
 	}
 
 	public function getCalendarUri(): string {
 		return $this->objectData['calendaruri'];
 	}
 
+	public function getSourceCalendarUri(): string {
+		return $this->objectData['sourcecalendaruri'] ?? $this->objectData['calendaruri'];
+	}
+
+	public function getCalendarPrincipalUri(): ?string {
+		return $this->objectData['calendarprincipaluri'] ?? null;
+	}
+
+	public function getDelegator(): ?string {
+		return $this->objectData['delegator'] ?? null;
+	}
+
+	#[\Override]
 	public function getACL(): array {
-		return [
+		$acl = [
 			[
 				'privilege' => '{DAV:}read', // For queries
 				'principal' => $this->getOwner(),
 				'protected' => true,
 			],
 			[
-				'privilege' => '{DAV:}unbind', // For moving and deletion
-				'principal' => '{DAV:}owner',
+				'privilege' => '{DAV:}read',
+				'principal' => $this->getOwner() . '/calendar-proxy-write',
+				'protected' => true,
+			],
+			[
+				'privilege' => '{DAV:}read',
+				'principal' => $this->getOwner() . '/calendar-proxy-read',
 				'protected' => true,
 			],
 		];
+
+		if ($this->canModify()) {
+			$acl[] = [
+				'privilege' => '{DAV:}unbind',
+				'principal' => $this->getOwner(),
+				'protected' => true,
+			];
+
+			$acl[] = [
+				'privilege' => '{DAV:}unbind',
+				'principal' => $this->getOwner() . '/calendar-proxy-write',
+				'protected' => true,
+			];
+
+		}
+
+		return $acl;
 	}
 
+	#[\Override]
 	public function getOwner() {
 		return $this->principalUri;
 	}

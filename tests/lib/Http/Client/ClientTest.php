@@ -1,76 +1,62 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * Copyright (c) 2015 Lukas Reschke <lukas@owncloud.com>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Http\Client;
 
 use GuzzleHttp\Psr7\Response;
 use OC\Http\Client\Client;
-use OC\Http\Client\LocalAddressChecker;
-use OC\Security\CertificateManager;
 use OCP\Http\Client\LocalServerException;
 use OCP\ICertificateManager;
 use OCP\IConfig;
-use OCP\ILogger;
-use PHPUnit\Framework\MockObject\MockObject;
+use OCP\Security\IRemoteHostValidator;
+use OCP\ServerVersion;
+use PHPUnit\Framework\Attributes\DataProvider;
+use function parse_url;
 
 /**
  * Class ClientTest
  */
 class ClientTest extends \Test\TestCase {
-	/** @var \GuzzleHttp\Client|MockObject */
-	private $guzzleClient;
-	/** @var CertificateManager|MockObject */
-	private $certificateManager;
 	/** @var Client */
 	private $client;
-	/** @var IConfig|MockObject */
-	private $config;
-	/** @var ILogger|MockObject */
-	private $logger;
-	/** @var LocalAddressChecker|MockObject */
-	private $localAddressChecker;
 	/** @var array */
 	private $defaultRequestOptions;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
-		$this->config = $this->createMock(IConfig::class);
-		$this->logger = $this->createMock(ILogger::class);
-		$this->guzzleClient = $this->createMock(\GuzzleHttp\Client::class);
-		$this->certificateManager = $this->createMock(ICertificateManager::class);
-		$this->localAddressChecker = $this->createMock(LocalAddressChecker::class);
-		$this->client = new Client(
-			$this->config,
-			$this->logger,
-			$this->certificateManager,
-			$this->guzzleClient,
-			$this->localAddressChecker
-		);
+
+		$this->client = $this->createInstanceWithMocks(Client::class);
 	}
 
 	public function testGetProxyUri(): void {
-		$this->config
-			->method('getSystemValue')
-			->with('proxy', null)
-			->willReturn(null);
+		$this->getAutoMock(IConfig::class)
+			->method('getSystemValueString')
+			->with('proxy', '')
+			->willReturn('');
 		$this->assertNull(self::invokePrivate($this->client, 'getProxyUri'));
 	}
 
 	public function testGetProxyUriProxyHostEmptyPassword(): void {
-		$map = [
-			['proxy', '', 'foo'],
-			['proxyuserpwd', '', null],
-			['proxyexclude', [], []],
-		];
-
-		$this->config
+		$this->getAutoMock(IConfig::class)
 			->method('getSystemValue')
-			->will($this->returnValueMap($map));
+			->willReturnMap([
+				['proxyexclude', [], []],
+			]);
+
+		$this->getAutoMock(IConfig::class)
+			->method('getSystemValueString')
+			->willReturnMap([
+				['proxy', '', 'foo'],
+				['proxyuserpwd', '', ''],
+			]);
 
 		$this->assertEquals([
 			'http' => 'foo',
@@ -79,36 +65,18 @@ class ClientTest extends \Test\TestCase {
 	}
 
 	public function testGetProxyUriProxyHostWithPassword(): void {
-		$this->config
-			->expects($this->at(0))
+		$this->getAutoMock(IConfig::class)
+			->expects($this->once())
 			->method('getSystemValue')
-			->with(
-				$this->equalTo('proxy'),
-				$this->callback(function ($input) {
-					return $input === '';
-				})
-			)
-			->willReturn('foo');
-		$this->config
-			->expects($this->at(1))
-			->method('getSystemValue')
-			->with(
-				$this->equalTo('proxyuserpwd'),
-				$this->callback(function ($input) {
-					return $input === '';
-				})
-			)
-			->willReturn('username:password');
-		$this->config
-			->expects($this->at(2))
-			->method('getSystemValue')
-			->with(
-				$this->equalTo('proxyexclude'),
-				$this->callback(function ($input) {
-					return $input === [];
-				})
-			)
+			->with('proxyexclude', [])
 			->willReturn([]);
+		$this->getAutoMock(IConfig::class)
+			->expects($this->exactly(2))
+			->method('getSystemValueString')
+			->willReturnMap([
+				['proxy', '', 'foo'],
+				['proxyuserpwd', '', 'username:password'],
+			]);
 		$this->assertEquals([
 			'http' => 'username:password@foo',
 			'https' => 'username:password@foo'
@@ -116,36 +84,18 @@ class ClientTest extends \Test\TestCase {
 	}
 
 	public function testGetProxyUriProxyHostWithPasswordAndExclude(): void {
-		$this->config
-			->expects($this->at(0))
+		$this->getAutoMock(IConfig::class)
+			->expects($this->once())
 			->method('getSystemValue')
-			->with(
-				$this->equalTo('proxy'),
-				$this->callback(function ($input) {
-					return $input === '';
-				})
-			)
-			->willReturn('foo');
-		$this->config
-			->expects($this->at(1))
-			->method('getSystemValue')
-			->with(
-				$this->equalTo('proxyuserpwd'),
-				$this->callback(function ($input) {
-					return $input === '';
-				})
-			)
-			->willReturn('username:password');
-		$this->config
-			->expects($this->at(2))
-			->method('getSystemValue')
-			->with(
-				$this->equalTo('proxyexclude'),
-				$this->callback(function ($input) {
-					return $input === [];
-				})
-			)
+			->with('proxyexclude', [])
 			->willReturn(['bar']);
+		$this->getAutoMock(IConfig::class)
+			->expects($this->exactly(2))
+			->method('getSystemValueString')
+			->willReturnMap([
+				['proxy', '', 'foo'],
+				['proxyuserpwd', '', 'username:password'],
+			]);
 		$this->assertEquals([
 			'http' => 'username:password@foo',
 			'https' => 'username:password@foo',
@@ -153,152 +103,166 @@ class ClientTest extends \Test\TestCase {
 		], self::invokePrivate($this->client, 'getProxyUri'));
 	}
 
-	public function dataPreventLocalAddress():array {
+	public function testPreventLocalAddressThrowOnInvalidUri(): void {
+		$this->expectException(LocalServerException::class);
+		$this->expectExceptionMessage('Could not detect any host');
+
+		self::invokePrivate($this->client, 'preventLocalAddress', ['!@#$', []]);
+	}
+
+	public static function dataPreventLocalAddress(): array {
 		return [
-			['localhost/foo.bar'],
-			['localHost/foo.bar'],
-			['random-host/foo.bar'],
-			['[::1]/bla.blub'],
-			['[::]/bla.blub'],
-			['192.168.0.1'],
-			['172.16.42.1'],
-			['[fdf8:f53b:82e4::53]/secret.ics'],
-			['[fe80::200:5aee:feaa:20a2]/secret.ics'],
-			['[0:0:0:0:0:0:10.0.0.1]/secret.ics'],
-			['[0:0:0:0:0:ffff:127.0.0.0]/secret.ics'],
-			['10.0.0.1'],
-			['another-host.local'],
-			['service.localhost'],
-			['!@#$'], // test invalid url
+			['https://localhost/foo.bar'],
+			['https://localHost/foo.bar'],
+			['https://random-host/foo.bar'],
+			['https://[::1]/bla.blub'],
+			['https://[::]/bla.blub'],
+			['https://192.168.0.1'],
+			['https://172.16.42.1'],
+			['https://[fdf8:f53b:82e4::53]/secret.ics'],
+			['https://[fe80::200:5aee:feaa:20a2]/secret.ics'],
+			['https://[0:0:0:0:0:0:10.0.0.1]/secret.ics'],
+			['https://[0:0:0:0:0:ffff:127.0.0.0]/secret.ics'],
+			['https://10.0.0.1'],
+			['https://another-host.local'],
+			['https://service.localhost'],
+			['https://normal.host.com'],
+			['https://com.one-.nextcloud-one.com'],
 		];
 	}
 
 	/**
-	 * @dataProvider dataPreventLocalAddress
 	 * @param string $uri
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPreventLocalAddress')]
 	public function testPreventLocalAddressDisabledByGlobalConfig(string $uri): void {
-		$this->config->expects($this->once())
+		$this->getAutoMock(IConfig::class)->expects($this->once())
 			->method('getSystemValueBool')
 			->with('allow_local_remote_servers', false)
 			->willReturn(true);
 
-//		$this->expectException(LocalServerException::class);
-
-		self::invokePrivate($this->client, 'preventLocalAddress', ['http://' . $uri, []]);
+		self::invokePrivate($this->client, 'preventLocalAddress', [$uri, []]);
 	}
 
 	/**
-	 * @dataProvider dataPreventLocalAddress
 	 * @param string $uri
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPreventLocalAddress')]
 	public function testPreventLocalAddressDisabledByOption(string $uri): void {
-		$this->config->expects($this->never())
+		$this->getAutoMock(IConfig::class)->expects($this->never())
 			->method('getSystemValueBool');
 
-//		$this->expectException(LocalServerException::class);
-
-		self::invokePrivate($this->client, 'preventLocalAddress', ['http://' . $uri, [
+		self::invokePrivate($this->client, 'preventLocalAddress', [$uri, [
 			'nextcloud' => ['allow_local_address' => true],
 		]]);
 	}
 
 	/**
-	 * @dataProvider dataPreventLocalAddress
 	 * @param string $uri
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPreventLocalAddress')]
 	public function testPreventLocalAddressOnGet(string $uri): void {
+		$host = parse_url($uri, PHP_URL_HOST);
 		$this->expectException(LocalServerException::class);
-		$this->localAddressChecker
-			->expects($this->once())
-			->method('ThrowIfLocalAddress')
-			->with('http://' . $uri)
-			->will($this->throwException(new LocalServerException()));
+		$this->getAutoMock(IRemoteHostValidator::class)
+			->method('isValid')
+			->with($host)
+			->willReturn(false);
 
-		$this->client->get('http://' . $uri);
+		$this->client->get($uri);
 	}
 
 	/**
-	 * @dataProvider dataPreventLocalAddress
 	 * @param string $uri
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPreventLocalAddress')]
 	public function testPreventLocalAddressOnHead(string $uri): void {
+		$host = parse_url($uri, PHP_URL_HOST);
 		$this->expectException(LocalServerException::class);
-		$this->localAddressChecker
-			->expects($this->once())
-			->method('ThrowIfLocalAddress')
-			->with('http://' . $uri)
-			->will($this->throwException(new LocalServerException()));
+		$this->getAutoMock(IRemoteHostValidator::class)
+			->method('isValid')
+			->with($host)
+			->willReturn(false);
 
-		$this->client->head('http://' . $uri);
+		$this->client->head($uri);
 	}
 
 	/**
-	 * @dataProvider dataPreventLocalAddress
 	 * @param string $uri
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPreventLocalAddress')]
 	public function testPreventLocalAddressOnPost(string $uri): void {
+		$host = parse_url($uri, PHP_URL_HOST);
 		$this->expectException(LocalServerException::class);
-		$this->localAddressChecker
-		->expects($this->once())
-		->method('ThrowIfLocalAddress')
-		->with('http://' . $uri)
-		->will($this->throwException(new LocalServerException()));
-	
-		$this->client->post('http://' . $uri);
+		$this->getAutoMock(IRemoteHostValidator::class)
+			->method('isValid')
+			->with($host)
+			->willReturn(false);
+
+		$this->client->post($uri);
 	}
 
 	/**
-	 * @dataProvider dataPreventLocalAddress
 	 * @param string $uri
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPreventLocalAddress')]
 	public function testPreventLocalAddressOnPut(string $uri): void {
+		$host = parse_url($uri, PHP_URL_HOST);
 		$this->expectException(LocalServerException::class);
-		$this->localAddressChecker
-			->expects($this->once())
-			->method('ThrowIfLocalAddress')
-			->with('http://' . $uri)
-			->will($this->throwException(new LocalServerException()));
-		
-		$this->client->put('http://' . $uri);
+		$this->getAutoMock(IRemoteHostValidator::class)
+			->method('isValid')
+			->with($host)
+			->willReturn(false);
+
+		$this->client->put($uri);
 	}
 
 	/**
-	 * @dataProvider dataPreventLocalAddress
 	 * @param string $uri
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPreventLocalAddress')]
 	public function testPreventLocalAddressOnDelete(string $uri): void {
+		$host = parse_url($uri, PHP_URL_HOST);
 		$this->expectException(LocalServerException::class);
-		$this->localAddressChecker
-			->expects($this->once())
-			->method('ThrowIfLocalAddress')
-			->with('http://' . $uri)
-			->will($this->throwException(new LocalServerException()));
+		$this->getAutoMock(IRemoteHostValidator::class)
+			->method('isValid')
+			->with($host)
+			->willReturn(false);
 
-		$this->client->delete('http://' . $uri);
+		$this->client->delete($uri);
 	}
 
 	private function setUpDefaultRequestOptions(): void {
-		$map = [
-			['proxy', '', 'foo'],
-			['proxyuserpwd', '', null],
-			['proxyexclude', [], []],
-		];
-
-		$this->config
+		$this->getAutoMock(IConfig::class)
 			->method('getSystemValue')
-			->will($this->returnValueMap($map));
-		$this->config
+			->willReturnMap([
+				['proxyexclude', [], []],
+			]);
+		$this->getAutoMock(IConfig::class)
+			->method('getSystemValueString')
+			->willReturnMap([
+				['proxy', '', 'foo'],
+				['proxyuserpwd', '', ''],
+				['overwrite.cli.url', '', '']
+			]);
+		$this->getAutoMock(IConfig::class)
 			->method('getSystemValueBool')
-		 ->with('allow_local_remote_servers', false)
-		 ->willReturn(true);
-	
-		$this->certificateManager
+			->willReturnMap([
+				['installed', false, true],
+				['allow_local_remote_servers', false, true],
+				['http_client_add_user_agent_url', false, false]
+			]);
+
+		$this->getAutoMock(ICertificateManager::class)
 			->expects($this->once())
 			->method('getAbsoluteBundlePath')
 			->with()
 			->willReturn('/my/path.crt');
 
+		$this->getAutoMock(ServerVersion::class)->method('getVersionString')
+			->willReturn('123.45.6');
+
+		$acceptEnc = (((curl_version()['features'] ?? 0) & CURL_VERSION_BROTLI) === CURL_VERSION_BROTLI) ? 'br, gzip' : 'gzip';
 		$this->defaultRequestOptions = [
 			'verify' => '/my/path.crt',
 			'proxy' => [
@@ -306,12 +270,16 @@ class ClientTest extends \Test\TestCase {
 				'https' => 'foo'
 			],
 			'headers' => [
-				'User-Agent' => 'Nextcloud Server Crawler',
-				'Accept-Encoding' => 'gzip',
+				'User-Agent' => 'Nextcloud-Server-Crawler/123.45.6',
+				'Accept-Encoding' => $acceptEnc,
 			],
 			'timeout' => 30,
 			'nextcloud' => [
 				'allow_local_address' => true,
+			],
+			'version' => '2.0',
+			'curl' => [
+				\CURLOPT_HTTP_VERSION => \CURL_HTTP_VERSION_2TLS,
 			],
 		];
 	}
@@ -319,7 +287,7 @@ class ClientTest extends \Test\TestCase {
 	public function testGet(): void {
 		$this->setUpDefaultRequestOptions();
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('get', 'http://localhost/', $this->defaultRequestOptions)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->get('http://localhost/', [])->getStatusCode());
@@ -336,7 +304,7 @@ class ClientTest extends \Test\TestCase {
 			],
 		]);
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('get', 'http://localhost/', $options)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->get('http://localhost/', $options)->getStatusCode());
@@ -345,7 +313,7 @@ class ClientTest extends \Test\TestCase {
 	public function testPost(): void {
 		$this->setUpDefaultRequestOptions();
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('post', 'http://localhost/', $this->defaultRequestOptions)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->post('http://localhost/', [])->getStatusCode());
@@ -362,7 +330,7 @@ class ClientTest extends \Test\TestCase {
 			],
 		]);
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('post', 'http://localhost/', $options)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->post('http://localhost/', $options)->getStatusCode());
@@ -371,7 +339,7 @@ class ClientTest extends \Test\TestCase {
 	public function testPut(): void {
 		$this->setUpDefaultRequestOptions();
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('put', 'http://localhost/', $this->defaultRequestOptions)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->put('http://localhost/', [])->getStatusCode());
@@ -388,7 +356,7 @@ class ClientTest extends \Test\TestCase {
 			],
 		]);
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('put', 'http://localhost/', $options)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->put('http://localhost/', $options)->getStatusCode());
@@ -397,7 +365,7 @@ class ClientTest extends \Test\TestCase {
 	public function testDelete(): void {
 		$this->setUpDefaultRequestOptions();
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('delete', 'http://localhost/', $this->defaultRequestOptions)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->delete('http://localhost/', [])->getStatusCode());
@@ -414,7 +382,7 @@ class ClientTest extends \Test\TestCase {
 			],
 		]);
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('delete', 'http://localhost/', $options)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->delete('http://localhost/', $options)->getStatusCode());
@@ -423,7 +391,7 @@ class ClientTest extends \Test\TestCase {
 	public function testOptions(): void {
 		$this->setUpDefaultRequestOptions();
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('options', 'http://localhost/', $this->defaultRequestOptions)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->options('http://localhost/', [])->getStatusCode());
@@ -440,7 +408,7 @@ class ClientTest extends \Test\TestCase {
 			],
 		]);
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('options', 'http://localhost/', $options)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->options('http://localhost/', $options)->getStatusCode());
@@ -449,7 +417,7 @@ class ClientTest extends \Test\TestCase {
 	public function testHead(): void {
 		$this->setUpDefaultRequestOptions();
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('head', 'http://localhost/', $this->defaultRequestOptions)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->head('http://localhost/', [])->getStatusCode());
@@ -466,27 +434,46 @@ class ClientTest extends \Test\TestCase {
 			],
 		]);
 
-		$this->guzzleClient->method('request')
+		$this->getAutoMock(\GuzzleHttp\Client::class)->method('request')
 			->with('head', 'http://localhost/', $options)
 			->willReturn(new Response(418));
 		$this->assertEquals(418, $this->client->head('http://localhost/', $options)->getStatusCode());
 	}
 
 	public function testSetDefaultOptionsWithNotInstalled(): void {
-		$this->config
-			->expects($this->at(1))
-			->method('getSystemValue')
-			->with('installed', false)
-			->willReturn(false);
-		$this->certificateManager
+		$this->getAutoMock(IConfig::class)
+			->expects($this->exactly(3))
+			->method('getSystemValueBool')
+			->willReturnMap([
+				['installed', false, false],
+				['allow_local_remote_servers', false, false],
+				['http_client_add_user_agent_url', false, false],
+			]);
+		$this->getAutoMock(IConfig::class)
+			->expects($this->exactly(2))
+			->method('getSystemValueString')
+			->willReturnMap([
+				['proxy', '', ''],
+				['overwrite.cli.url', '', ''],
+			]);
+		$this->getAutoMock(ICertificateManager::class)
 			->expects($this->never())
 			->method('listCertificates');
+		$this->getAutoMock(ICertificateManager::class)
+			->expects($this->once())
+			->method('getDefaultCertificatesBundlePath')
+			->willReturn(\OC::$SERVERROOT . '/resources/config/ca-bundle.crt');
+
+		$this->getAutoMock(ServerVersion::class)->method('getVersionString')
+			->willReturn('123.45.6');
+
+		$acceptEnc = (((curl_version()['features'] ?? 0) & CURL_VERSION_BROTLI) === CURL_VERSION_BROTLI) ? 'br, gzip' : 'gzip';
 
 		$this->assertEquals([
 			'verify' => \OC::$SERVERROOT . '/resources/config/ca-bundle.crt',
 			'headers' => [
-				'User-Agent' => 'Nextcloud Server Crawler',
-				'Accept-Encoding' => 'gzip',
+				'User-Agent' => 'Nextcloud-Server-Crawler/123.45.6',
+				'Accept-Encoding' => $acceptEnc,
 			],
 			'timeout' => 30,
 			'nextcloud' => [
@@ -496,34 +483,49 @@ class ClientTest extends \Test\TestCase {
 				'on_redirect' => function (
 					\Psr\Http\Message\RequestInterface $request,
 					\Psr\Http\Message\ResponseInterface $response,
-					\Psr\Http\Message\UriInterface $uri
-				) {
+					\Psr\Http\Message\UriInterface $uri,
+				): void {
 				},
+			],
+			'version' => '2.0',
+			'curl' => [
+				\CURLOPT_HTTP_VERSION => \CURL_HTTP_VERSION_2TLS,
 			],
 		], self::invokePrivate($this->client, 'buildRequestOptions', [[]]));
 	}
 
 	public function testSetDefaultOptionsWithProxy(): void {
-		$this->config
-			->expects($this->at(0))
-			->method('getSystemValue')
-			->with('proxy', null)
-			->willReturn('foo');
-		$this->config
-			->expects($this->at(1))
-			->method('getSystemValue')
-			->with('proxyuserpwd', null)
-			->willReturn(null);
-		$this->config
-			->expects($this->at(2))
+		$this->getAutoMock(IConfig::class)
+			->expects($this->exactly(3))
+			->method('getSystemValueBool')
+			->willReturnMap([
+				['installed', false, true],
+				['allow_local_remote_servers', false, false],
+				['http_client_add_user_agent_url', false, false],
+			]);
+		$this->getAutoMock(IConfig::class)
+			->expects($this->once())
 			->method('getSystemValue')
 			->with('proxyexclude', [])
 			->willReturn([]);
-		$this->certificateManager
+		$this->getAutoMock(IConfig::class)
+			->expects($this->exactly(3))
+			->method('getSystemValueString')
+			->willReturnMap([
+				['proxy', '', 'foo'],
+				['proxyuserpwd', '', ''],
+				['overwrite.cli.url', '', ''],
+			]);
+		$this->getAutoMock(ICertificateManager::class)
 			->expects($this->once())
 			->method('getAbsoluteBundlePath')
 			->with()
 			->willReturn('/my/path.crt');
+
+		$this->getAutoMock(ServerVersion::class)->method('getVersionString')
+			->willReturn('123.45.6');
+
+		$acceptEnc = (((curl_version()['features'] ?? 0) & CURL_VERSION_BROTLI) === CURL_VERSION_BROTLI) ? 'br, gzip' : 'gzip';
 
 		$this->assertEquals([
 			'verify' => '/my/path.crt',
@@ -532,8 +534,8 @@ class ClientTest extends \Test\TestCase {
 				'https' => 'foo'
 			],
 			'headers' => [
-				'User-Agent' => 'Nextcloud Server Crawler',
-				'Accept-Encoding' => 'gzip',
+				'User-Agent' => 'Nextcloud-Server-Crawler/123.45.6',
+				'Accept-Encoding' => $acceptEnc,
 			],
 			'timeout' => 30,
 			'nextcloud' => [
@@ -543,34 +545,49 @@ class ClientTest extends \Test\TestCase {
 				'on_redirect' => function (
 					\Psr\Http\Message\RequestInterface $request,
 					\Psr\Http\Message\ResponseInterface $response,
-					\Psr\Http\Message\UriInterface $uri
-				) {
+					\Psr\Http\Message\UriInterface $uri,
+				): void {
 				},
+			],
+			'version' => '2.0',
+			'curl' => [
+				\CURLOPT_HTTP_VERSION => \CURL_HTTP_VERSION_2TLS,
 			],
 		], self::invokePrivate($this->client, 'buildRequestOptions', [[]]));
 	}
 
 	public function testSetDefaultOptionsWithProxyAndExclude(): void {
-		$this->config
-			->expects($this->at(0))
-			->method('getSystemValue')
-			->with('proxy', null)
-			->willReturn('foo');
-		$this->config
-			->expects($this->at(1))
-			->method('getSystemValue')
-			->with('proxyuserpwd', null)
-			->willReturn(null);
-		$this->config
-			->expects($this->at(2))
+		$this->getAutoMock(IConfig::class)
+			->expects($this->exactly(3))
+			->method('getSystemValueBool')
+			->willReturnMap([
+				['installed', false, true],
+				['allow_local_remote_servers', false, false],
+				['http_client_add_user_agent_url', false, false],
+			]);
+		$this->getAutoMock(IConfig::class)
+			->expects($this->once())
 			->method('getSystemValue')
 			->with('proxyexclude', [])
 			->willReturn(['bar']);
-		$this->certificateManager
+		$this->getAutoMock(IConfig::class)
+			->expects($this->exactly(3))
+			->method('getSystemValueString')
+			->willReturnMap([
+				['proxy', '', 'foo'],
+				['proxyuserpwd', '', ''],
+				['overwrite.cli.url', '', ''],
+			]);
+		$this->getAutoMock(ICertificateManager::class)
 			->expects($this->once())
 			->method('getAbsoluteBundlePath')
 			->with()
 			->willReturn('/my/path.crt');
+
+		$this->getAutoMock(ServerVersion::class)->method('getVersionString')
+			->willReturn('123.45.6');
+
+		$acceptEnc = (((curl_version()['features'] ?? 0) & CURL_VERSION_BROTLI) === CURL_VERSION_BROTLI) ? 'br, gzip' : 'gzip';
 
 		$this->assertEquals([
 			'verify' => '/my/path.crt',
@@ -580,8 +597,8 @@ class ClientTest extends \Test\TestCase {
 				'no' => ['bar']
 			],
 			'headers' => [
-				'User-Agent' => 'Nextcloud Server Crawler',
-				'Accept-Encoding' => 'gzip',
+				'User-Agent' => 'Nextcloud-Server-Crawler/123.45.6',
+				'Accept-Encoding' => $acceptEnc,
 			],
 			'timeout' => 30,
 			'nextcloud' => [
@@ -591,9 +608,72 @@ class ClientTest extends \Test\TestCase {
 				'on_redirect' => function (
 					\Psr\Http\Message\RequestInterface $request,
 					\Psr\Http\Message\ResponseInterface $response,
-					\Psr\Http\Message\UriInterface $uri
-				) {
+					\Psr\Http\Message\UriInterface $uri,
+				): void {
 				},
+			],
+			'version' => '2.0',
+			'curl' => [
+				\CURLOPT_HTTP_VERSION => \CURL_HTTP_VERSION_2TLS,
+			],
+		], self::invokePrivate($this->client, 'buildRequestOptions', [[]]));
+	}
+
+	public static function dataForTestSetServerUrlInUserAgent(): array {
+		return [
+			['https://example.com/', 'Nextcloud-Server-Crawler/123.45.6; +https://example.com'],
+			['', 'Nextcloud-Server-Crawler/123.45.6'],
+		];
+	}
+
+	#[DataProvider('dataForTestSetServerUrlInUserAgent')]
+	public function testSetServerUrlInUserAgent(string $url, string $userAgent): void {
+		$this->getAutoMock(IConfig::class)
+			->expects($this->exactly(3))
+			->method('getSystemValueBool')
+			->willReturnMap([
+				['installed', false, true],
+				['allow_local_remote_servers', false, false],
+				['http_client_add_user_agent_url', false, true],
+			]);
+		$this->getAutoMock(IConfig::class)
+			->expects($this->exactly(2))
+			->method('getSystemValueString')
+			->willReturnMap([
+				['proxy', '', ''],
+				['overwrite.cli.url', '', $url],
+			]);
+		$this->getAutoMock(ICertificateManager::class)
+			->expects($this->once())
+			->method('getAbsoluteBundlePath')
+			->with()
+			->willReturn('/my/path.crt');
+
+		$this->getAutoMock(ServerVersion::class)->method('getVersionString')
+			->willReturn('123.45.6');
+
+		$acceptEnc = (((curl_version()['features'] ?? 0) & CURL_VERSION_BROTLI) === CURL_VERSION_BROTLI) ? 'br, gzip' : 'gzip';
+		$this->assertEquals([
+			'verify' => '/my/path.crt',
+			'headers' => [
+				'User-Agent' => $userAgent,
+				'Accept-Encoding' => $acceptEnc,
+			],
+			'timeout' => 30,
+			'nextcloud' => [
+				'allow_local_address' => false,
+			],
+			'allow_redirects' => [
+				'on_redirect' => function (
+					\Psr\Http\Message\RequestInterface $request,
+					\Psr\Http\Message\ResponseInterface $response,
+					\Psr\Http\Message\UriInterface $uri,
+				): void {
+				},
+			],
+			'version' => '2.0',
+			'curl' => [
+				\CURLOPT_HTTP_VERSION => \CURL_HTTP_VERSION_2TLS,
 			],
 		], self::invokePrivate($this->client, 'buildRequestOptions', [[]]));
 	}

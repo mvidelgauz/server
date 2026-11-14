@@ -1,28 +1,25 @@
 <?php
-	/** @var array $_ */
-	/** @var \OCP\IL10N $l */
-	style('core', 'guest');
-	style('core', 'publicshareauth');
-	script('core', 'publicshareauth');
+/**
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+/** @var array{share: \OCP\Share\IShare, identityOk?: bool, wrongpw?: bool} $_ */
+
+\OCP\Util::addStyle('core', 'guest');
+\OCP\Util::addScript('core', 'public_share_auth');
+\OCP\Util::addStyle('core', 'public_share_auth');
+
+$showPasswordReset = isset($_['identityOk']) && $_['identityOk'] !== null;
+$initialState = \OCP\Server::get(\OCP\IInitialStateService::class);
+$initialState->provideInitialState('files_sharing', 'sharingToken', $_['share']->getToken());
+$initialState->provideInitialState('core', 'publicShareAuth', [
+	// if the password reset was processed (not caring about result)
+	'showPasswordReset' => $showPasswordReset,
+	'shareType' => $_['share']->getShareType(),
+	'invalidPassword' => $_['wrongpw'] ?? null,
+	'canResendPassword' => $_['share']->getShareType() === \OCP\Share\IShare::TYPE_EMAIL && !$_['share']->getSendPasswordByTalk(),
+]);
 ?>
-<form method="post">
-	<fieldset class="warning">
-		<?php if (!isset($_['wrongpw'])): ?>
-			<div class="warning-info"><?php p($l->t('This share is password-protected')); ?></div>
-		<?php endif; ?>
-		<?php if (isset($_['wrongpw'])): ?>
-			<div class="warning"><?php p($l->t('The password is wrong. Try again.')); ?></div>
-		<?php endif; ?>
-		<p>
-			<label for="password" class="infield"><?php p($l->t('Password')); ?></label>
-			<input type="hidden" name="requesttoken" value="<?php p($_['requesttoken']) ?>" />
-			<input type="password" name="password" id="password"
-				placeholder="<?php p($l->t('Password')); ?>" value=""
-				autocomplete="new-password" autocapitalize="off" autocorrect="off"
-				autofocus />
-			<input type="hidden" name="sharingToken" value="<?php p($_['share']->getToken()) ?>" id="sharingToken">
-			<input type="submit" id="password-submit" 
-				class="svg icon-confirm input-button-inline" value="" disabled="disabled" />
-		</p>
-	</fieldset>
-</form>
+
+<div id="core-public-share-auth" class="guest-box" ></div>

@@ -1,47 +1,29 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Daniel Calviño Sánchez <danxuliu@gmail.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Maxence Lange <maxence@nextcloud.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2026 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCP\Share;
 
+use OCP\AppFramework\Attribute\Consumable;
+use OCP\Constants;
 use OCP\Files\Cache\ICacheEntry;
-use OCP\Files\File;
-use OCP\Files\Folder;
 use OCP\Files\Node;
 use OCP\Files\NotFoundException;
 use OCP\Share\Exceptions\IllegalIDChangeException;
 
 /**
- * Interface IShare
+ * This interface allows to represent a share object.
+ *
+ * This interface must not be implemented in your application.
  *
  * @since 9.0.0
  */
+#[Consumable(since: '9.0.0')]
 interface IShare {
-
 	/**
 	 * @since 17.0.0
 	 */
@@ -117,6 +99,12 @@ interface IShare {
 	public const TYPE_DECK_USER = 13;
 
 	/**
+	 * @since 26.0.0
+	 * @deprecated 33.0.0 The app is abandonned.
+	 */
+	public const TYPE_SCIENCEMESH = 15;
+
+	/**
 	 * @since 18.0.0
 	 */
 	public const STATUS_PENDING = 0;
@@ -136,62 +124,52 @@ interface IShare {
 	 * It is only allowed to set the internal id of a share once.
 	 * Attempts to override the internal id will result in an IllegalIDChangeException
 	 *
-	 * @param string $id
-	 * @return \OCP\Share\IShare
 	 * @throws IllegalIDChangeException
-	 * @throws \InvalidArgumentException
 	 * @since 9.1.0
 	 */
-	public function setId($id);
+	public function setId(string $id): self;
 
 	/**
 	 * Get the internal id of the share.
 	 *
-	 * @return string
 	 * @since 9.0.0
 	 */
-	public function getId();
+	public function getId(): string;
 
 	/**
 	 * Get the full share id. This is the <providerid>:<internalid>.
 	 * The full id is unique in the system.
 	 *
-	 * @return string
 	 * @since 9.0.0
 	 * @throws \UnexpectedValueException If the fullId could not be constructed
 	 */
-	public function getFullId();
+	public function getFullId(): string;
 
 	/**
 	 * Set the provider id of the share
 	 * It is only allowed to set the provider id of a share once.
 	 * Attempts to override the provider id will result in an IllegalIDChangeException
 	 *
-	 * @param string $id
-	 * @return \OCP\Share\IShare
 	 * @throws IllegalIDChangeException
-	 * @throws \InvalidArgumentException
 	 * @since 9.1.0
 	 */
-	public function setProviderId($id);
+	public function setProviderId(string $id): self;
 
 	/**
 	 * Set the node of the file/folder that is shared
 	 *
 	 * @param Node $node
-	 * @return \OCP\Share\IShare The modified object
 	 * @since 9.0.0
 	 */
-	public function setNode(Node $node);
+	public function setNode(Node $node): self;
 
 	/**
 	 * Get the node of the file/folder that is shared
 	 *
-	 * @return File|Folder
 	 * @since 9.0.0
 	 * @throws NotFoundException
 	 */
-	public function getNode();
+	public function getNode(): Node;
 
 	/**
 	 * Set file id for lazy evaluation of the node
@@ -207,7 +185,7 @@ interface IShare {
 	 * @since 9.0.0
 	 * @throws NotFoundException
 	 */
-	public function getNodeId();
+	public function getNodeId(): int;
 
 	/**
 	 * Set the type of node (file/folder)
@@ -230,7 +208,7 @@ interface IShare {
 	/**
 	 * Set the shareType
 	 *
-	 * @param int $shareType
+	 * @param self::TYPE_* $shareType
 	 * @return \OCP\Share\IShare The modified object
 	 * @since 9.0.0
 	 */
@@ -239,7 +217,7 @@ interface IShare {
 	/**
 	 * Get the shareType
 	 *
-	 * @return int
+	 * @return self::TYPE_*
 	 * @since 9.0.0
 	 */
 	public function getShareType();
@@ -297,28 +275,50 @@ interface IShare {
 
 	/**
 	 * Set the permissions.
-	 * See \OCP\Constants::PERMISSION_*
 	 *
-	 * @param int $permissions
-	 * @return \OCP\Share\IShare The modified object
+	 * @param int-mask-of<Constants::PERMISSION_*> $permissions
+	 * @return IShare The modified object
 	 * @since 9.0.0
 	 */
 	public function setPermissions($permissions);
 
 	/**
 	 * Get the share permissions
-	 * See \OCP\Constants::PERMISSION_*
 	 *
-	 * @return int
+	 * @return int-mask-of<Constants::PERMISSION_*>
 	 * @since 9.0.0
 	 */
 	public function getPermissions();
 
 	/**
-	 * Set the accepted status
-	 * See self::STATUS_*
+	 * Create share attributes object
 	 *
-	 * @param int $status
+	 * @since 25.0.0
+	 * @return IAttributes
+	 */
+	public function newAttributes(): IAttributes;
+
+	/**
+	 * Set share attributes
+	 *
+	 * @param ?IAttributes $attributes
+	 * @since 25.0.0
+	 * @return IShare The modified object
+	 */
+	public function setAttributes(?IAttributes $attributes);
+
+	/**
+	 * Get share attributes
+	 *
+	 * @since 25.0.0
+	 * @return ?IAttributes
+	 */
+	public function getAttributes(): ?IAttributes;
+
+	/**
+	 * Set the accepted status
+	 *
+	 * @param self::STATUS_* $status
 	 * @return IShare The modified object
 	 * @since 18.0.0
 	 */
@@ -326,12 +326,11 @@ interface IShare {
 
 	/**
 	 * Get the accepted status
-	 * See self::STATUS_*
 	 *
-	 * @return int
+	 * @return ?self::STATUS_*
 	 * @since 18.0.0
 	 */
-	public function getStatus(): int;
+	public function getStatus(): ?int;
 
 	/**
 	 * Attach a note to a share
@@ -350,23 +349,39 @@ interface IShare {
 	 */
 	public function getNote();
 
-
 	/**
 	 * Set the expiration date
 	 *
-	 * @param null|\DateTime $expireDate
+	 * @param \DateTime|null $expireDate
 	 * @return \OCP\Share\IShare The modified object
 	 * @since 9.0.0
 	 */
-	public function setExpirationDate($expireDate);
+	public function setExpirationDate(?\DateTime $expireDate);
 
 	/**
 	 * Get the expiration date
 	 *
-	 * @return \DateTime
+	 * @return \DateTime|null
 	 * @since 9.0.0
 	 */
 	public function getExpirationDate();
+
+	/**
+	 * Set overwrite flag for falsy expiry date values
+	 *
+	 * @param bool $noExpirationDate
+	 * @return \OCP\Share\IShare The modified object
+	 * @since 30.0.0
+	 */
+	public function setNoExpirationDate(bool $noExpirationDate);
+
+	/**
+	 * Get value of overwrite falsy expiry date flag
+	 *
+	 * @return bool
+	 * @since 30.0.0
+	 */
+	public function getNoExpirationDate();
 
 	/**
 	 * Is the share expired ?
@@ -439,15 +454,50 @@ interface IShare {
 	public function setPassword($password);
 
 	/**
+	 * Sets the password for the shared, but in it's already hashed form.
+	 * Use {@see isPasswordHashed} to check if the return value of {@see getPassword} is already hashed.
+	 *
+	 * @since 35.0.2
+	 */
+	public function setPasswordHash(string $passwordHash): IShare;
+
+	/**
 	 * Get the password of this share.
 	 * If this share is obtained via a shareprovider the password is
 	 * hashed.
 	 *
-	 * @return string
+	 * @return string|null
 	 * @since 9.0.0
 	 */
 	public function getPassword();
 
+	/**
+	 * Returns whether the return value of {@see getPassword} is already hashed.
+	 *
+	 * @since 35.0.2
+	 */
+	public function isPasswordHashed(): bool;
+
+	/**
+	 * Returns whether the share is password protected by any means (e.g. password or OTP)
+	 * @return bool
+	 * @since 35.0.0
+	 */
+	public function isPasswordProtected(): bool;
+
+	/**
+	 * Set the password's expiration time of this share.
+	 *
+	 * @return self The modified object
+	 * @since 24.0.0
+	 */
+	public function setPasswordExpirationTime(?\DateTimeInterface $passwordExpirationTime = null): IShare;
+
+	/**
+	 * Get the password's expiration time of this share.
+	 * @since 24.0.0
+	 */
+	public function getPasswordExpirationTime(): ?\DateTimeInterface;
 
 	/**
 	 * Set if the recipient can start a conversation with the owner to get the
@@ -489,6 +539,20 @@ interface IShare {
 	public function getToken();
 
 	/**
+	 * Set the parent of this share
+	 *
+	 * @since 9.0.0
+	 */
+	public function setParent(int $parent): self;
+
+	/**
+	 * Get the parent of this share.
+	 *
+	 * @since 9.0.0
+	 */
+	public function getParent(): ?int;
+
+	/**
 	 * Set the target path of this share relative to the recipients user folder.
 	 *
 	 * @param string $target
@@ -496,6 +560,13 @@ interface IShare {
 	 * @since 9.0.0
 	 */
 	public function setTarget($target);
+
+	/**
+	 * Return the original target, if this share was moved
+	 *
+	 * @since 33.0.0
+	 */
+	public function getOriginalTarget(): ?string;
 
 	/**
 	 * Get the target path of this share relative to the recipients user folder.
@@ -523,7 +594,7 @@ interface IShare {
 	public function getShareTime();
 
 	/**
-	 * Set if the recipient is informed by mail about the share.
+	 * Set if the recipient should be informed by mail about the share.
 	 *
 	 * @param bool $mailSend
 	 * @return \OCP\Share\IShare The modified object
@@ -532,7 +603,7 @@ interface IShare {
 	public function setMailSend($mailSend);
 
 	/**
-	 * Get if the recipient informed by mail about the share.
+	 * Get if the recipient should be informed by mail about the share.
 	 *
 	 * @return bool
 	 * @since 9.0.0
@@ -543,6 +614,7 @@ interface IShare {
 	 * Set the cache entry for the shared node
 	 *
 	 * @param ICacheEntry $entry
+	 * @return void
 	 * @since 11.0.0
 	 */
 	public function setNodeCacheEntry(ICacheEntry $entry);
@@ -575,4 +647,36 @@ interface IShare {
 	 * @since 15.0.0
 	 */
 	public function getHideDownload(): bool;
+
+	/**
+	 * Sets a flag that stores whether a reminder via email has been sent
+	 *
+	 * @return self The modified object
+	 * @since 31.0.0
+	 */
+	public function setReminderSent(bool $reminderSent): IShare;
+
+	/**
+	 * Gets a flag that stores whether a reminder via email has been sent
+	 *
+	 * @return bool
+	 * @since 31.0.0
+	 */
+	public function getReminderSent(): bool;
+
+	/**
+	 * Check if the current user can see this share files contents.
+	 * This will check the download permissions as well as the global
+	 * admin setting to allow viewing files without downloading.
+	 *
+	 * @since 32.0.0
+	 */
+	public function canSeeContent(): bool;
+
+	/**
+	 * Check if it is allowed to download this share.
+	 *
+	 * @since 34.0.0
+	 */
+	public function canDownload(): bool;
 }

@@ -1,29 +1,14 @@
 <?php
+
 /**
- * @copyright 2019, Georg Ehrke <oc.list@georgehrke.com>
- *
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV\ICSExportPlugin;
 
 use OCP\IConfig;
-use OCP\ILogger;
+use Psr\Log\LoggerInterface;
 use Sabre\HTTP\ResponseInterface;
 use Sabre\VObject\DateTimeParser;
 use Sabre\VObject\InvalidDataException;
@@ -35,29 +20,22 @@ use Sabre\VObject\Property\ICalendar\Duration;
  * @package OCA\DAV\CalDAV\ICSExportPlugin
  */
 class ICSExportPlugin extends \Sabre\CalDAV\ICSExportPlugin {
-
-	/** @var IConfig */
-	private $config;
-
-	/** @var ILogger */
-	private $logger;
-
 	/** @var string */
-	private const DEFAULT_REFRESH_INTERVAL = 'PT4H';
+	private const string DEFAULT_REFRESH_INTERVAL = 'PT4H';
 
 	/**
 	 * ICSExportPlugin constructor.
-	 *
-	 * @param IConfig $config
 	 */
-	public function __construct(IConfig $config, ILogger $logger) {
-		$this->config = $config;
-		$this->logger = $logger;
+	public function __construct(
+		private IConfig $config,
+		private LoggerInterface $logger,
+	) {
 	}
 
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	protected function generateResponse($path, $start, $end, $expand, $componentType, $format, $properties, ResponseInterface $response) {
 		if (!isset($properties['{http://nextcloud.com/ns}refresh-interval'])) {
 			$value = $this->config->getAppValue('dav', 'defaultRefreshIntervalExportedCalendars', self::DEFAULT_REFRESH_INTERVAL);
@@ -70,6 +48,7 @@ class ICSExportPlugin extends \Sabre\CalDAV\ICSExportPlugin {
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	public function mergeObjects(array $properties, array $inputObjects) {
 		$vcalendar = parent::mergeObjects($properties, $inputObjects);
 

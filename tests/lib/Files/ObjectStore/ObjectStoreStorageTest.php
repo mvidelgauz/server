@@ -1,21 +1,9 @@
 <?php
+
 /**
- * @author Jörn Friedrich Dreyer
- * @copyright (c) 2014 Jörn Friedrich Dreyer <jfd@owncloud.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
- * License as published by the Free Software Foundation; either
- * version 3 of the License, or any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU AFFERO GENERAL PUBLIC LICENSE for more details.
- *
- * You should have received a copy of the GNU Affero General Public
- * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Files\ObjectStore;
@@ -23,12 +11,12 @@ namespace Test\Files\ObjectStore;
 use OC\Files\ObjectStore\StorageObjectStore;
 use OC\Files\Storage\Temporary;
 use OC\Files\Storage\Wrapper\Jail;
+use OC\Files\Storage\Wrapper\PermissionsMask;
+use OCP\Constants;
 use OCP\Files\ObjectStore\IObjectStore;
 use Test\Files\Storage\Storage;
 
-/**
- * @group DB
- */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class ObjectStoreStorageTest extends Storage {
 	/** @var ObjectStoreStorageOverwrite */
 	protected $instance;
@@ -38,6 +26,7 @@ class ObjectStoreStorageTest extends Storage {
 	 */
 	private $objectStorage;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
@@ -47,6 +36,7 @@ class ObjectStoreStorageTest extends Storage {
 		$this->instance = new ObjectStoreStorageOverwrite($config);
 	}
 
+	#[\Override]
 	protected function tearDown(): void {
 		if (is_null($this->instance)) {
 			return;
@@ -56,7 +46,8 @@ class ObjectStoreStorageTest extends Storage {
 		parent::tearDown();
 	}
 
-	public function testStat() {
+	#[\Override]
+	public function testStat(): void {
 		$textFile = \OC::$SERVERROOT . '/tests/data/lorem.txt';
 		$ctimeStart = time();
 		$this->instance->file_put_contents('/lorem.txt', file_get_contents($textFile));
@@ -80,29 +71,30 @@ class ObjectStoreStorageTest extends Storage {
 		}
 	}
 
-	public function testCheckUpdate() {
+	#[\Override]
+	public function testCheckUpdate(): void {
 		$this->markTestSkipped('Detecting external changes is not supported on object storages');
 	}
 
-	/**
-	 * @dataProvider copyAndMoveProvider
-	 */
-	public function testMove($source, $target) {
+	#[\Override]
+	#[\PHPUnit\Framework\Attributes\DataProvider('copyAndMoveProvider')]
+	public function testMove($source, $target): void {
 		$this->initSourceAndTarget($source);
-		$sourceId = $this->instance->getCache()->getId(ltrim('/',$source));
+		$sourceId = $this->instance->getCache()->getId(ltrim($source, '/'));
 		$this->assertNotEquals(-1, $sourceId);
 
 		$this->instance->rename($source, $target);
 
-		$this->assertTrue($this->instance->file_exists($target), $target.' was not created');
-		$this->assertFalse($this->instance->file_exists($source), $source.' still exists');
+		$this->assertTrue($this->instance->file_exists($target), $target . ' was not created');
+		$this->assertFalse($this->instance->file_exists($source), $source . ' still exists');
 		$this->assertSameAsLorem($target);
 
-		$targetId = $this->instance->getCache()->getId(ltrim('/',$target));
+		$targetId = $this->instance->getCache()->getId(ltrim($target, '/'));
 		$this->assertSame($sourceId, $targetId, 'fileid must be stable on move or shares will break');
 	}
 
-	public function testRenameDirectory() {
+	#[\Override]
+	public function testRenameDirectory(): void {
 		$this->instance->mkdir('source');
 		$this->instance->file_put_contents('source/test1.txt', 'foo');
 		$this->instance->file_put_contents('source/test2.txt', 'qwerty');
@@ -131,7 +123,8 @@ class ObjectStoreStorageTest extends Storage {
 		$this->assertSame($sourceId, $targetId, 'fileid must be stable on move or shares will break');
 	}
 
-	public function testRenameOverWriteDirectory() {
+	#[\Override]
+	public function testRenameOverWriteDirectory(): void {
 		$this->instance->mkdir('source');
 		$this->instance->file_put_contents('source/test1.txt', 'foo');
 		$sourceId = $this->instance->getCache()->getId('source');
@@ -151,7 +144,8 @@ class ObjectStoreStorageTest extends Storage {
 		$this->assertSame($sourceId, $targetId, 'fileid must be stable on move or shares will break');
 	}
 
-	public function testRenameOverWriteDirectoryOverFile() {
+	#[\Override]
+	public function testRenameOverWriteDirectoryOverFile(): void {
 		$this->instance->mkdir('source');
 		$this->instance->file_put_contents('source/test1.txt', 'foo');
 		$sourceId = $this->instance->getCache()->getId('source');
@@ -168,7 +162,7 @@ class ObjectStoreStorageTest extends Storage {
 		$this->assertSame($sourceId, $targetId, 'fileid must be stable on move or shares will break');
 	}
 
-	public function testWriteObjectSilentFailure() {
+	public function testWriteObjectSilentFailure(): void {
 		$objectStore = $this->instance->getObjectStore();
 		$this->instance->setObjectStore(new FailWriteObjectStore($objectStore));
 
@@ -181,7 +175,16 @@ class ObjectStoreStorageTest extends Storage {
 		$this->assertFalse($this->instance->file_exists('test.txt'));
 	}
 
-	public function testDeleteObjectFailureKeepCache() {
+	public function testWriteObjectSilentFailureNoCheck(): void {
+		$objectStore = $this->instance->getObjectStore();
+		$this->instance->setObjectStore(new FailWriteObjectStore($objectStore));
+		$this->instance->setValidateWrites(false);
+
+		$this->instance->file_put_contents('test.txt', 'foo');
+		$this->assertTrue($this->instance->file_exists('test.txt'));
+	}
+
+	public function testDeleteObjectFailureKeepCache(): void {
 		$objectStore = $this->instance->getObjectStore();
 		$this->instance->setObjectStore(new FailDeleteObjectStore($objectStore));
 		$cache = $this->instance->getCache();
@@ -206,7 +209,7 @@ class ObjectStoreStorageTest extends Storage {
 		$this->assertTrue($cache->inCache('foo/test.txt'));
 	}
 
-	public function testCopyBetweenJails() {
+	public function testCopyBetweenJails(): void {
 		$this->instance->mkdir('a');
 		$this->instance->mkdir('b');
 		$jailA = new Jail([
@@ -227,5 +230,72 @@ class ObjectStoreStorageTest extends Storage {
 		$this->assertEquals('1', $this->instance->file_get_contents('b/target/1.txt'));
 		$this->assertEquals('2', $this->instance->file_get_contents('b/target/sub/2.txt'));
 		$this->assertEquals('3', $this->instance->file_get_contents('b/target/sub/3.txt'));
+	}
+
+	public function testMoveFromNonDeletableJail(): void {
+		$this->instance->mkdir('a');
+		$this->instance->mkdir('b');
+		$this->instance->file_put_contents('a/1.txt', '1');
+		$jailA = new Jail([
+			'storage' => new PermissionsMask([
+				'storage' => $this->instance,
+				'mask' => Constants::PERMISSION_ALL & ~Constants::PERMISSION_DELETE,
+			]),
+			'root' => 'a'
+		]);
+		$jailB = new Jail([
+			'storage' => $this->instance,
+			'root' => 'b'
+		]);
+
+		$this->assertFalse($jailB->moveFromStorage($jailA, '1.txt', '1.txt'));
+		$this->assertEquals('1', $this->instance->file_get_contents('a/1.txt'));
+		$this->assertFalse($this->instance->file_exists('b/1.txt'));
+	}
+
+	public function testCopyGrantsPermissions(): void {
+		$config['objectstore'] = $this->objectStorage;
+		$instance = new ObjectStoreStorageOverwrite($config);
+
+		$cache = $instance->getCache();
+
+		$instance->file_put_contents('test.txt', 'foo');
+		$this->assertTrue($cache->inCache('test.txt'));
+
+		$cache->update($cache->getId('test.txt'), ['permissions' => Constants::PERMISSION_READ]);
+		$this->assertEquals(Constants::PERMISSION_READ, $instance->getPermissions('test.txt'));
+
+		$this->assertTrue($instance->copy('test.txt', 'new.txt'));
+
+		$this->assertTrue($cache->inCache('new.txt'));
+		$this->assertEquals(Constants::PERMISSION_ALL - Constants::PERMISSION_CREATE, $instance->getPermissions('new.txt'));
+	}
+
+	public function testCopyFolderSize(): void {
+		$cache = $this->instance->getCache();
+
+		$this->instance->mkdir('source');
+		$this->instance->file_put_contents('source/test.txt', 'foo');
+		$this->instance->getUpdater()->update('source/test.txt');
+		$this->assertEquals(3, $cache->get('source')->getSize());
+
+		$this->assertTrue($this->instance->copy('source', 'target'));
+
+		$this->assertEquals(3, $cache->get('target')->getSize());
+	}
+
+	public function testFopenWriteInDottedDirectoryWithoutExtension(): void {
+		$dir = '0. Folder.With.Dots/Subfolder';
+		$this->instance->mkdir($dir);
+
+		$filePath = $dir . '/extensionlessfile';
+		$handle = $this->instance->fopen($filePath, 'w');
+		$this->assertIsResource($handle);
+
+		fwrite($handle, 'sample content');
+		fclose($handle);
+
+		$this->assertTrue($this->instance->file_exists($filePath));
+		$this->assertEquals('sample content', $this->instance->file_get_contents($filePath));
 	}
 }

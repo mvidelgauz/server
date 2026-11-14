@@ -1,36 +1,27 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Encryption;
 
 use OC\Files\Filesystem;
 use OC\Files\Storage\Wrapper\Encryption;
 use OC\Files\View;
 use OC\Memcache\ArrayCache;
+use OCP\Encryption\IFile;
+use OCP\Encryption\Keys\IStorage as EncryptionKeysStorage;
 use OCP\Files\Mount\IMountPoint;
-use OCP\Files\Storage;
-use OCP\ILogger;
+use OCP\Files\Storage\IDisableEncryptionStorage;
+use OCP\Files\Storage\IStorage;
+use OCP\IConfig;
+use OCP\IGroupManager;
+use OCP\IUserManager;
+use OCP\IUserSession;
+use OCP\Server;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -41,83 +32,68 @@ use Psr\Log\LoggerInterface;
  * @package OC\Encryption
  */
 class EncryptionWrapper {
-
-	/** @var ArrayCache  */
-	private $arrayCache;
-
-	/** @var  Manager */
-	private $manager;
-
-	/** @var  ILogger */
-	private $logger;
-
 	/**
 	 * EncryptionWrapper constructor.
-	 *
-	 * @param ArrayCache $arrayCache
-	 * @param Manager $manager
-	 * @param ILogger $logger
 	 */
-	public function __construct(ArrayCache $arrayCache,
-								Manager $manager,
-								ILogger $logger
+	public function __construct(
+		private ArrayCache $arrayCache,
+		private Manager $manager,
+		private LoggerInterface $logger,
 	) {
-		$this->arrayCache = $arrayCache;
-		$this->manager = $manager;
-		$this->logger = $logger;
 	}
 
 	/**
 	 * Wraps the given storage when it is not a shared storage
 	 *
 	 * @param string $mountPoint
-	 * @param Storage $storage
+	 * @param IStorage $storage
 	 * @param IMountPoint $mount
-	 * @return Encryption|Storage
+	 * @param bool $force apply the wrapper even if the storage normally has encryption disabled, helpful for repair steps
+	 * @return Encryption|IStorage
 	 */
-	public function wrapStorage($mountPoint, Storage $storage, IMountPoint $mount) {
+	public function wrapStorage(string $mountPoint, IStorage $storage, IMountPoint $mount, bool $force = false) {
 		$parameters = [
 			'storage' => $storage,
 			'mountPoint' => $mountPoint,
 			'mount' => $mount
 		];
 
-		if (!$storage->instanceOfStorage(Storage\IDisableEncryptionStorage::class) && $mountPoint !== '/') {
-			$user = \OC::$server->getUserSession()->getUser();
-			$mountManager = Filesystem::getMountManager();
-			$uid = $user ? $user->getUID() : null;
-			$fileHelper = \OC::$server->getEncryptionFilesHelper();
-			$keyStorage = \OC::$server->getEncryptionKeyStorage();
+		// Only evaluate other conditions if not forced
+		if (!$force) {
+			// If a disabled storage medium, return basic storage
+			if ($storage->instanceOfStorage(IDisableEncryptionStorage::class)) {
+				return $storage;
+			}
 
-			$util = new Util(
-				new View(),
-				\OC::$server->getUserManager(),
-				\OC::$server->getGroupManager(),
-				\OC::$server->getConfig()
-			);
-			$update = new Update(
-				new View(),
-				$util,
-				Filesystem::getMountManager(),
-				$this->manager,
-				$fileHelper,
-				\OC::$server->get(LoggerInterface::class),
-				$uid
-			);
-			return new Encryption(
-				$parameters,
-				$this->manager,
-				$util,
-				$this->logger,
-				$fileHelper,
-				$uid,
-				$keyStorage,
-				$update,
-				$mountManager,
-				$this->arrayCache
-			);
-		} else {
-			return $storage;
+			// Root mount point handling: skip encryption wrapper
+			if ($mountPoint === '/') {
+				return $storage;
+			}
 		}
+
+		// Apply encryption wrapper
+		$user = Server::get(IUserSession::class)->getUser();
+		$mountManager = Filesystem::getMountManager();
+		$uid = $user ? $user->getUID() : null;
+		$fileHelper = Server::get(IFile::class);
+		$keyStorage = Server::get(EncryptionKeysStorage::class);
+
+		$util = new Util(
+			new View(),
+			Server::get(IUserManager::class),
+			Server::get(IGroupManager::class),
+			Server::get(IConfig::class)
+		);
+		return new Encryption(
+			$parameters,
+			$this->manager,
+			$util,
+			$this->logger,
+			$fileHelper,
+			$uid,
+			$keyStorage,
+			$mountManager,
+			$this->arrayCache
+		);
 	}
 }

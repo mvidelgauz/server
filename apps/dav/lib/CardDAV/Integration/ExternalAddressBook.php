@@ -3,27 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2016 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CardDAV\Integration;
 
 use Sabre\CardDAV\IAddressBook;
@@ -35,7 +18,7 @@ use Sabre\DAV;
 abstract class ExternalAddressBook implements IAddressBook, DAV\IProperties {
 
 	/** @var string */
-	private const PREFIX = 'z-app-generated';
+	private const string PREFIX = 'z-app-generated';
 
 	/**
 	 * @var string
@@ -48,26 +31,18 @@ abstract class ExternalAddressBook implements IAddressBook, DAV\IProperties {
 	 * - explode has a limit of three, so even if the app-generated
 	 *   URI has double dashes, it won't be split
 	 */
-	private const DELIMITER = '--';
+	private const string DELIMITER = '--';
 
-	/** @var string */
-	private $appId;
-
-	/** @var string */
-	private $uri;
-
-	/**
-	 * @param string $appId
-	 * @param string $uri
-	 */
-	public function __construct(string $appId, string $uri) {
-		$this->appId = $appId;
-		$this->uri = $uri;
+	public function __construct(
+		private string $appId,
+		private string $uri,
+	) {
 	}
 
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	final public function getName() {
 		return implode(self::DELIMITER, [
 			self::PREFIX,
@@ -79,6 +54,7 @@ abstract class ExternalAddressBook implements IAddressBook, DAV\IProperties {
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	final public function setName($name) {
 		throw new DAV\Exception\MethodNotAllowed('Renaming address books is not yet supported');
 	}
@@ -86,6 +62,7 @@ abstract class ExternalAddressBook implements IAddressBook, DAV\IProperties {
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	final public function createDirectory($name) {
 		throw new DAV\Exception\MethodNotAllowed('Creating collections in address book objects is not allowed');
 	}
@@ -98,7 +75,7 @@ abstract class ExternalAddressBook implements IAddressBook, DAV\IProperties {
 	 * @return bool
 	 */
 	public static function isAppGeneratedAddressBook(string $uri): bool {
-		return strpos($uri, self::PREFIX) === 0 && substr_count($uri, self::DELIMITER) >= 2;
+		return str_starts_with($uri, self::PREFIX) && substr_count($uri, self::DELIMITER) >= 2;
 	}
 
 	/**
@@ -128,6 +105,6 @@ abstract class ExternalAddressBook implements IAddressBook, DAV\IProperties {
 	 * @return bool
 	 */
 	public static function doesViolateReservedName(string $uri): bool {
-		return strpos($uri, self::PREFIX) === 0;
+		return str_starts_with($uri, self::PREFIX);
 	}
 }

@@ -1,368 +1,234 @@
 <?php
+
+declare(strict_types=1);
 /**
- * Copyright (c) 2013 Christopher Schäpers <christopher@schaepers.it>
- * Copyright (c) 2013 Bart Visscher <bartv@thisnet.nl>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test;
 
 use OC\AppConfig;
-use OC\DB\Connection;
+use OC\Config\ConfigManager;
+use OC\Config\PresetManager;
+use OC\Memcache\Factory as CacheFactory;
+use OCP\DB\IResult;
+use OCP\DB\QueryBuilder\IExpressionBuilder;
+use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\ICache;
 use OCP\IConfig;
+use OCP\IDBConnection;
+use OCP\Security\ICrypto;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 
 /**
  * Class AppConfigTest
  *
- * @group DB
- *
  * @package Test
  */
 class AppConfigTest extends TestCase {
-	/** @var \OCP\IAppConfig */
-	protected $appConfig;
+	private IConfig&MockObject $config;
+	private IDBConnection&MockObject $connection;
+	private ConfigManager&MockObject $configManager;
+	private PresetManager&MockObject $presetManager;
+	private LoggerInterface&MockObject $logger;
+	private ICrypto&MockObject $crypto;
+	private CacheFactory&MockObject $cacheFactory;
+	private ICache&MockObject $localCache;
 
-	/** @var Connection */
-	protected $connection;
-
-	protected $originalConfig;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->connection = \OC::$server->get(Connection::class);
-		$sql = $this->connection->getQueryBuilder();
-		$sql->select('*')
-			->from('appconfig');
-		$result = $sql->execute();
-		$this->originalConfig = $result->fetchAll();
-		$result->closeCursor();
-
-		$sql = $this->connection->getQueryBuilder();
-		$sql->delete('appconfig');
-		$sql->execute();
-
-		$this->overwriteService(AppConfig::class, new \OC\AppConfig($this->connection));
-
-		$sql = $this->connection->getQueryBuilder();
-		$sql->insert('appconfig')
-			->values([
-				'appid' => $sql->createParameter('appid'),
-				'configkey' => $sql->createParameter('configkey'),
-				'configvalue' => $sql->createParameter('configvalue'),
-			]);
-
-		$sql->setParameters([
-			'appid' => 'testapp',
-			'configkey' => 'enabled',
-			'configvalue' => 'true',
-		])->execute();
-		$sql->setParameters([
-			'appid' => 'testapp',
-			'configkey' => 'installed_version',
-			'configvalue' => '1.2.3',
-		])->execute();
-		$sql->setParameters([
-			'appid' => 'testapp',
-			'configkey' => 'depends_on',
-			'configvalue' => 'someapp',
-		])->execute();
-		$sql->setParameters([
-			'appid' => 'testapp',
-			'configkey' => 'deletethis',
-			'configvalue' => 'deletethis',
-		])->execute();
-		$sql->setParameters([
-			'appid' => 'testapp',
-			'configkey' => 'key',
-			'configvalue' => 'value',
-		])->execute();
-
-		$sql->setParameters([
-			'appid' => 'someapp',
-			'configkey' => 'key',
-			'configvalue' => 'value',
-		])->execute();
-		$sql->setParameters([
-			'appid' => 'someapp',
-			'configkey' => 'otherkey',
-			'configvalue' => 'othervalue',
-		])->execute();
-
-		$sql->setParameters([
-			'appid' => '123456',
-			'configkey' => 'key',
-			'configvalue' => 'value',
-		])->execute();
-		$sql->setParameters([
-			'appid' => '123456',
-			'configkey' => 'enabled',
-			'configvalue' => 'false',
-		])->execute();
-
-		$sql->setParameters([
-			'appid' => 'anotherapp',
-			'configkey' => 'key',
-			'configvalue' => 'value',
-		])->execute();
-		$sql->setParameters([
-			'appid' => 'anotherapp',
-			'configkey' => 'enabled',
-			'configvalue' => 'false',
-		])->execute();
+		$this->connection = $this->createMock(IDBConnection::class);
+		$this->config = $this->createMock(IConfig::class);
+		$this->configManager = $this->createMock(ConfigManager::class);
+		$this->presetManager = $this->createMock(PresetManager::class);
+		$this->logger = $this->createMock(LoggerInterface::class);
+		$this->crypto = $this->createMock(ICrypto::class);
+		$this->cacheFactory = $this->createMock(CacheFactory::class);
+		$this->localCache = $this->createMock(ICache::class);
 	}
 
-	protected function tearDown(): void {
-		$sql = $this->connection->getQueryBuilder();
-		$sql->delete('appconfig');
-		$sql->execute();
-
-		$sql = $this->connection->getQueryBuilder();
-		$sql->insert('appconfig')
-			->values([
-				'appid' => $sql->createParameter('appid'),
-				'configkey' => $sql->createParameter('configkey'),
-				'configvalue' => $sql->createParameter('configvalue'),
-			]);
-
-		foreach ($this->originalConfig as $configs) {
-			$sql->setParameter('appid', $configs['appid'])
-				->setParameter('configkey', $configs['configkey'])
-				->setParameter('configvalue', $configs['configvalue']);
-			$sql->execute();
+	protected function getAppConfig($cached = false): AppConfig {
+		$this->config->method('getSystemValueBool')
+			->with('cache_app_config', true)
+			->willReturn(true);
+		$this->cacheFactory->method('isLocalCacheAvailable')->willReturn($cached);
+		if ($cached) {
+			$this->cacheFactory->method('withServerVersionPrefix')->willReturnCallback(function (\Closure $closure): void {
+				$closure($this->cacheFactory);
+			});
+			$this->cacheFactory->method('createLocal')->willReturn($this->localCache);
 		}
 
-		$this->restoreService(AppConfig::class);
-		parent::tearDown();
+		return new AppConfig(
+			$this->connection,
+			$this->config,
+			$this->configManager,
+			$this->presetManager,
+			$this->logger,
+			$this->crypto,
+			$this->cacheFactory,
+		);
 	}
 
-	public function testGetApps() {
-		$config = new \OC\AppConfig(\OC::$server->get(Connection::class));
-
-		$this->assertEqualsCanonicalizing([
-			'anotherapp',
-			'someapp',
-			'testapp',
-			123456,
-		], $config->getApps());
-	}
-
-	public function testGetKeys() {
-		$config = new \OC\AppConfig(\OC::$server->get(Connection::class));
-
-		$keys = $config->getKeys('testapp');
-		$this->assertEqualsCanonicalizing([
-			'deletethis',
-			'depends_on',
-			'enabled',
-			'installed_version',
-			'key',
-		], $keys);
-	}
-
-	public function testGetValue() {
-		$config = new \OC\AppConfig(\OC::$server->get(Connection::class));
-
-		$value = $config->getValue('testapp', 'installed_version');
-		$this->assertConfigKey('testapp', 'installed_version', $value);
-
-		$value = $config->getValue('testapp', 'nonexistant');
-		$this->assertNull($value);
-
-		$value = $config->getValue('testapp', 'nonexistant', 'default');
-		$this->assertEquals('default', $value);
-	}
-
-	public function testHasKey() {
-		$config = new \OC\AppConfig(\OC::$server->get(Connection::class));
-
-		$this->assertTrue($config->hasKey('testapp', 'installed_version'));
-		$this->assertFalse($config->hasKey('testapp', 'nonexistant'));
-		$this->assertFalse($config->hasKey('nonexistant', 'nonexistant'));
-	}
-
-	public function testSetValueUpdate() {
-		$config = new \OC\AppConfig(\OC::$server->get(Connection::class));
-
-		$this->assertEquals('1.2.3', $config->getValue('testapp', 'installed_version'));
-		$this->assertConfigKey('testapp', 'installed_version', '1.2.3');
-
-		$wasModified = $config->setValue('testapp', 'installed_version', '1.2.3');
-		if (!(\OC::$server->get(Connection::class) instanceof \OC\DB\OracleConnection)) {
-			$this->assertFalse($wasModified);
-		}
-
-		$this->assertEquals('1.2.3', $config->getValue('testapp', 'installed_version'));
-		$this->assertConfigKey('testapp', 'installed_version', '1.2.3');
-
-		$this->assertTrue($config->setValue('testapp', 'installed_version', '1.33.7'));
-
-
-		$this->assertEquals('1.33.7', $config->getValue('testapp', 'installed_version'));
-		$this->assertConfigKey('testapp', 'installed_version', '1.33.7');
-
-		$config->setValue('someapp', 'somekey', 'somevalue');
-		$this->assertConfigKey('someapp', 'somekey', 'somevalue');
-	}
-
-	public function testSetValueInsert() {
-		$config = new \OC\AppConfig(\OC::$server->get(Connection::class));
-
-		$this->assertFalse($config->hasKey('someapp', 'somekey'));
-		$this->assertNull($config->getValue('someapp', 'somekey'));
-
-		$this->assertTrue($config->setValue('someapp', 'somekey', 'somevalue'));
-
-		$this->assertTrue($config->hasKey('someapp', 'somekey'));
-		$this->assertEquals('somevalue', $config->getValue('someapp', 'somekey'));
-		$this->assertConfigKey('someapp', 'somekey', 'somevalue');
-
-		$wasInserted = $config->setValue('someapp', 'somekey', 'somevalue');
-		if (!(\OC::$server->get(Connection::class) instanceof \OC\DB\OracleConnection)) {
-			$this->assertFalse($wasInserted);
-		}
-	}
-
-	public function testDeleteKey() {
-		$config = new \OC\AppConfig(\OC::$server->get(Connection::class));
-
-		$this->assertTrue($config->hasKey('testapp', 'deletethis'));
-
-		$config->deleteKey('testapp', 'deletethis');
-
-		$this->assertFalse($config->hasKey('testapp', 'deletethis'));
-
-		$sql = \OC::$server->getDatabaseConnection()->getQueryBuilder();
-		$sql->select('configvalue')
-			->from('appconfig')
-			->where($sql->expr()->eq('appid', $sql->createParameter('appid')))
-			->andWhere($sql->expr()->eq('configkey', $sql->createParameter('configkey')))
-			->setParameter('appid', 'testapp')
-			->setParameter('configkey', 'deletethis');
-		$query = $sql->execute();
-		$result = $query->fetch();
-		$query->closeCursor();
-		$this->assertFalse($result);
-	}
-
-	public function testDeleteApp() {
-		$config = new \OC\AppConfig(\OC::$server->get(Connection::class));
-
-		$this->assertTrue($config->hasKey('someapp', 'otherkey'));
-
-		$config->deleteApp('someapp');
-
-		$this->assertFalse($config->hasKey('someapp', 'otherkey'));
-
-		$sql = \OC::$server->getDatabaseConnection()->getQueryBuilder();
-		$sql->select('configvalue')
-			->from('appconfig')
-			->where($sql->expr()->eq('appid', $sql->createParameter('appid')))
-			->setParameter('appid', 'someapp');
-		$query = $sql->execute();
-		$result = $query->fetch();
-		$query->closeCursor();
-		$this->assertFalse($result);
-	}
-
-	public function testGetValuesNotAllowed() {
-		$config = new \OC\AppConfig(\OC::$server->get(Connection::class));
-
-		$this->assertFalse($config->getValues('testapp', 'enabled'));
-
-		$this->assertFalse($config->getValues(false, false));
-	}
-
-	public function testGetValues() {
-		$config = new \OC\AppConfig(\OC::$server->get(Connection::class));
-
-		$sql = \OC::$server->getDatabaseConnection()->getQueryBuilder();
-		$sql->select(['configkey', 'configvalue'])
-			->from('appconfig')
-			->where($sql->expr()->eq('appid', $sql->createParameter('appid')))
-			->setParameter('appid', 'testapp');
-		$query = $sql->execute();
-		$expected = [];
-		while ($row = $query->fetch()) {
-			$expected[$row['configkey']] = $row['configvalue'];
-		}
-		$query->closeCursor();
-
-		$values = $config->getValues('testapp', false);
-		$this->assertEquals($expected, $values);
-
-		$sql = \OC::$server->getDatabaseConnection()->getQueryBuilder();
-		$sql->select(['appid', 'configvalue'])
-			->from('appconfig')
-			->where($sql->expr()->eq('configkey', $sql->createParameter('configkey')))
-			->setParameter('configkey', 'enabled');
-		$query = $sql->execute();
-		$expected = [];
-		while ($row = $query->fetch()) {
-			$expected[$row['appid']] = $row['configvalue'];
-		}
-		$query->closeCursor();
-
-		$values = $config->getValues(false, 'enabled');
-		$this->assertEquals($expected, $values);
-	}
-
-	public function testGetFilteredValues() {
-		/** @var \OC\AppConfig|\PHPUnit\Framework\MockObject\MockObject $config */
-		$config = $this->getMockBuilder(\OC\AppConfig::class)
-			->setConstructorArgs([\OC::$server->get(Connection::class)])
-			->setMethods(['getValues'])
-			->getMock();
-
-		$config->expects($this->once())
-			->method('getValues')
-			->with('user_ldap', false)
+	public function testCachedRead(): void {
+		$this->localCache->expects(self::once())
+			->method('get')
+			->with('OC\\AppConfig')
 			->willReturn([
-				'ldap_agent_password' => 'secret',
-				's42ldap_agent_password' => 'secret',
-				'ldap_dn' => 'dn',
+				'fastCache' => [
+					'appid' => [
+						'some-key' => 'some-value',
+						'other-key' => 'other value'
+					],
+				],
+				'valueTypes' => [
+					'appid' => [
+						'some-key' => AppConfig::VALUE_STRING,
+						'other-key' => AppConfig::VALUE_STRING,
+					],
+				],
 			]);
 
-		$values = $config->getFilteredValues('user_ldap');
-		$this->assertEquals([
-			'ldap_agent_password' => IConfig::SENSITIVE_VALUE,
-			's42ldap_agent_password' => IConfig::SENSITIVE_VALUE,
-			'ldap_dn' => 'dn',
-		], $values);
+		$this->connection->expects(self::never())->method('getQueryBuilder');
+		$config = $this->getAppConfig(true);
+
+		$this->assertSame('some-value', $config->getValueString('appid', 'some-key'));
+		$this->assertSame('other value', $config->getValueString('appid', 'other-key'));
+		$this->assertSame(AppConfig::VALUE_STRING, $config->getValueType('appid', 'some-key', false));
 	}
 
-	public function testSettingConfigParallel() {
-		$appConfig1 = new \OC\AppConfig(\OC::$server->get(Connection::class));
-		$appConfig2 = new \OC\AppConfig(\OC::$server->get(Connection::class));
-		$appConfig1->getValue('testapp', 'foo', 'v1');
-		$appConfig2->getValue('testapp', 'foo', 'v1');
+	public function testCachedLazyRead(): void {
+		$this->localCache->expects(self::once())
+			->method('get')
+			->with('OC\\AppConfig')
+			->willReturn([
+				'fastCache' => [
+					'appid' => [
+						'fast-key' => 'fast value',
+					],
+				],
+				'lazyCache' => [
+					'appid' => [
+						'lazy-key' => 'lazy value',
+					],
+				],
+				'valueTypes' => [
+					'appid' => [
+						'some-key' => AppConfig::VALUE_STRING,
+						'lazy-key' => AppConfig::VALUE_STRING,
+					],
+				],
+			]);
 
-		$appConfig1->setValue('testapp', 'foo', 'v1');
-		$this->assertConfigKey('testapp', 'foo', 'v1');
+		$this->connection->expects(self::never())->method('getQueryBuilder');
+		$config = $this->getAppConfig(true);
 
-		$appConfig2->setValue('testapp', 'foo', 'v2');
-		$this->assertConfigKey('testapp', 'foo', 'v2');
+		$this->assertSame('fast value', $config->getValueString('appid', 'fast-key'));
+		$this->assertSame('lazy value', $config->getValueString('appid', 'lazy-key', '', true));
 	}
 
-	/**
-	 * @param string $app
-	 * @param string $key
-	 * @param string $expected
-	 */
-	protected function assertConfigKey($app, $key, $expected) {
-		$sql = \OC::$server->getDatabaseConnection()->getQueryBuilder();
-		$sql->select('configvalue')
-			->from('appconfig')
-			->where($sql->expr()->eq('appid', $sql->createParameter('appid')))
-			->andWhere($sql->expr()->eq('configkey', $sql->createParameter('configkey')))
-			->setParameter('appid', $app)
-			->setParameter('configkey', $key);
-		$query = $sql->execute();
-		$actual = $query->fetch();
-		$query->closeCursor();
+	public function testOnlyFastKeyCached(): void {
+		$this->localCache->expects(self::atLeastOnce())
+			->method('get')
+			->with('OC\\AppConfig')
+			->willReturn([
+				'fastCache' => [
+					'appid' => [
+						'fast-key' => 'fast value',
+					],
+				],
+				'valueTypes' => [
+					'appid' => [
+						'fast-key' => AppConfig::VALUE_STRING,
+					],
+				],
+			]);
 
-		$this->assertEquals($expected, $actual['configvalue']);
+		$result = $this->createMock(IResult::class);
+		$result->method('fetchAllAssociative')->willReturn([
+			['lazy' => 1, 'appid' => 'appid', 'configkey' => 'lazy-key', 'configvalue' => 'lazy value'],
+		]);
+		$expression = $this->createMock(IExpressionBuilder::class);
+		$queryBuilder = $this->createMock(IQueryBuilder::class);
+		$queryBuilder->method('from')->willReturn($queryBuilder);
+		$queryBuilder->method('expr')->willReturn($expression);
+		$queryBuilder->method('executeQuery')->willReturn($result);
+
+		$this->connection->expects(self::once())->method('getQueryBuilder')->willReturn($queryBuilder);
+		$config = $this->getAppConfig(true);
+
+		$this->assertSame('fast value', $config->getValueString('appid', 'fast-key'));
+		$this->assertSame('lazy value', $config->getValueString('appid', 'lazy-key', '', true));
+	}
+
+	public function testWritesAreCached(): void {
+		$this->localCache->expects(self::atLeastOnce())
+			->method('get')
+			->with('OC\\AppConfig')
+			->willReturn([
+				'fastCache' => [
+					'appid' => [
+						'first-key' => 'first value',
+					],
+				],
+				'valueTypes' => [
+					'appid' => [
+						'first-key' => AppConfig::VALUE_STRING,
+					],
+				],
+			]);
+
+		$expression = $this->createMock(IExpressionBuilder::class);
+		$queryBuilder = $this->createMock(IQueryBuilder::class);
+		$queryBuilder->expects(self::once())
+			->method('update')
+			->with('appconfig', null)
+			->willReturn($queryBuilder);
+		$queryBuilder->method('set')->willReturn($queryBuilder);
+		$queryBuilder->method('where')->willReturn($queryBuilder);
+		$queryBuilder->method('andWhere')->willReturn($queryBuilder);
+		$queryBuilder->method('expr')->willReturn($expression);
+		$this->connection->expects(self::once())->method('getQueryBuilder')->willReturn($queryBuilder);
+
+		$config = $this->getAppConfig(true);
+
+		$this->assertSame('first value', $config->getValueString('appid', 'first-key'));
+		$config->setValueString('appid', 'first-key', 'new value');
+		$this->assertSame('new value', $config->getValueString('appid', 'first-key'));
+	}
+
+	public function testFilteredValuesMaskTheEuroOfficeSecret(): void {
+		$this->localCache->expects(self::atLeastOnce())
+			->method('get')
+			->with('OC\\AppConfig')
+			->willReturn([
+				'fastCache' => [
+					'eurooffice' => [
+						'jwt_secret' => 'a-document-server-signing-key',
+						'jwt_header' => 'AuthorizationJwt',
+					],
+				],
+				'lazyCache' => [
+					'eurooffice' => [],
+				],
+				'valueTypes' => [
+					'eurooffice' => [
+						'jwt_secret' => AppConfig::VALUE_STRING,
+						'jwt_header' => AppConfig::VALUE_STRING,
+					],
+				],
+			]);
+
+		$this->connection->expects(self::never())->method('getQueryBuilder');
+		$config = $this->getAppConfig(true);
+
+		$this->assertSame([
+			'jwt_secret' => IConfig::SENSITIVE_VALUE,
+			'jwt_header' => 'AuthorizationJwt',
+		], $config->getFilteredValues('eurooffice'));
 	}
 }

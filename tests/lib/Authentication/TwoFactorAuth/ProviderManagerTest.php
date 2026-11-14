@@ -3,29 +3,13 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2018 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author 2018 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace lib\Authentication\TwoFactorAuth;
 
+use OC\Authentication\Exceptions\InvalidProviderException;
 use OC\Authentication\TwoFactorAuth\ProviderLoader;
 use OC\Authentication\TwoFactorAuth\ProviderManager;
 use OCP\Authentication\TwoFactorAuth\IActivatableByAdmin;
@@ -33,50 +17,36 @@ use OCP\Authentication\TwoFactorAuth\IDeactivatableByAdmin;
 use OCP\Authentication\TwoFactorAuth\IProvider;
 use OCP\Authentication\TwoFactorAuth\IRegistry;
 use OCP\IUser;
-use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class ProviderManagerTest extends TestCase {
-
-	/** @var ProviderLoader|MockObject */
-	private $providerLoader;
-
-	/** @var IRegistry|MockObject */
-	private $registry;
-
 	/** @var ProviderManager */
 	private $providerManager;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->providerLoader = $this->createMock(ProviderLoader::class);
-		$this->registry = $this->createMock(IRegistry::class);
-
-		$this->providerManager = new ProviderManager(
-			$this->providerLoader,
-			$this->registry
-		);
+		$this->providerManager = $this->createInstanceWithMocks(ProviderManager::class);
 	}
 
-	
-	public function testTryEnableInvalidProvider() {
-		$this->expectException(\OC\Authentication\Exceptions\InvalidProviderException::class);
+	public function testTryEnableInvalidProvider(): void {
+		$this->expectException(InvalidProviderException::class);
 
 		$user = $this->createMock(IUser::class);
 		$this->providerManager->tryEnableProviderFor('none', $user);
 	}
 
-	public function testTryEnableUnsupportedProvider() {
+	public function testTryEnableUnsupportedProvider(): void {
 		$user = $this->createMock(IUser::class);
 		$provider = $this->createMock(IProvider::class);
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->with($user)
 			->willReturn([
 				'u2f' => $provider,
 			]);
-		$this->registry->expects($this->never())
+		$this->getAutoMock(IRegistry::class)->expects($this->never())
 			->method('enableProviderFor');
 
 		$res = $this->providerManager->tryEnableProviderFor('u2f', $user);
@@ -84,10 +54,10 @@ class ProviderManagerTest extends TestCase {
 		$this->assertFalse($res);
 	}
 
-	public function testTryEnableProvider() {
+	public function testTryEnableProvider(): void {
 		$user = $this->createMock(IUser::class);
 		$provider = $this->createMock(IActivatableByAdmin::class);
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->with($user)
 			->willReturn([
@@ -96,7 +66,7 @@ class ProviderManagerTest extends TestCase {
 		$provider->expects($this->once())
 			->method('enableFor')
 			->with($user);
-		$this->registry->expects($this->once())
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('enableProviderFor')
 			->with($provider, $user);
 
@@ -105,24 +75,23 @@ class ProviderManagerTest extends TestCase {
 		$this->assertTrue($res);
 	}
 
-	
-	public function testTryDisableInvalidProvider() {
-		$this->expectException(\OC\Authentication\Exceptions\InvalidProviderException::class);
+	public function testTryDisableInvalidProvider(): void {
+		$this->expectException(InvalidProviderException::class);
 
 		$user = $this->createMock(IUser::class);
 		$this->providerManager->tryDisableProviderFor('none', $user);
 	}
 
-	public function testTryDisableUnsupportedProvider() {
+	public function testTryDisableUnsupportedProvider(): void {
 		$user = $this->createMock(IUser::class);
 		$provider = $this->createMock(IProvider::class);
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->with($user)
 			->willReturn([
 				'u2f' => $provider,
 			]);
-		$this->registry->expects($this->never())
+		$this->getAutoMock(IRegistry::class)->expects($this->never())
 			->method('disableProviderFor');
 
 		$res = $this->providerManager->tryDisableProviderFor('u2f', $user);
@@ -130,10 +99,10 @@ class ProviderManagerTest extends TestCase {
 		$this->assertFalse($res);
 	}
 
-	public function testTryDisableProvider() {
+	public function testTryDisableProvider(): void {
 		$user = $this->createMock(IUser::class);
 		$provider = $this->createMock(IDeactivatableByAdmin::class);
-		$this->providerLoader->expects($this->once())
+		$this->getAutoMock(ProviderLoader::class)->expects($this->once())
 			->method('getProviders')
 			->with($user)
 			->willReturn([
@@ -142,7 +111,7 @@ class ProviderManagerTest extends TestCase {
 		$provider->expects($this->once())
 			->method('disableFor')
 			->with($user);
-		$this->registry->expects($this->once())
+		$this->getAutoMock(IRegistry::class)->expects($this->once())
 			->method('disableProviderFor')
 			->with($provider, $user);
 

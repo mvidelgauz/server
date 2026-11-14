@@ -1,32 +1,12 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- * @copyright Copyright (c) 2018, Georg Ehrke
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Tests\unit\Connector\Sabre;
 
 use OC\KnownUser\KnownUserService;
@@ -34,7 +14,12 @@ use OC\User\User;
 use OCA\DAV\CalDAV\Proxy\Proxy;
 use OCA\DAV\CalDAV\Proxy\ProxyMapper;
 use OCA\DAV\Connector\Sabre\Principal;
+use OCP\Accounts\IAccount;
+use OCP\Accounts\IAccountManager;
+use OCP\Accounts\IAccountProperty;
+use OCP\Accounts\IAccountPropertyCollection;
 use OCP\App\IAppManager;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IConfig;
 use OCP\IGroup;
 use OCP\IGroupManager;
@@ -42,6 +27,7 @@ use OCP\IUser;
 use OCP\IUserManager;
 use OCP\IUserSession;
 use OCP\L10N\IFactory;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
 use OCP\Share\IManager;
 use PHPUnit\Framework\MockObject\MockObject;
 use Sabre\DAV\Exception;
@@ -49,38 +35,24 @@ use Sabre\DAV\PropPatch;
 use Test\TestCase;
 
 class PrincipalTest extends TestCase {
-
-	/** @var IUserManager | MockObject */
-	private $userManager;
-
-	/** @var Principal */
-	private $connector;
-
-	/** @var IGroupManager | MockObject */
-	private $groupManager;
-
-	/** @var IManager | MockObject */
-	private $shareManager;
-
-	/** @var IUserSession | MockObject */
-	private $userSession;
-
-	/** @var IAppManager | MockObject */
-	private $appManager;
-
-	/** @var ProxyMapper | MockObject */
-	private $proxyMapper;
-
-	/** @var KnownUserService|MockObject */
-	private $knownUserService;
-	/** @var IConfig | MockObject */
-	private $config;
-	/** @var IFactory|MockObject */
-	private $languageFactory;
+	private IUserManager&MockObject $userManager;
+	private IGroupManager&MockObject $groupManager;
+	private IAccountManager&MockObject $accountManager;
+	private IManager&MockObject $shareManager;
+	private IUserSession&MockObject $userSession;
+	private IAppManager&MockObject $appManager;
+	private ProxyMapper&MockObject $proxyMapper;
+	private KnownUserService&MockObject $knownUserService;
+	private IConfig&MockObject $config;
+	private IFactory&MockObject $languageFactory;
+	private Principal $connector;
 
 	protected function setUp(): void {
+		parent::setUp();
+
 		$this->userManager = $this->createMock(IUserManager::class);
 		$this->groupManager = $this->createMock(IGroupManager::class);
+		$this->accountManager = $this->createMock(IAccountManager::class);
 		$this->shareManager = $this->createMock(IManager::class);
 		$this->userSession = $this->createMock(IUserSession::class);
 		$this->appManager = $this->createMock(IAppManager::class);
@@ -92,6 +64,7 @@ class PrincipalTest extends TestCase {
 		$this->connector = new Principal(
 			$this->userManager,
 			$this->groupManager,
+			$this->accountManager,
 			$this->shareManager,
 			$this->userSession,
 			$this->appManager,
@@ -100,7 +73,6 @@ class PrincipalTest extends TestCase {
 			$this->config,
 			$this->languageFactory
 		);
-		parent::setUp();
 	}
 
 	public function testGetPrincipalsByPrefixWithoutPrefix(): void {
@@ -109,28 +81,32 @@ class PrincipalTest extends TestCase {
 	}
 
 	public function testGetPrincipalsByPrefixWithUsers(): void {
-		$fooUser = $this->createMock(User::class);
+		$fooUser = $this->createMock(IUser::class);
 		$fooUser
-				->expects($this->once())
-				->method('getUID')
-				->willReturn('foo');
+			->expects($this->once())
+			->method('getUID')
+			->willReturn('foo');
 		$fooUser
-				->expects($this->once())
-				->method('getDisplayName')
-				->willReturn('Dr. Foo-Bar');
+			->expects($this->once())
+			->method('getDisplayName')
+			->willReturn('Dr. Foo-Bar');
 		$fooUser
-				->expects($this->once())
-				->method('getSystemEMailAddress')
-				->willReturn('');
-		$barUser = $this->createMock(User::class);
+			->expects($this->once())
+			->method('getSystemEMailAddress')
+			->willReturn('');
+		$barUser = $this->createMock(IUser::class);
 		$barUser
 			->expects($this->once())
 			->method('getUID')
 			->willReturn('bar');
 		$barUser
-				->expects($this->once())
-				->method('getSystemEMailAddress')
-				->willReturn('bar@nextcloud.com');
+			->expects($this->once())
+			->method('getSystemEMailAddress')
+			->willReturn('bar@nextcloud.com');
+		$barUser
+			->expects($this->once())
+			->method('getDisplayName')
+			->willReturn('bar');
 		$this->userManager
 			->expects($this->once())
 			->method('search')
@@ -140,8 +116,47 @@ class PrincipalTest extends TestCase {
 		$this->languageFactory
 			->expects($this->exactly(2))
 			->method('getUserLanguage')
-			->withConsecutive([$fooUser], [$barUser])
-			->willReturnOnConsecutiveCalls('de', 'en');
+			->willReturnMap([
+				[$fooUser, 'de'],
+				[$barUser, 'en'],
+			]);
+
+		$fooAccountPropertyCollection = $this->createMock(IAccountPropertyCollection::class);
+		$fooAccountPropertyCollection->expects($this->once())
+			->method('getProperties')
+			->willReturn([]);
+		$fooAccount = $this->createMock(IAccount::class);
+		$fooAccount->expects($this->once())
+			->method('getPropertyCollection')
+			->with(IAccountManager::COLLECTION_EMAIL)
+			->willReturn($fooAccountPropertyCollection);
+
+		$emailPropertyOne = $this->createMock(IAccountProperty::class);
+		$emailPropertyOne->expects($this->once())
+			->method('getValue')
+			->willReturn('alias@nextcloud.com');
+		$emailPropertyTwo = $this->createMock(IAccountProperty::class);
+		$emailPropertyTwo->expects($this->once())
+			->method('getValue')
+			->willReturn('alias2@nextcloud.com');
+
+		$barAccountPropertyCollection = $this->createMock(IAccountPropertyCollection::class);
+		$barAccountPropertyCollection->expects($this->once())
+			->method('getProperties')
+			->willReturn([$emailPropertyOne, $emailPropertyTwo]);
+		$barAccount = $this->createMock(IAccount::class);
+		$barAccount->expects($this->once())
+			->method('getPropertyCollection')
+			->with(IAccountManager::COLLECTION_EMAIL)
+			->willReturn($barAccountPropertyCollection);
+
+		$this->accountManager
+			->expects($this->exactly(2))
+			->method('getAccount')
+			->willReturnMap([
+				[$fooUser, $fooAccount],
+				[$barUser, $barAccount],
+			]);
 
 		$expectedResponse = [
 			0 => [
@@ -156,6 +171,7 @@ class PrincipalTest extends TestCase {
 				'{urn:ietf:params:xml:ns:caldav}calendar-user-type' => 'INDIVIDUAL',
 				'{http://nextcloud.com/ns}language' => 'en',
 				'{http://sabredav.org/ns}email-address' => 'bar@nextcloud.com',
+				'{DAV:}alternate-URI-set' => ['mailto:alias@nextcloud.com', 'mailto:alias2@nextcloud.com']
 			]
 		];
 		$response = $this->connector->getPrincipalsByPrefix('principals/users');
@@ -174,10 +190,14 @@ class PrincipalTest extends TestCase {
 	}
 
 	public function testGetPrincipalsByPathWithoutMail(): void {
-		$fooUser = $this->createMock(User::class);
+		$fooUser = $this->createMock(IUser::class);
 		$fooUser
 			->expects($this->once())
 			->method('getUID')
+			->willReturn('foo');
+		$fooUser
+			->expects($this->once())
+			->method('getDisplayName')
 			->willReturn('foo');
 		$this->userManager
 			->expects($this->once())
@@ -202,15 +222,19 @@ class PrincipalTest extends TestCase {
 	}
 
 	public function testGetPrincipalsByPathWithMail(): void {
-		$fooUser = $this->createMock(User::class);
+		$fooUser = $this->createMock(IUser::class);
 		$fooUser
-				->expects($this->once())
-				->method('getSystemEMailAddress')
-				->willReturn('foo@nextcloud.com');
+			->expects($this->once())
+			->method('getSystemEMailAddress')
+			->willReturn('foo@nextcloud.com');
 		$fooUser
-				->expects($this->once())
-				->method('getUID')
-				->willReturn('foo');
+			->expects($this->once())
+			->method('getUID')
+			->willReturn('foo');
+		$fooUser
+			->expects($this->once())
+			->method('getDisplayName')
+			->willReturn('foo');
 		$this->userManager
 			->expects($this->once())
 			->method('get')
@@ -249,7 +273,6 @@ class PrincipalTest extends TestCase {
 		$response = $this->connector->getGroupMemberSet('principals/users/foo');
 		$this->assertSame([], $response);
 	}
-
 
 	public function testGetGroupMemberSetEmpty(): void {
 		$this->expectException(Exception::class);
@@ -375,7 +398,6 @@ class PrincipalTest extends TestCase {
 		$this->assertSame($expectedResponse, $response);
 	}
 
-
 	public function testGetGroupMembershipEmpty(): void {
 		$this->expectException(Exception::class);
 		$this->expectExceptionMessage('Principal not found');
@@ -388,7 +410,6 @@ class PrincipalTest extends TestCase {
 
 		$this->connector->getGroupMembership('principals/users/foo');
 	}
-
 
 	public function testSetGroupMembership(): void {
 		$this->expectException(Exception::class);
@@ -409,22 +430,19 @@ class PrincipalTest extends TestCase {
 			->method('getUID')
 			->willReturn('bar');
 		$this->userManager
-			->expects($this->at(0))
+			->expects($this->exactly(2))
 			->method('get')
-			->with('foo')
-			->willReturn($fooUser);
-		$this->userManager
-			->expects($this->at(1))
-			->method('get')
-			->with('bar')
-			->willReturn($barUser);
+			->willReturnMap([
+				['foo', $fooUser],
+				['bar', $barUser],
+			]);
 
-		$this->proxyMapper->expects($this->at(0))
+		$this->proxyMapper->expects($this->once())
 			->method('getProxiesOf')
 			->with('principals/users/foo')
 			->willReturn([]);
 
-		$this->proxyMapper->expects($this->at(1))
+		$this->proxyMapper->expects($this->once())
 			->method('insert')
 			->with($this->callback(function ($proxy) {
 				/** @var Proxy $proxy */
@@ -440,8 +458,103 @@ class PrincipalTest extends TestCase {
 
 				return true;
 			}));
+		$auditEvents = $this->captureAuditEvents();
 
 		$this->connector->setGroupMemberSet('principals/users/foo/calendar-proxy-write', ['principals/users/bar']);
+
+		$this->assertDelegationAuditEvents([
+			['dav.calendar_delegation.granted', 'granted', 'write'],
+		], $auditEvents);
+	}
+
+	/**
+	 * @return \ArrayObject<int, CriticalActionPerformedEvent>
+	 */
+	private function captureAuditEvents(): \ArrayObject {
+		$auditEvents = new \ArrayObject();
+		$eventDispatcher = $this->createMock(IEventDispatcher::class);
+		$eventDispatcher->method('dispatchTyped')
+			->willReturnCallback(function (object $event) use ($auditEvents): void {
+				if ($event instanceof CriticalActionPerformedEvent) {
+					$auditEvents[] = $event;
+				}
+			});
+		$this->overwriteService(IEventDispatcher::class, $eventDispatcher);
+		return $auditEvents;
+	}
+
+	/**
+	 * @param list<array{0: string, 1: string, 2: string}> $expected operation, action and access per entry
+	 * @param \ArrayObject<int, CriticalActionPerformedEvent> $auditEvents
+	 */
+	private function assertDelegationAuditEvents(array $expected, \ArrayObject $auditEvents): void {
+		$this->assertCount(count($expected), $auditEvents);
+		foreach (array_values($expected) as $i => [$operation, $action, $access]) {
+			$this->assertSame($operation, $auditEvents[$i]->getOperation());
+			$this->assertSame('Calendar delegation of "%s" to "%s" with %s access was ' . $action, $auditEvents[$i]->getLogMessage());
+			$this->assertSame([
+				'owner' => 'principals/users/foo',
+				'delegate' => 'principals/users/bar',
+				'access' => $access,
+			], $auditEvents[$i]->getParameters());
+		}
+	}
+
+	private function mockFooAndBarUsers(): void {
+		$fooUser = $this->createMock(User::class);
+		$fooUser->method('getUID')->willReturn('foo');
+		$barUser = $this->createMock(User::class);
+		$barUser->method('getUID')->willReturn('bar');
+		$this->userManager->method('get')->willReturnMap([
+			['foo', $fooUser],
+			['bar', $barUser],
+		]);
+	}
+
+	private function createProxy(int $permissions): Proxy {
+		$proxy = new Proxy();
+		$proxy->setId(7);
+		$proxy->setOwnerId('principals/users/foo');
+		$proxy->setProxyId('principals/users/bar');
+		$proxy->setPermissions($permissions);
+		return $proxy;
+	}
+
+	public function testSetGroupMembershipProxyUpgradesReadToWrite(): void {
+		$this->mockFooAndBarUsers();
+		$this->proxyMapper->method('getProxiesOf')->willReturn([$this->createProxy(ProxyMapper::PERMISSION_READ)]);
+		$this->proxyMapper->expects($this->once())->method('update');
+		$auditEvents = $this->captureAuditEvents();
+
+		$this->connector->setGroupMemberSet('principals/users/foo/calendar-proxy-write', ['principals/users/bar']);
+
+		$this->assertDelegationAuditEvents([
+			['dav.calendar_delegation.granted', 'granted', 'write'],
+		], $auditEvents);
+	}
+
+	public function testSetGroupMembershipProxyWithoutChangeDoesNotLog(): void {
+		$this->mockFooAndBarUsers();
+		$this->proxyMapper->method('getProxiesOf')->willReturn([$this->createProxy(ProxyMapper::PERMISSION_READ | ProxyMapper::PERMISSION_WRITE)]);
+		$auditEvents = $this->captureAuditEvents();
+
+		$this->connector->setGroupMemberSet('principals/users/foo/calendar-proxy-read', ['principals/users/bar']);
+
+		$this->assertCount(0, $auditEvents);
+	}
+
+	public function testSetGroupMembershipProxyRevokesRemovedDelegate(): void {
+		$this->mockFooAndBarUsers();
+		$proxy = $this->createProxy(ProxyMapper::PERMISSION_READ);
+		$this->proxyMapper->method('getProxiesOf')->willReturn([$proxy]);
+		$this->proxyMapper->expects($this->once())->method('delete')->with($proxy);
+		$auditEvents = $this->captureAuditEvents();
+
+		$this->connector->setGroupMemberSet('principals/users/foo/calendar-proxy-read', []);
+
+		$this->assertDelegationAuditEvents([
+			['dav.calendar_delegation.revoked', 'revoked', 'read'],
+		], $auditEvents);
 	}
 
 	public function testUpdatePrincipal(): void {
@@ -457,13 +570,13 @@ class PrincipalTest extends TestCase {
 			['{http://sabredav.org/ns}email-address' => 'foo']));
 	}
 
-	/**
-	 * @dataProvider searchPrincipalsDataProvider
-	 */
-	public function testSearchPrincipals($sharingEnabled, $groupsOnly, $test, $result): void {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'searchPrincipalsDataProvider')]
+	public function testSearchPrincipals(bool $sharingEnabled, bool $groupsOnly, string $test, array $result): void {
 		$this->shareManager->expects($this->once())
 			->method('shareAPIEnabled')
 			->willReturn($sharingEnabled);
+
+		$getUserGroupIdsReturnMap = [];
 
 		if ($sharingEnabled) {
 			$this->shareManager->expects($this->once())
@@ -480,10 +593,7 @@ class PrincipalTest extends TestCase {
 					->method('getUser')
 					->willReturn($user);
 
-				$this->groupManager->expects($this->at(0))
-					->method('getUserGroupIds')
-					->with($user)
-					->willReturn(['group1', 'group2', 'group5']);
+				$getUserGroupIdsReturnMap[] = [$user, ['group1', 'group2', 'group5']];
 			}
 		} else {
 			$this->config->expects($this->never())
@@ -502,12 +612,12 @@ class PrincipalTest extends TestCase {
 		$user4->method('getUID')->willReturn('user4');
 
 		if ($sharingEnabled) {
-			$this->userManager->expects($this->at(0))
+			$this->userManager->expects($this->once())
 				->method('getByEmail')
 				->with('user@example.com')
 				->willReturn([$user2, $user3]);
 
-			$this->userManager->expects($this->at(1))
+			$this->userManager->expects($this->once())
 				->method('searchDisplayName')
 				->with('User 12')
 				->willReturn([$user3, $user4]);
@@ -520,31 +630,21 @@ class PrincipalTest extends TestCase {
 		}
 
 		if ($sharingEnabled && $groupsOnly) {
-			$this->groupManager->expects($this->at(1))
-				->method('getUserGroupIds')
-				->with($user2)
-				->willReturn(['group1', 'group3']);
-			$this->groupManager->expects($this->at(2))
-				->method('getUserGroupIds')
-				->with($user3)
-				->willReturn(['group3', 'group4']);
-			$this->groupManager->expects($this->at(3))
-				->method('getUserGroupIds')
-				->with($user3)
-				->willReturn(['group3', 'group4']);
-			$this->groupManager->expects($this->at(4))
-				->method('getUserGroupIds')
-				->with($user4)
-				->willReturn(['group4', 'group5']);
+			$getUserGroupIdsReturnMap[] = [$user2, ['group1', 'group3']];
+			$getUserGroupIdsReturnMap[] = [$user3, ['group3', 'group4']];
+			$getUserGroupIdsReturnMap[] = [$user4, ['group4', 'group5']];
 		}
 
+		$this->groupManager->expects($this->any())
+			->method('getUserGroupIds')
+			->willReturnMap($getUserGroupIdsReturnMap);
 
 		$this->assertEquals($result, $this->connector->searchPrincipals('principals/users',
 			['{http://sabredav.org/ns}email-address' => 'user@example.com',
 				'{DAV:}displayname' => 'User 12'], $test));
 	}
 
-	public function searchPrincipalsDataProvider(): array {
+	public static function searchPrincipalsDataProvider(): array {
 		return [
 			[true, false, 'allof', ['principals/users/user3']],
 			[true, false, 'anyof', ['principals/users/user2', 'principals/users/user3', 'principals/users/user4']],
@@ -573,7 +673,7 @@ class PrincipalTest extends TestCase {
 		$user3 = $this->createMock(IUser::class);
 		$user3->method('getUID')->willReturn('user3');
 
-		$this->userManager->expects($this->at(0))
+		$this->userManager->expects($this->once())
 			->method('getByEmail')
 			->with('user@example.com')
 			->willReturn([$user2, $user3]);
@@ -608,14 +708,14 @@ class PrincipalTest extends TestCase {
 		$user2->method('getSystemEMailAddress')->willReturn('user2@foo.bar');
 		$user3 = $this->createMock(IUser::class);
 		$user3->method('getUID')->willReturn('user3');
-		$user2->method('getDisplayName')->willReturn('User 22');
-		$user2->method('getSystemEMailAddress')->willReturn('user2@foo.bar123');
+		$user3->method('getDisplayName')->willReturn('User 22');
+		$user3->method('getSystemEMailAddress')->willReturn('user2@foo.bar123');
 		$user4 = $this->createMock(IUser::class);
 		$user4->method('getUID')->willReturn('user4');
-		$user2->method('getDisplayName')->willReturn('User 222');
-		$user2->method('getSystemEMailAddress')->willReturn('user2@foo.bar456');
+		$user4->method('getDisplayName')->willReturn('User 222');
+		$user4->method('getSystemEMailAddress')->willReturn('user2@foo.bar456');
 
-		$this->userManager->expects($this->at(0))
+		$this->userManager->expects($this->once())
 			->method('searchDisplayName')
 			->with('User 2')
 			->willReturn([$user2, $user3, $user4]);
@@ -662,6 +762,10 @@ class PrincipalTest extends TestCase {
 			->method('allowEnumerationFullMatch')
 			->willReturn(true);
 
+		$this->shareManager->expects($this->once())
+			->method('matchEmail')
+			->willReturn(true);
+
 		$user2 = $this->createMock(IUser::class);
 		$user2->method('getUID')->willReturn('user2');
 		$user2->method('getDisplayName')->willReturn('User 2');
@@ -701,21 +805,20 @@ class PrincipalTest extends TestCase {
 			->method('allowEnumerationFullMatch')
 			->willReturn(false);
 
-
 		$this->assertEquals([], $this->connector->searchPrincipals('principals/users',
 			['{http://sabredav.org/ns}email-address' => 'user2@foo.bar']));
 	}
 
 	public function testSearchPrincipalWithEnumerationLimitedDisplayname(): void {
-		$this->shareManager->expects($this->at(0))
+		$this->shareManager->expects($this->once())
 			->method('shareAPIEnabled')
 			->willReturn(true);
 
-		$this->shareManager->expects($this->at(1))
+		$this->shareManager->expects($this->once())
 			->method('allowEnumeration')
 			->willReturn(true);
 
-		$this->shareManager->expects($this->at(2))
+		$this->shareManager->expects($this->once())
 			->method('limitEnumerationToGroups')
 			->willReturn(true);
 
@@ -736,29 +839,22 @@ class PrincipalTest extends TestCase {
 		$user4->method('getDisplayName')->willReturn('User 222');
 		$user4->method('getSystemEMailAddress')->willReturn('user2@foo.bar456');
 
-
-		$this->userSession->expects($this->at(0))
+		$this->userSession->expects($this->once())
 			->method('getUser')
 			->willReturn($user2);
 
-		$this->groupManager->expects($this->at(0))
+		$this->groupManager->expects($this->exactly(4))
 			->method('getUserGroupIds')
-			->willReturn(['group1']);
-		$this->groupManager->expects($this->at(1))
-			->method('getUserGroupIds')
-			->willReturn(['group1']);
-		$this->groupManager->expects($this->at(2))
-			->method('getUserGroupIds')
-			->willReturn(['group1']);
-		$this->groupManager->expects($this->at(3))
-			->method('getUserGroupIds')
-			->willReturn(['group2']);
+			->willReturnMap([
+				[$user2, ['group1']],
+				[$user3, ['group1']],
+				[$user4, ['group2']],
+			]);
 
-		$this->userManager->expects($this->at(0))
+		$this->userManager->expects($this->once())
 			->method('searchDisplayName')
 			->with('User')
 			->willReturn([$user2, $user3, $user4]);
-
 
 		$this->assertEquals([
 			'principals/users/user2',
@@ -768,15 +864,15 @@ class PrincipalTest extends TestCase {
 	}
 
 	public function testSearchPrincipalWithEnumerationLimitedMail(): void {
-		$this->shareManager->expects($this->at(0))
+		$this->shareManager->expects($this->once())
 			->method('shareAPIEnabled')
 			->willReturn(true);
 
-		$this->shareManager->expects($this->at(1))
+		$this->shareManager->expects($this->once())
 			->method('allowEnumeration')
 			->willReturn(true);
 
-		$this->shareManager->expects($this->at(2))
+		$this->shareManager->expects($this->once())
 			->method('limitEnumerationToGroups')
 			->willReturn(true);
 
@@ -797,29 +893,22 @@ class PrincipalTest extends TestCase {
 		$user4->method('getDisplayName')->willReturn('User 222');
 		$user4->method('getSystemEMailAddress')->willReturn('user2@foo.bar456');
 
-
-		$this->userSession->expects($this->at(0))
+		$this->userSession->expects($this->once())
 			->method('getUser')
 			->willReturn($user2);
 
-		$this->groupManager->expects($this->at(0))
+		$this->groupManager->expects($this->exactly(4))
 			->method('getUserGroupIds')
-			->willReturn(['group1']);
-		$this->groupManager->expects($this->at(1))
-			->method('getUserGroupIds')
-			->willReturn(['group1']);
-		$this->groupManager->expects($this->at(2))
-			->method('getUserGroupIds')
-			->willReturn(['group1']);
-		$this->groupManager->expects($this->at(3))
-			->method('getUserGroupIds')
-			->willReturn(['group2']);
+			->willReturnMap([
+				[$user2, ['group1']],
+				[$user3, ['group1']],
+				[$user4, ['group2']],
+			]);
 
-		$this->userManager->expects($this->at(0))
+		$this->userManager->expects($this->once())
 			->method('getByEmail')
 			->with('user')
 			->willReturn([$user2, $user3, $user4]);
-
 
 		$this->assertEquals([
 			'principals/users/user2',
@@ -836,27 +925,20 @@ class PrincipalTest extends TestCase {
 		$this->assertEquals(null, $this->connector->findByUri('mailto:user@foo.com', 'principals/users'));
 	}
 
-	/**
-	 * @dataProvider findByUriWithGroupRestrictionDataProvider
-	 */
-	public function testFindByUriWithGroupRestriction($uri, $email, $expects): void {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'findByUriWithGroupRestrictionDataProvider')]
+	public function testFindByUriWithGroupRestriction(string $uri, string $email, ?string $expects): void {
 		$this->shareManager->expects($this->once())
 			->method('shareApiEnabled')
 			->willReturn(true);
 
 		$this->shareManager->expects($this->once())
-				->method('shareWithGroupMembersOnly')
-				->willReturn(true);
+			->method('shareWithGroupMembersOnly')
+			->willReturn(true);
 
 		$user = $this->createMock(IUser::class);
 		$this->userSession->expects($this->once())
-				->method('getUser')
-				->willReturn($user);
-
-		$this->groupManager->expects($this->at(0))
-				->method('getUserGroupIds')
-				->with($user)
-				->willReturn(['group1', 'group2']);
+			->method('getUser')
+			->willReturn($user);
 
 		$user2 = $this->createMock(IUser::class);
 		$user2->method('getUID')->willReturn('user2');
@@ -864,43 +946,45 @@ class PrincipalTest extends TestCase {
 		$user3->method('getUID')->willReturn('user3');
 
 		$this->userManager->expects($this->once())
-				->method('getByEmail')
-				->with($email)
-				->willReturn([$email === 'user2@foo.bar' ? $user2 : $user3]);
+			->method('getByEmail')
+			->with($email)
+			->willReturn([$email === 'user2@foo.bar' ? $user2 : $user3]);
 
 		if ($email === 'user2@foo.bar') {
-			$this->groupManager->expects($this->at(1))
-					->method('getUserGroupIds')
-					->with($user2)
-					->willReturn(['group1', 'group3']);
+			$this->groupManager->expects($this->exactly(2))
+				->method('getUserGroupIds')
+				->willReturnMap([
+					[$user, ['group1', 'group2']],
+					[$user2, ['group1', 'group3']],
+				]);
 		} else {
-			$this->groupManager->expects($this->at(1))
-					->method('getUserGroupIds')
-					->with($user3)
-					->willReturn(['group3', 'group3']);
+			$this->groupManager->expects($this->exactly(2))
+				->method('getUserGroupIds')
+				->willReturnMap([
+					[$user, ['group1', 'group2']],
+					[$user3, ['group3', 'group3']],
+				]);
 		}
 
 		$this->assertEquals($expects, $this->connector->findByUri($uri, 'principals/users'));
 	}
 
-	public function findByUriWithGroupRestrictionDataProvider(): array {
+	public static function findByUriWithGroupRestrictionDataProvider(): array {
 		return [
 			['mailto:user2@foo.bar', 'user2@foo.bar', 'principals/users/user2'],
 			['mailto:user3@foo.bar', 'user3@foo.bar', null],
 		];
 	}
 
-	/**
-	 * @dataProvider findByUriWithoutGroupRestrictionDataProvider
-	 */
-	public function testFindByUriWithoutGroupRestriction($uri, $email, $expects): void {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'findByUriWithoutGroupRestrictionDataProvider')]
+	public function testFindByUriWithoutGroupRestriction(string $uri, string $email, string $expects): void {
 		$this->shareManager->expects($this->once())
 			->method('shareApiEnabled')
 			->willReturn(true);
 
 		$this->shareManager->expects($this->once())
-				->method('shareWithGroupMembersOnly')
-				->willReturn(false);
+			->method('shareWithGroupMembersOnly')
+			->willReturn(false);
 
 		$user2 = $this->createMock(IUser::class);
 		$user2->method('getUID')->willReturn('user2');
@@ -908,17 +992,47 @@ class PrincipalTest extends TestCase {
 		$user3->method('getUID')->willReturn('user3');
 
 		$this->userManager->expects($this->once())
-				->method('getByEmail')
-				->with($email)
-				->willReturn([$email === 'user2@foo.bar' ? $user2 : $user3]);
+			->method('getByEmail')
+			->with($email)
+			->willReturn([$email === 'user2@foo.bar' ? $user2 : $user3]);
 
 		$this->assertEquals($expects, $this->connector->findByUri($uri, 'principals/users'));
 	}
 
-	public function findByUriWithoutGroupRestrictionDataProvider(): array {
+	public static function findByUriWithoutGroupRestrictionDataProvider(): array {
 		return [
 			['mailto:user2@foo.bar', 'user2@foo.bar', 'principals/users/user2'],
 			['mailto:user3@foo.bar', 'user3@foo.bar', 'principals/users/user3'],
 		];
+	}
+
+	public function testGetEmailAddressesOfPrincipal(): void {
+		$principal = [
+			'{http://sabredav.org/ns}email-address' => 'bar@company.org',
+			'{DAV:}alternate-URI-set' => [
+				'/some/url',
+				'mailto:foo@bar.com',
+				'mailto:duplicate@example.com',
+			],
+			'{urn:ietf:params:xml:ns:caldav}calendar-user-address-set' => [
+				'mailto:bernard@example.com',
+				'mailto:bernard.desruisseaux@example.com',
+			],
+			'{http://calendarserver.org/ns/}email-address-set' => [
+				'mailto:duplicate@example.com',
+				'mailto:user@some.org',
+			],
+		];
+
+		$expected = [
+			'bar@company.org',
+			'foo@bar.com',
+			'duplicate@example.com',
+			'bernard@example.com',
+			'bernard.desruisseaux@example.com',
+			'user@some.org',
+		];
+		$actual = $this->connector->getEmailAddressesOfPrincipal($principal);
+		$this->assertEquals($expected, $actual);
 	}
 }

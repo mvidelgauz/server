@@ -1,28 +1,27 @@
 /**
- * @copyright Copyright (c) 2019 John Molakvoæ <skjnldsv@protonmail.com>
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-const shareWithTitle = function(share) {
-	if (share.type === OC.Share.SHARE_TYPE_GROUP) {
+import { t } from '@nextcloud/l10n'
+import { ShareType } from '@nextcloud/sharing'
+
+/**
+ * Whether the source name should be shown.
+ * It is set when any sharer in between renamed the node.
+ *
+ * @param {string} originalDisplayName
+ */
+function wasRenamed(originalDisplayName) {
+	return typeof originalDisplayName === 'string' && originalDisplayName !== ''
+}
+
+/**
+ *
+ * @param share
+ */
+function shareWithTitle(share) {
+	if (share.type === ShareType.Group) {
 		return t(
 			'files_sharing',
 			'Shared with you and the group {group} by {owner}',
@@ -31,9 +30,9 @@ const shareWithTitle = function(share) {
 				owner: share.ownerDisplayName,
 			},
 			undefined,
-			{ escape: false }
+			{ escape: false },
 		)
-	} else if (share.type === OC.Share.SHARE_TYPE_CIRCLE) {
+	} else if (share.type === ShareType.Team) {
 		return t(
 			'files_sharing',
 			'Shared with you and {circle} by {owner}',
@@ -42,9 +41,9 @@ const shareWithTitle = function(share) {
 				owner: share.ownerDisplayName,
 			},
 			undefined,
-			{ escape: false }
+			{ escape: false },
 		)
-	} else if (share.type === OC.Share.SHARE_TYPE_ROOM) {
+	} else if (share.type === ShareType.Room) {
 		if (share.shareWithDisplayName) {
 			return t(
 				'files_sharing',
@@ -54,7 +53,7 @@ const shareWithTitle = function(share) {
 					owner: share.ownerDisplayName,
 				},
 				undefined,
-				{ escape: false }
+				{ escape: false },
 			)
 		} else {
 			return t(
@@ -64,7 +63,7 @@ const shareWithTitle = function(share) {
 					owner: share.ownerDisplayName,
 				},
 				undefined,
-				{ escape: false }
+				{ escape: false },
 			)
 		}
 	} else {
@@ -73,9 +72,29 @@ const shareWithTitle = function(share) {
 			'Shared with you by {owner}',
 			{ owner: share.ownerDisplayName },
 			undefined,
-			{ escape: false }
+			{ escape: false },
 		)
 	}
 }
 
-export { shareWithTitle }
+/**
+ * Source name of a received share, shown on its own line.
+ * Empty when no sharer in the chain renamed the node.
+ *
+ * @param {string} [originalDisplayName]
+ * @return {string}
+ */
+function originalShareLabel(originalDisplayName = '') {
+	if (!wasRenamed(originalDisplayName)) {
+		return ''
+	}
+	return t(
+		'files_sharing',
+		'Originally as {name}',
+		{ name: originalDisplayName },
+		undefined,
+		{ escape: false },
+	)
+}
+
+export { originalShareLabel, shareWithTitle }

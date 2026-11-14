@@ -1,27 +1,10 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016 Robin Appelman <robin@icewind.nl>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Files\ObjectStore;
 
 use Aws\Credentials\CredentialsInterface;
@@ -58,9 +41,10 @@ class S3Signature implements SignatureInterface {
 		sort($this->signableQueryString);
 	}
 
+	#[\Override]
 	public function signRequest(
 		RequestInterface $request,
-		CredentialsInterface $credentials
+		CredentialsInterface $credentials,
 	) {
 		$request = $this->prepareRequest($request, $credentials);
 		$stringToSign = $this->createCanonicalizedString($request);
@@ -71,11 +55,12 @@ class S3Signature implements SignatureInterface {
 		return $request->withHeader('Authorization', $auth);
 	}
 
+	#[\Override]
 	public function presign(
 		RequestInterface $request,
 		CredentialsInterface $credentials,
 		$expires,
-		array $options = []
+		array $options = [],
 	) {
 		$query = [];
 		// URL encoding already occurs in the URI template expansion. Undo that
@@ -107,25 +92,25 @@ class S3Signature implements SignatureInterface {
 		// Move X-Amz-* headers to the query string
 		foreach ($request->getHeaders() as $name => $header) {
 			$name = strtolower($name);
-			if (strpos($name, 'x-amz-') === 0) {
+			if (str_starts_with($name, 'x-amz-')) {
 				$query[$name] = implode(',', $header);
 			}
 		}
 
-		$queryString = http_build_query($query, null, '&', PHP_QUERY_RFC3986);
+		$queryString = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
 
 		return $request->withUri($request->getUri()->withQuery($queryString));
 	}
 
 	/**
-	 * @param RequestInterface     $request
+	 * @param RequestInterface $request
 	 * @param CredentialsInterface $creds
 	 *
 	 * @return RequestInterface
 	 */
 	private function prepareRequest(
 		RequestInterface $request,
-		CredentialsInterface $creds
+		CredentialsInterface $creds,
 	) {
 		$modify = [
 			'remove_headers' => ['X-Amz-Date'],
@@ -137,7 +122,7 @@ class S3Signature implements SignatureInterface {
 			$modify['set_headers']['X-Amz-Security-Token'] = $token;
 		}
 
-		return Psr7\modify_request($request, $modify);
+		return Psr7\Utils::modifyRequest($request, $modify);
 	}
 
 	private function signString($string, CredentialsInterface $credentials) {
@@ -148,7 +133,7 @@ class S3Signature implements SignatureInterface {
 
 	private function createCanonicalizedString(
 		RequestInterface $request,
-		$expires = null
+		$expires = null,
 	) {
 		$buffer = $request->getMethod() . "\n";
 
@@ -169,7 +154,7 @@ class S3Signature implements SignatureInterface {
 		$headers = [];
 		foreach ($request->getHeaders() as $name => $header) {
 			$name = strtolower($name);
-			if (strpos($name, 'x-amz-') === 0) {
+			if (str_starts_with($name, 'x-amz-')) {
 				$value = implode(',', $header);
 				if (strlen($value) > 0) {
 					$headers[$name] = $name . ':' . $value;
@@ -201,7 +186,7 @@ class S3Signature implements SignatureInterface {
 		$query = $request->getUri()->getQuery();
 
 		if ($query) {
-			$params = Psr7\parse_query($query);
+			$params = Psr7\Query::parse($query);
 			$first = true;
 			foreach ($this->signableQueryString as $key) {
 				if (array_key_exists($key, $params)) {

@@ -1,73 +1,34 @@
 <?php
+
 /**
- * @author Lukas Reschke <lukas@owncloud.com>
- * @author Victor Dubiniuk <dubiniuk@owncloud.com>
- *
- * @copyright Copyright (c) 2015, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Test;
 
-use PHPUnit\Framework\MockObject\MockObject;
-use Psr\Log\LoggerInterface;
 use OC\Installer;
-use OC\IntegrityCheck\Checker;
 use OC\Updater;
+use OCP\App\AppPathNotFoundException;
+use OCP\App\IAppManager;
 use OCP\IConfig;
 
 class UpdaterTest extends TestCase {
-	/** @var IConfig|MockObject */
-	private $config;
-	/** @var LoggerInterface|MockObject */
-	private $logger;
 	/** @var Updater */
 	private $updater;
-	/** @var Checker|MockObject */
-	private $checker;
-	/** @var Installer|MockObject */
-	private $installer;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
-		$this->config = $this->getMockBuilder(IConfig::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$this->logger = $this->getMockBuilder(LoggerInterface::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$this->checker = $this->getMockBuilder(Checker::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$this->installer = $this->getMockBuilder(Installer::class)
-			->disableOriginalConstructor()
-			->getMock();
 
-		$this->updater = new Updater(
-			$this->config,
-			$this->checker,
-			$this->logger,
-			$this->installer
-		);
+		$this->updater = $this->createInstanceWithMocks(Updater::class);
 	}
 
 	/**
 	 * @return array
 	 */
-	public function versionCompatibilityTestData() {
+	public static function versionCompatibilityTestData(): array {
 		return [
 			// Upgrade with invalid version
 			['9.1.1.13', '11.0.2.25', ['nextcloud' => ['11.0' => true]], false],
@@ -94,7 +55,6 @@ class UpdaterTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider versionCompatibilityTestData
 	 *
 	 * @param string $oldVersion
 	 * @param string $newVersion
@@ -103,16 +63,68 @@ class UpdaterTest extends TestCase {
 	 * @param bool $debug
 	 * @param string $vendor
 	 */
-	public function testIsUpgradePossible($oldVersion, $newVersion, $allowedVersions, $result, $debug = false, $vendor = 'nextcloud') {
-		$this->config->expects($this->any())
-			->method('getSystemValue')
+	#[\PHPUnit\Framework\Attributes\DataProvider('versionCompatibilityTestData')]
+	public function testIsUpgradePossible($oldVersion, $newVersion, $allowedVersions, $result, $debug = false, $vendor = 'nextcloud'): void {
+		$this->getAutoMock(IConfig::class)->expects($this->any())
+			->method('getSystemValueBool')
 			->with('debug', false)
 			->willReturn($debug);
-		$this->config->expects($this->any())
+		$this->getAutoMock(IConfig::class)->expects($this->any())
 			->method('getAppValue')
 			->with('core', 'vendor', '')
 			->willReturn($vendor);
 
 		$this->assertSame($result, $this->updater->isUpgradePossible($oldVersion, $newVersion, $allowedVersions));
+	}
+
+	/**
+	 * @return array
+	 */
+	public static function majorUpgradeTestData(): array {
+		return [
+			// Same major version
+			['33.0.0.10', '33.1.2.3', false],
+			// Major upgrade
+			['33.0.5.1', '34.0.0.10', true],
+			// Downgrade, only reachable with debug enabled
+			['34.0.0.10', '33.0.5.1', false],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('majorUpgradeTestData')]
+	public function testIsMajorUpgrade(string $installedVersion, string $currentVersion, bool $result): void {
+		$this->assertSame($result, self::invokePrivate($this->updater, 'isMajorUpgrade', [$installedVersion, $currentVersion]));
+	}
+
+	public function testUpgradeAppStoreAppsRestoresMissingAutoDisabledAppBeforeEnabling(): void {
+		$this->getAutoMock(Installer::class)->expects($this->once())
+			->method('isUpdateAvailable')
+			->with('mailroundcube')
+			->willReturn(false);
+
+		$this->getAutoMock(Installer::class)->expects($this->once())
+			->method('downloadApp')
+			->with('mailroundcube');
+
+		$this->getAutoMock(Installer::class)->expects($this->once())
+			->method('installApp')
+			->with('mailroundcube');
+
+		$this->getAutoMock(IAppManager::class)->expects($this->once())
+			->method('getAppPath')
+			->with('mailroundcube', true)
+			->willThrowException(new AppPathNotFoundException('missing'));
+
+		$this->getAutoMock(IAppManager::class)->expects($this->once())
+			->method('enableApp')
+			->with('mailroundcube');
+
+		$this->getAutoMock(IAppManager::class)->expects($this->never())
+			->method('enableAppForGroups');
+
+		self::invokePrivate($this->updater, 'upgradeAppStoreApps', [
+			['mailroundcube'],
+			['mailroundcube' => 'yes'],
+		]);
 	}
 }

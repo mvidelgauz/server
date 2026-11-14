@@ -1,35 +1,21 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Aaron Wood <aaronjwood@gmail.com>
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author blizzz <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\User_LDAP\Mapping;
 
 use Doctrine\DBAL\Exception;
-use OC\DB\QueryBuilder\QueryBuilder;
-use OCP\DB\IPreparedStatement;
 use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\IAppConfig;
+use OCP\ICache;
+use OCP\ICacheFactory;
+use OCP\IDBConnection;
+use OCP\Server;
+use Psr\Log\LoggerInterface;
 
 /**
  * Class AbstractMapping
@@ -38,11 +24,6 @@ use OCP\DB\QueryBuilder\IQueryBuilder;
  */
 abstract class AbstractMapping {
 	/**
-	 * @var \OCP\IDBConnection $dbc
-	 */
-	protected $dbc;
-
-	/**
 	 * returns the DB table name which holds the mappings
 	 *
 	 * @return string
@@ -50,14 +31,80 @@ abstract class AbstractMapping {
 	abstract protected function getTableName(bool $includePrefix = true);
 
 	/**
-	 * @param \OCP\IDBConnection $dbc
+	 * A month worth of cache time for as good as never changing mapping data.
+	 * Implemented when it was found that name-to-DN lookups are quite frequent.
 	 */
-	public function __construct(\OCP\IDBConnection $dbc) {
-		$this->dbc = $dbc;
-	}
+	protected const LOCAL_CACHE_TTL = 2592000;
+
+	/**
+	 * A week worth of cache time for rarely changing user count data.
+	 */
+	protected const LOCAL_USER_COUNT_TTL = 604800;
+
+	/**
+	 * By default, the local cache is only used up to a certain amount of objects.
+	 * This constant holds this number. The amount of entries would amount up to
+	 * 1 MiB (worst case) per mappings table.
+	 * Setting `use_local_mapping_cache` for `user_ldap` to `yes` or `no`
+	 * deliberately enables or disables this mechanism.
+	 */
+	protected const LOCAL_CACHE_OBJECT_THRESHOLD = 2000;
+
+	protected ?ICache $localNameToDnCache = null;
 
 	/** @var array caches Names (value) by DN (key) */
-	protected $cache = [];
+	protected array $cache = [];
+
+	/**
+	 * @param IDBConnection $dbc
+	 */
+	public function __construct(
+		protected IDBConnection $dbc,
+		protected ICacheFactory $cacheFactory,
+		protected IAppConfig $config,
+		protected bool $isCLI,
+	) {
+		$this->initLocalCache();
+	}
+
+	protected function initLocalCache(): void {
+		if ($this->isCLI || !$this->cacheFactory->isLocalCacheAvailable()) {
+			return;
+		}
+
+		$useLocalCache = $this->config->getValueString('user_ldap', 'use_local_mapping_cache', 'auto', false);
+		if ($useLocalCache !== 'yes' && $useLocalCache !== 'auto') {
+			return;
+		}
+
+		$section = \str_contains($this->getTableName(), 'user') ? 'u/' : 'g/';
+		$this->localNameToDnCache = $this->cacheFactory->createLocal('ldap/map/' . $section);
+
+		// We use the cache as well to store whether it shall be used. If the
+		// answer was no, we unset it again.
+		if ($useLocalCache === 'auto' && !$this->useCacheByUserCount()) {
+			$this->localNameToDnCache = null;
+		}
+	}
+
+	protected function useCacheByUserCount(): bool {
+		$use = $this->localNameToDnCache->get('use');
+		if ($use !== null) {
+			return $use;
+		}
+
+		$qb = $this->dbc->getQueryBuilder();
+		$q = $qb->select($qb->func()->count('owncloud_name', 'count'))
+			->from($this->getTableName());
+		$q->setMaxResults(self::LOCAL_CACHE_OBJECT_THRESHOLD + 1);
+		$result = $q->executeQuery();
+		$row = $result->fetchAssociative();
+		$result->closeCursor();
+
+		$use = (int)$row['count'] <= self::LOCAL_CACHE_OBJECT_THRESHOLD;
+		$this->localNameToDnCache->set('use', $use, self::LOCAL_USER_COUNT_TTL);
+		return $use;
+	}
 
 	/**
 	 * checks whether a provided string represents an existing table col
@@ -68,6 +115,7 @@ abstract class AbstractMapping {
 	public function isColNameValid($col) {
 		switch ($col) {
 			case 'ldap_dn':
+			case 'ldap_dn_hash':
 			case 'owncloud_name':
 			case 'directory_uuid':
 				return true;
@@ -91,14 +139,13 @@ abstract class AbstractMapping {
 			//having SQL injection at all.
 			throw new \Exception('Invalid Column Name');
 		}
-		$query = $this->dbc->prepare('
-			SELECT `' . $fetchCol . '`
-			FROM `' . $this->getTableName() . '`
-			WHERE `' . $compareCol . '` = ?
-		');
+		$qb = $this->dbc->getQueryBuilder();
+		$qb->select($fetchCol)
+			->from($this->getTableName())
+			->where($qb->expr()->eq($compareCol, $qb->createNamedParameter($search)));
 
 		try {
-			$res = $query->execute([$search]);
+			$res = $qb->executeQuery();
 			$data = $res->fetchOne();
 			$res->closeCursor();
 			return $data;
@@ -108,36 +155,22 @@ abstract class AbstractMapping {
 	}
 
 	/**
-	 * Performs a DELETE or UPDATE query to the database.
-	 *
-	 * @param IPreparedStatement $statement
-	 * @param array $parameters
-	 * @return bool true if at least one row was modified, false otherwise
-	 */
-	protected function modify(IPreparedStatement $statement, $parameters) {
-		try {
-			$result = $statement->execute($parameters);
-			$updated = $result->rowCount() > 0;
-			$result->closeCursor();
-			return $updated;
-		} catch (Exception $e) {
-			return false;
-		}
-	}
-
-	/**
 	 * Gets the LDAP DN based on the provided name.
-	 * Replaces Access::ocname2dn
-	 *
-	 * @param string $name
-	 * @return string|false
 	 */
-	public function getDNByName($name) {
-		$dn = array_search($name, $this->cache);
-		if ($dn === false && ($dn = $this->getXbyY('ldap_dn', 'owncloud_name', $name)) !== false) {
-			$this->cache[$dn] = $name;
+	public function getDNByName(string $name): string|false {
+		$dn = array_search($name, $this->cache, true);
+		if ($dn === false) {
+			$dn = $this->localNameToDnCache?->get($name);
+			// a miss is not cached, the CLI may map the name without updating the local cache
+			if (!is_string($dn)) {
+				$dn = $this->getXbyY('ldap_dn', 'owncloud_name', $name);
+				if ($dn !== false) {
+					$this->cache[$dn] = $name;
+					$this->localNameToDnCache?->set($name, $dn, self::LOCAL_CACHE_TTL);
+				}
+			}
 		}
-		return $dn;
+		return $dn ?? false;
 	}
 
 	/**
@@ -149,16 +182,25 @@ abstract class AbstractMapping {
 	 */
 	public function setDNbyUUID($fdn, $uuid) {
 		$oldDn = $this->getDnByUUID($uuid);
-		$statement = $this->dbc->prepare('
-			UPDATE `' . $this->getTableName() . '`
-			SET `ldap_dn` = ?
-			WHERE `directory_uuid` = ?
-		');
-
-		$r = $this->modify($statement, [$fdn, $uuid]);
-
-		if ($r && is_string($oldDn) && isset($this->cache[$oldDn])) {
-			$this->cache[$fdn] = $this->cache[$oldDn];
+		$qb = $this->dbc->getQueryBuilder();
+		try {
+			$r = $qb->update($this->getTableName(false))
+				->set('ldap_dn_hash', $qb->createNamedParameter($this->getDNHash($fdn)))
+				->set('ldap_dn', $qb->createNamedParameter($fdn))
+				->where($qb->expr()->eq('directory_uuid', $qb->createNamedParameter($uuid)))
+				->executeStatement() > 0;
+		} catch (Exception $e) {
+			$r = false;
+		}
+		if ($r) {
+			if (is_string($oldDn) && isset($this->cache[$oldDn])) {
+				$userId = $this->cache[$oldDn];
+			}
+			$userId = $userId ?? $this->getNameByUUID($uuid);
+			if ($userId) {
+				$this->cache[$fdn] = $userId;
+				$this->localNameToDnCache?->set($userId, $fdn, self::LOCAL_CACHE_TTL);
+			}
 			unset($this->cache[$oldDn]);
 		}
 
@@ -174,16 +216,25 @@ abstract class AbstractMapping {
 	 * @param $fdn
 	 * @return bool
 	 */
-	public function setUUIDbyDN($uuid, $fdn) {
-		$statement = $this->dbc->prepare('
-			UPDATE `' . $this->getTableName() . '`
-			SET `directory_uuid` = ?
-			WHERE `ldap_dn` = ?
-		');
-
+	public function setUUIDbyDN($uuid, $fdn): bool {
 		unset($this->cache[$fdn]);
 
-		return $this->modify($statement, [$uuid, $fdn]);
+		$qb = $this->dbc->getQueryBuilder();
+		try {
+			return $qb->update($this->getTableName(false))
+				->set('directory_uuid', $qb->createNamedParameter($uuid))
+				->where($qb->expr()->eq('ldap_dn_hash', $qb->createNamedParameter($this->getDNHash($fdn))))
+				->executeStatement() > 0;
+		} catch (Exception $e) {
+			return false;
+		}
+	}
+
+	/**
+	 * Get the hash to store in database column ldap_dn_hash for a given dn
+	 */
+	protected function getDNHash(string $fdn): string {
+		return hash('sha256', $fdn, false);
 	}
 
 	/**
@@ -194,35 +245,49 @@ abstract class AbstractMapping {
 	 */
 	public function getNameByDN($fdn) {
 		if (!isset($this->cache[$fdn])) {
-			$this->cache[$fdn] = $this->getXbyY('owncloud_name', 'ldap_dn', $fdn);
+			$this->cache[$fdn] = $this->getXbyY('owncloud_name', 'ldap_dn_hash', $this->getDNHash($fdn));
 		}
 		return $this->cache[$fdn];
 	}
 
-	protected function prepareListOfIdsQuery(array $dnList): IQueryBuilder {
+	/**
+	 * @param array<string> $hashList
+	 */
+	protected function prepareListOfIdsQuery(array $hashList): IQueryBuilder {
 		$qb = $this->dbc->getQueryBuilder();
-		$qb->select('owncloud_name', 'ldap_dn')
+		$qb->select('owncloud_name', 'ldap_dn_hash', 'ldap_dn')
 			->from($this->getTableName(false))
-			->where($qb->expr()->in('ldap_dn', $qb->createNamedParameter($dnList, QueryBuilder::PARAM_STR_ARRAY)));
+			->where($qb->expr()->in('ldap_dn_hash', $qb->createNamedParameter($hashList, IQueryBuilder::PARAM_STR_ARRAY)));
 		return $qb;
 	}
 
 	protected function collectResultsFromListOfIdsQuery(IQueryBuilder $qb, array &$results): void {
-		$stmt = $qb->execute();
-		while ($entry = $stmt->fetch(\Doctrine\DBAL\FetchMode::ASSOCIATIVE)) {
+		$stmt = $qb->executeQuery();
+		while ($entry = $stmt->fetchAssociative()) {
 			$results[$entry['ldap_dn']] = $entry['owncloud_name'];
 			$this->cache[$entry['ldap_dn']] = $entry['owncloud_name'];
 		}
 		$stmt->closeCursor();
 	}
 
+	/**
+	 * @param array<string> $fdns
+	 * @return array<string,string>
+	 */
 	public function getListOfIdsByDn(array $fdns): array {
 		$totalDBParamLimit = 65000;
 		$sliceSize = 1000;
-		$maxSlices = $totalDBParamLimit / $sliceSize;
+		// SQLite's variable limit is very low; Oracle's OCI8 driver has high per-bind overhead,
+		// making large parameter lists (65k) extremely slow — use smaller batches for both.
+		$maxSlices = match ($this->dbc->getDatabaseProvider()) {
+			IDBConnection::PLATFORM_SQLITE => 9,
+			IDBConnection::PLATFORM_ORACLE => 5,
+			default => $totalDBParamLimit / $sliceSize,
+		};
 		$results = [];
 
 		$slice = 1;
+		$fdns = array_map([$this, 'getDNHash'], $fdns);
 		$fdnsSlice = count($fdns) > $sliceSize ? array_slice($fdns, 0, $sliceSize) : $fdns;
 		$qb = $this->prepareListOfIdsQuery($fdnsSlice);
 
@@ -240,7 +305,7 @@ abstract class AbstractMapping {
 			}
 
 			if (!empty($fdnsSlice)) {
-				$qb->orWhere($qb->expr()->in('ldap_dn', $qb->createNamedParameter($fdnsSlice, QueryBuilder::PARAM_STR_ARRAY)));
+				$qb->orWhere($qb->expr()->in('ldap_dn_hash', $qb->createNamedParameter($fdnsSlice, IQueryBuilder::PARAM_STR_ARRAY)));
 			}
 
 			if ($slice % $maxSlices === 0) {
@@ -259,27 +324,25 @@ abstract class AbstractMapping {
 	/**
 	 * Searches mapped names by the giving string in the name column
 	 *
-	 * @param string $search
-	 * @param string $prefixMatch
-	 * @param string $postfixMatch
 	 * @return string[]
 	 */
-	public function getNamesBySearch($search, $prefixMatch = "", $postfixMatch = "") {
-		$statement = $this->dbc->prepare('
-			SELECT `owncloud_name`
-			FROM `' . $this->getTableName() . '`
-			WHERE `owncloud_name` LIKE ?
-		');
-
+	public function getNamesBySearch(string $search, string $prefixMatch = '', string $postfixMatch = ''): array {
+		$qb = $this->dbc->getQueryBuilder();
 		try {
-			$res = $statement->execute([$prefixMatch . $this->dbc->escapeLikeParameter($search) . $postfixMatch]);
+			$res = $qb->select('owncloud_name')
+				->from($this->getTableName(false))
+				->where($qb->expr()->like('owncloud_name', $qb->createNamedParameter(
+					$prefixMatch . $this->dbc->escapeLikeParameter($search) . $postfixMatch
+				)))
+				->executeQuery();
 		} catch (Exception $e) {
 			return [];
 		}
 		$names = [];
-		while ($row = $res->fetch()) {
+		while ($row = $res->fetchAssociative()) {
 			$names[] = $row['owncloud_name'];
 		}
+		$res->closeCursor();
 		return $names;
 	}
 
@@ -305,29 +368,27 @@ abstract class AbstractMapping {
 	 * @throws \Exception
 	 */
 	public function getUUIDByDN($dn) {
-		return $this->getXbyY('directory_uuid', 'ldap_dn', $dn);
+		return $this->getXbyY('directory_uuid', 'ldap_dn_hash', $this->getDNHash($dn));
 	}
 
-	/**
-	 * gets a piece of the mapping list
-	 *
-	 * @param int $offset
-	 * @param int $limit
-	 * @return array
-	 */
-	public function getList($offset = null, $limit = null) {
-		$query = $this->dbc->prepare('
-			SELECT
-				`ldap_dn` AS `dn`,
-				`owncloud_name` AS `name`,
-				`directory_uuid` AS `uuid`
-			FROM `' . $this->getTableName() . '`',
-			$limit,
-			$offset
-		);
+	public function getList(int $offset = 0, ?int $limit = null, bool $invalidatedOnly = false): array {
+		$select = $this->dbc->getQueryBuilder();
+		$select->selectAlias('ldap_dn', 'dn')
+			->selectAlias('owncloud_name', 'name')
+			->selectAlias('directory_uuid', 'uuid')
+			->from($this->getTableName())
+			->setMaxResults($limit)
+			->setFirstResult($offset);
 
-		$query->execute();
-		return $query->fetchAll();
+		if ($invalidatedOnly) {
+			$select->where($select->expr()->like('directory_uuid', $select->createNamedParameter('invalidated_%')));
+		}
+
+		$result = $select->executeQuery();
+		$entries = $result->fetchAllAssociative();
+		$result->closeCursor();
+
+		return $entries;
 	}
 
 	/**
@@ -339,9 +400,9 @@ abstract class AbstractMapping {
 	 * @return bool
 	 */
 	public function map($fdn, $name, $uuid) {
-		if (mb_strlen($fdn) > 255) {
-			\OC::$server->getLogger()->error(
-				'Cannot map, because the DN exceeds 255 characters: {dn}',
+		if (mb_strlen($fdn) > 4000) {
+			Server::get(LoggerInterface::class)->error(
+				'Cannot map, because the DN exceeds 4000 characters: {dn}',
 				[
 					'app' => 'user_ldap',
 					'dn' => $fdn,
@@ -351,6 +412,7 @@ abstract class AbstractMapping {
 		}
 
 		$row = [
+			'ldap_dn_hash' => $this->getDNHash($fdn),
 			'ldap_dn' => $fdn,
 			'owncloud_name' => $name,
 			'directory_uuid' => $uuid
@@ -360,6 +422,7 @@ abstract class AbstractMapping {
 			$result = $this->dbc->insertIfNotExist($this->getTableName(), $row);
 			if ((bool)$result === true) {
 				$this->cache[$fdn] = $name;
+				$this->localNameToDnCache?->set($name, $fdn, self::LOCAL_CACHE_TTL);
 			}
 			// insertIfNotExist returns values as int
 			return (bool)$result;
@@ -375,11 +438,20 @@ abstract class AbstractMapping {
 	 * @return bool
 	 */
 	public function unmap($name) {
-		$statement = $this->dbc->prepare('
-			DELETE FROM `' . $this->getTableName() . '`
-			WHERE `owncloud_name` = ?');
+		$dn = array_search($name, $this->cache, true);
+		if ($dn !== false) {
+			unset($this->cache[$dn]);
+		}
+		$this->localNameToDnCache?->remove($name);
 
-		return $this->modify($statement, [$name]);
+		$qb = $this->dbc->getQueryBuilder();
+		try {
+			return $qb->delete($this->getTableName(false))
+				->where($qb->expr()->eq('owncloud_name', $qb->createNamedParameter($name)))
+				->executeStatement() > 0;
+		} catch (Exception $e) {
+			return false;
+		}
 	}
 
 	/**
@@ -393,6 +465,7 @@ abstract class AbstractMapping {
 			->getTruncateTableSQL('`' . $this->getTableName() . '`');
 		try {
 			$this->dbc->executeQuery($sql);
+			$this->localNameToDnCache?->clear();
 
 			return true;
 		} catch (Exception $e) {
@@ -407,20 +480,20 @@ abstract class AbstractMapping {
 	 * @param callable $preCallback
 	 * @param callable $postCallback
 	 * @return bool true on success, false when at least one row was not
-	 * deleted
+	 *              deleted
 	 */
 	public function clearCb(callable $preCallback, callable $postCallback): bool {
 		$picker = $this->dbc->getQueryBuilder();
 		$picker->select('owncloud_name')
 			->from($this->getTableName());
-		$cursor = $picker->execute();
+		$cursor = $picker->executeQuery();
 		$result = true;
-		while ($id = $cursor->fetchOne()) {
+		while (($id = $cursor->fetchOne()) !== false) {
 			$preCallback($id);
 			if ($isUnmapped = $this->unmap($id)) {
 				$postCallback($id);
 			}
-			$result &= $isUnmapped;
+			$result = $result && $isUnmapped;
 		}
 		$cursor->closeCursor();
 		return $result;
@@ -431,11 +504,22 @@ abstract class AbstractMapping {
 	 *
 	 * @return int
 	 */
-	public function count() {
-		$qb = $this->dbc->getQueryBuilder();
-		$query = $qb->select($qb->func()->count('ldap_dn'))
+	public function count(): int {
+		$query = $this->dbc->getQueryBuilder();
+		$query->select($query->func()->count('ldap_dn_hash'))
 			->from($this->getTableName());
-		$res = $query->execute();
+		$res = $query->executeQuery();
+		$count = $res->fetchOne();
+		$res->closeCursor();
+		return (int)$count;
+	}
+
+	public function countInvalidated(): int {
+		$query = $this->dbc->getQueryBuilder();
+		$query->select($query->func()->count('ldap_dn_hash'))
+			->from($this->getTableName())
+			->where($query->expr()->like('directory_uuid', $query->createNamedParameter('invalidated_%')));
+		$res = $query->executeQuery();
 		$count = $res->fetchOne();
 		$res->closeCursor();
 		return (int)$count;

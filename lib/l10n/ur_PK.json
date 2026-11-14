@@ -7,11 +7,7 @@
     "last year" : "پچھلے سال",
     "seconds ago" : "سیکنڈز پہلے",
     "__language_name__" : "اردو",
-    "Help" : "مدد",
-    "Apps" : "ایپز",
-    "Settings" : "سیٹینگز",
-    "Log out" : "لاگ آؤٹ",
-    "Users" : "یوزرز",
+    "Email" : "email",
     "Sunday" : "اتوار",
     "Monday" : "سوموار",
     "Tuesday" : "منگل",
@@ -30,6 +26,10 @@
     "September" : "ستمبر",
     "October" : "اکتوبر",
     "November" : "نومبر",
-    "December" : "دسمبر"
+    "December" : "دسمبر",
+    "Apps" : "ایپز",
+    "Settings" : "سیٹینگز",
+    "Log out" : "لاگ آؤٹ",
+    "Accounts" : "Accounts"
 },"pluralForm" :"nplurals=2; plural=(n != 1);"
 }

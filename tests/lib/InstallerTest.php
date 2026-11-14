@@ -1,42 +1,44 @@
 <?php
+
 /**
- * Copyright (c) 2014 Georg Ehrke <georg@owncloud.com>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test;
 
+use OC\App\AppManager;
 use OC\App\AppStore\Fetcher\AppFetcher;
 use OC\Archive\ZIP;
 use OC\Installer;
+use OCP\App\IAppManager;
 use OCP\Http\Client\IClient;
 use OCP\Http\Client\IClientService;
 use OCP\IConfig;
 use OCP\ITempManager;
+use OCP\L10N\IFactory;
+use OCP\Server;
+use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Log\LoggerInterface;
 
 /**
  * Class InstallerTest
  *
  * @package Test
- * @group DB
  */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class InstallerTest extends TestCase {
 	private static $appid = 'testapp';
-	private $appstore;
-	/** @var AppFetcher|\PHPUnit\Framework\MockObject\MockObject */
-	private $appFetcher;
-	/** @var IClientService|\PHPUnit\Framework\MockObject\MockObject */
-	private $clientService;
-	/** @var ITempManager|\PHPUnit\Framework\MockObject\MockObject */
-	private $tempManager;
-	/** @var LoggerInterface|\PHPUnit\Framework\MockObject\MockObject */
-	private $logger;
-	/** @var IConfig|\PHPUnit\Framework\MockObject\MockObject */
-	private $config;
+	private AppFetcher&MockObject $appFetcher;
+	private IClientService&MockObject $clientService;
+	private ITempManager&MockObject $tempManager;
+	private LoggerInterface&MockObject $logger;
+	private IConfig&MockObject $config;
+	private AppManager&MockObject $appManager;
+	private IFactory&MockObject $l10nFactory;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
@@ -45,19 +47,17 @@ class InstallerTest extends TestCase {
 		$this->tempManager = $this->createMock(ITempManager::class);
 		$this->logger = $this->createMock(LoggerInterface::class);
 		$this->config = $this->createMock(IConfig::class);
+		$this->appManager = $this->createMock(AppManager::class);
+		$this->l10nFactory = $this->createMock(IFactory::class);
 
-		$config = \OC::$server->getConfig();
-		$this->appstore = $config->setSystemValue('appstoreenabled', true);
-		$config->setSystemValue('appstoreenabled', true);
-		$installer = new Installer(
-			\OC::$server->getAppFetcher(),
-			\OC::$server->getHTTPClientService(),
-			\OC::$server->getTempManager(),
-			\OC::$server->get(LoggerInterface::class),
-			$config,
-			false
-		);
+		$installer = Server::get(Installer::class);
 		$installer->removeApp(self::$appid);
+	}
+
+	private static function getAppVersionByPath(string $path): string {
+		$infoFile = $path . '/appinfo/info.xml';
+		$appData = Server::get(IAppManager::class)->getAppInfoByPath($infoFile);
+		return $appData['version'] ?? '';
 	}
 
 	protected function getInstaller() {
@@ -67,51 +67,41 @@ class InstallerTest extends TestCase {
 			$this->tempManager,
 			$this->logger,
 			$this->config,
+			$this->appManager,
+			$this->l10nFactory,
 			false
 		);
 	}
 
+	#[\Override]
 	protected function tearDown(): void {
-		$installer = new Installer(
-			\OC::$server->getAppFetcher(),
-			\OC::$server->getHTTPClientService(),
-			\OC::$server->getTempManager(),
-			\OC::$server->get(LoggerInterface::class),
-			\OC::$server->getConfig(),
-			false
-		);
+		$installer = Server::get(Installer::class);
 		$installer->removeApp(self::$appid);
-		\OC::$server->getConfig()->setSystemValue('appstoreenabled', $this->appstore);
 
 		parent::tearDown();
 	}
 
-	public function testInstallApp() {
+	public function testInstallApp(): void {
 		// Read the current version of the app to check for bug #2572
-		\OC_App::getAppVersion('testapp');
+		Server::get(IAppManager::class)->getAppVersion('testapp', true);
+
+		// Build installer
+		$installer = Server::get(Installer::class);
 
 		// Extract app
 		$pathOfTestApp = __DIR__ . '/../data/testapp.zip';
 		$tar = new ZIP($pathOfTestApp);
-		$tar->extract(\OC_App::getInstallPath());
+		$tar->extract($installer->getInstallPath());
 
 		// Install app
-		$installer = new Installer(
-			\OC::$server->getAppFetcher(),
-			\OC::$server->getHTTPClientService(),
-			\OC::$server->getTempManager(),
-			\OC::$server->get(LoggerInterface::class),
-			\OC::$server->getConfig(),
-			false
-		);
-		$this->assertNull(\OC::$server->getConfig()->getAppValue('testapp', 'enabled', null), 'Check that the app is not listed before installation');
+		$this->assertNull(Server::get(IConfig::class)->getAppValue('testapp', 'enabled', null), 'Check that the app is not listed before installation');
 		$this->assertSame('testapp', $installer->installApp(self::$appid));
-		$this->assertSame('no', \OC::$server->getConfig()->getAppValue('testapp', 'enabled', null), 'Check that the app is listed after installation');
-		$this->assertSame('0.9', \OC::$server->getConfig()->getAppValue('testapp', 'installed_version'));
+		$this->assertSame('no', Server::get(IConfig::class)->getAppValue('testapp', 'enabled', null), 'Check that the app is listed after installation');
+		$this->assertSame('0.9', Server::get(IConfig::class)->getAppValue('testapp', 'installed_version'));
 		$installer->removeApp(self::$appid);
 	}
 
-	public function updateArrayProvider() {
+	public static function updateArrayProvider(): array {
 		return [
 			// Update available
 			[
@@ -145,23 +135,26 @@ class InstallerTest extends TestCase {
 	}
 
 	/**
-	 * @dataProvider updateArrayProvider
 	 * @param array $appArray
 	 * @param string|bool $updateAvailable
 	 */
-	public function testIsUpdateAvailable(array $appArray, $updateAvailable) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('updateArrayProvider')]
+	public function testIsUpdateAvailable(array $appArray, $updateAvailable): void {
 		$this->appFetcher
 			->expects($this->once())
 			->method('get')
 			->willReturn($appArray);
+		$this->appManager
+			->expects($this->exactly(2))
+			->method('getAppVersion')
+			->willReturn('1.0');
 
 		$installer = $this->getInstaller();
 		$this->assertSame($updateAvailable, $installer->isUpdateAvailable('files'));
 		$this->assertSame($updateAvailable, $installer->isUpdateAvailable('files'), 'Cached result should be returned and fetcher should be only called once');
 	}
 
-
-	public function testDownloadAppWithRevokedCertificate() {
+	public function testDownloadAppWithRevokedCertificate(): void {
 		$this->expectException(\Exception::class);
 		$this->expectExceptionMessage('Certificate "4112" has been revoked');
 
@@ -199,13 +192,11 @@ gLgK8d8sKL60JMmKHN3boHrsThKBVA==
 			->method('get')
 			->willReturn($appArray);
 
-
 		$installer = $this->getInstaller();
 		$installer->downloadApp('news');
 	}
 
-
-	public function testDownloadAppWithNotNextcloudCertificate() {
+	public function testDownloadAppWithNotNextcloudCertificate(): void {
 		$this->expectException(\Exception::class);
 		$this->expectExceptionMessage('App with id news has a certificate not issued by a trusted Code Signing Authority');
 
@@ -247,8 +238,7 @@ YSu356M=
 		$installer->downloadApp('news');
 	}
 
-
-	public function testDownloadAppWithDifferentCN() {
+	public function testDownloadAppWithDifferentCN(): void {
 		$this->expectException(\Exception::class);
 		$this->expectExceptionMessage('App with id news has a cert issued to passman');
 
@@ -290,8 +280,7 @@ u/spPSSVhaun5BA1FlphB2TkgnzlCmxJa63nFY045e/Jq+IKMcqqZl/092gbI2EQ
 		$installer->downloadApp('news');
 	}
 
-
-	public function testDownloadAppWithInvalidSignature() {
+	public function testDownloadAppWithInvalidSignature(): void {
 		$this->expectException(\Exception::class);
 		$this->expectExceptionMessage('App with id passman has invalid signature');
 
@@ -337,10 +326,10 @@ u/spPSSVhaun5BA1FlphB2TkgnzlCmxJa63nFY045e/Jq+IKMcqqZl/092gbI2EQ
 			->expects($this->once())
 			->method('get')
 			->willReturn($appArray);
-		$realTmpFile = \OC::$server->getTempManager()->getTemporaryFile('.tar.gz');
+		$realTmpFile = Server::get(ITempManager::class)->getTemporaryFile('.tar.gz');
 		copy(__DIR__ . '/../data/testapp.tar.gz', $realTmpFile);
 		$this->tempManager
-			->expects($this->at(0))
+			->expects($this->once())
 			->method('getTemporaryFile')
 			->with('.tar.gz')
 			->willReturn($realTmpFile);
@@ -358,8 +347,7 @@ u/spPSSVhaun5BA1FlphB2TkgnzlCmxJa63nFY045e/Jq+IKMcqqZl/092gbI2EQ
 		$installer->downloadApp('passman');
 	}
 
-
-	public function testDownloadAppWithMoreThanOneFolderDownloaded() {
+	public function testDownloadAppWithMoreThanOneFolderDownloaded(): void {
 		$this->expectException(\Exception::class);
 		$this->expectExceptionMessage('Extracted app testapp has more than 1 folder');
 
@@ -415,17 +403,17 @@ YwDVP+QmNRzx72jtqAN/Kc3CvQ9nkgYhU65B95aX0xA=',
 			->expects($this->once())
 			->method('get')
 			->willReturn($appArray);
-		$realTmpFile = \OC::$server->getTempManager()->getTemporaryFile('.tar.gz');
+		$realTmpFile = Server::get(ITempManager::class)->getTemporaryFile('.tar.gz');
 		copy(__DIR__ . '/../data/testapp1.tar.gz', $realTmpFile);
 		$this->tempManager
-			->expects($this->at(0))
+			->expects($this->once())
 			->method('getTemporaryFile')
 			->with('.tar.gz')
 			->willReturn($realTmpFile);
-		$realTmpFolder = \OC::$server->getTempManager()->getTemporaryFolder();
+		$realTmpFolder = Server::get(ITempManager::class)->getTemporaryFolder();
 		mkdir($realTmpFolder . '/testfolder');
 		$this->tempManager
-			->expects($this->at(1))
+			->expects($this->once())
 			->method('getTemporaryFolder')
 			->willReturn($realTmpFolder);
 		$client = $this->createMock(IClient::class);
@@ -442,8 +430,7 @@ YwDVP+QmNRzx72jtqAN/Kc3CvQ9nkgYhU65B95aX0xA=',
 		$installer->downloadApp('testapp');
 	}
 
-
-	public function testDownloadAppWithMismatchingIdentifier() {
+	public function testDownloadAppWithMismatchingIdentifier(): void {
 		$this->expectException(\Exception::class);
 		$this->expectExceptionMessage('App for id testapp has a wrong app ID in info.xml: testapp1');
 
@@ -499,16 +486,16 @@ YwDVP+QmNRzx72jtqAN/Kc3CvQ9nkgYhU65B95aX0xA=',
 			->expects($this->once())
 			->method('get')
 			->willReturn($appArray);
-		$realTmpFile = \OC::$server->getTempManager()->getTemporaryFile('.tar.gz');
+		$realTmpFile = Server::get(ITempManager::class)->getTemporaryFile('.tar.gz');
 		copy(__DIR__ . '/../data/testapp1.tar.gz', $realTmpFile);
 		$this->tempManager
-			->expects($this->at(0))
+			->expects($this->once())
 			->method('getTemporaryFile')
 			->with('.tar.gz')
 			->willReturn($realTmpFile);
-		$realTmpFolder = \OC::$server->getTempManager()->getTemporaryFolder();
+		$realTmpFolder = Server::get(ITempManager::class)->getTemporaryFolder();
 		$this->tempManager
-			->expects($this->at(1))
+			->expects($this->once())
 			->method('getTemporaryFolder')
 			->willReturn($realTmpFolder);
 		$client = $this->createMock(IClient::class);
@@ -525,7 +512,7 @@ YwDVP+QmNRzx72jtqAN/Kc3CvQ9nkgYhU65B95aX0xA=',
 		$installer->downloadApp('testapp');
 	}
 
-	public function testDownloadAppSuccessful() {
+	public function testDownloadAppSuccessful(): void {
 		$appArray = [
 			[
 				'id' => 'testapp',
@@ -575,19 +562,19 @@ MPLX6f5V9tCJtlH6ztmEcDROfvuVc0U3rEhqx2hphoyo+MZrPFpdcJL8KkIdMKbY
 			],
 		];
 		$this->appFetcher
-			->expects($this->at(0))
+			->expects($this->once())
 			->method('get')
 			->willReturn($appArray);
-		$realTmpFile = \OC::$server->getTempManager()->getTemporaryFile('.tar.gz');
+		$realTmpFile = Server::get(ITempManager::class)->getTemporaryFile('.tar.gz');
 		copy(__DIR__ . '/../data/testapp.tar.gz', $realTmpFile);
 		$this->tempManager
-			->expects($this->at(0))
+			->expects($this->once())
 			->method('getTemporaryFile')
 			->with('.tar.gz')
 			->willReturn($realTmpFile);
-		$realTmpFolder = \OC::$server->getTempManager()->getTemporaryFolder();
+		$realTmpFolder = Server::get(ITempManager::class)->getTemporaryFolder();
 		$this->tempManager
-			->expects($this->at(1))
+			->expects($this->once())
 			->method('getTemporaryFolder')
 			->willReturn($realTmpFolder);
 		$client = $this->createMock(IClient::class);
@@ -596,7 +583,7 @@ MPLX6f5V9tCJtlH6ztmEcDROfvuVc0U3rEhqx2hphoyo+MZrPFpdcJL8KkIdMKbY
 			->method('get')
 			->with('https://example.com', ['sink' => $realTmpFile, 'timeout' => 120]);
 		$this->clientService
-			->expects($this->at(0))
+			->expects($this->once())
 			->method('newClient')
 			->willReturn($client);
 
@@ -604,11 +591,18 @@ MPLX6f5V9tCJtlH6ztmEcDROfvuVc0U3rEhqx2hphoyo+MZrPFpdcJL8KkIdMKbY
 		$installer->downloadApp('testapp');
 
 		$this->assertTrue(file_exists(__DIR__ . '/../../apps/testapp/appinfo/info.xml'));
-		$this->assertEquals('0.9', \OC_App::getAppVersionByPath(__DIR__ . '/../../apps/testapp/'));
+		$this->assertEquals('0.9', self::getAppVersionByPath(__DIR__ . '/../../apps/testapp/'));
 	}
 
+	public function testDownloadAppWithDowngrade(): void {
+		// Use previous test to download the application in version 0.9
+		$this->testDownloadAppSuccessful();
 
-	public function testDownloadAppWithDowngrade() {
+		// Reset mocks
+		$this->appFetcher = $this->createMock(AppFetcher::class);
+		$this->clientService = $this->createMock(IClientService::class);
+		$this->tempManager = $this->createMock(ITempManager::class);
+
 		$this->expectException(\Exception::class);
 		$this->expectExceptionMessage('App for id testapp has version 0.9 and tried to update to lower version 0.8');
 
@@ -661,19 +655,19 @@ JXhrdaWDZ8fzpUjugrtC3qslsqL0dzgU37anS3HwrT8=',
 			],
 		];
 		$this->appFetcher
-			->expects($this->at(1))
+			->expects($this->once())
 			->method('get')
 			->willReturn($appArray);
-		$realTmpFile = \OC::$server->getTempManager()->getTemporaryFile('.tar.gz');
+		$realTmpFile = Server::get(ITempManager::class)->getTemporaryFile('.tar.gz');
 		copy(__DIR__ . '/../data/testapp.0.8.tar.gz', $realTmpFile);
 		$this->tempManager
-			->expects($this->at(2))
+			->expects($this->once())
 			->method('getTemporaryFile')
 			->with('.tar.gz')
 			->willReturn($realTmpFile);
-		$realTmpFolder = \OC::$server->getTempManager()->getTemporaryFolder();
+		$realTmpFolder = Server::get(ITempManager::class)->getTemporaryFolder();
 		$this->tempManager
-			->expects($this->at(3))
+			->expects($this->once())
 			->method('getTemporaryFolder')
 			->willReturn($realTmpFolder);
 		$client = $this->createMock(IClient::class);
@@ -682,16 +676,20 @@ JXhrdaWDZ8fzpUjugrtC3qslsqL0dzgU37anS3HwrT8=',
 			->method('get')
 			->with('https://example.com', ['sink' => $realTmpFile, 'timeout' => 120]);
 		$this->clientService
-			->expects($this->at(1))
+			->expects($this->once())
 			->method('newClient')
 			->willReturn($client);
-		$this->testDownloadAppSuccessful();
 		$this->assertTrue(file_exists(__DIR__ . '/../../apps/testapp/appinfo/info.xml'));
-		$this->assertEquals('0.9', \OC_App::getAppVersionByPath(__DIR__ . '/../../apps/testapp/'));
+		$this->assertEquals('0.9', self::getAppVersionByPath(__DIR__ . '/../../apps/testapp/'));
+
+		$this->appManager
+			->expects($this->once())
+			->method('getAppVersion')
+			->willReturn('0.9');
 
 		$installer = $this->getInstaller();
 		$installer->downloadApp('testapp');
 		$this->assertTrue(file_exists(__DIR__ . '/../../apps/testapp/appinfo/info.xml'));
-		$this->assertEquals('0.8', \OC_App::getAppVersionByPath(__DIR__ . '/../../apps/testapp/'));
+		$this->assertEquals('0.8', self::getAppVersionByPath(__DIR__ . '/../../apps/testapp/'));
 	}
 }

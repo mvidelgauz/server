@@ -1,40 +1,22 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Joas Schilling <coding@schilljs.com>
- *
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\Migration;
 
-use Doctrine\DBAL\Types\Type;
-use Doctrine\DBAL\Types\Types;
 use OCP\DB\ISchemaWrapper;
+use OCP\DB\Types;
 
 /**
  * @since 13.0.0
  */
 abstract class BigIntMigration extends SimpleMigrationStep {
-
 	/**
 	 * @return array Returns an array with the following structure
-	 * ['table1' => ['column1', 'column2'], ...]
+	 *               ['table1' => ['column1', 'column2'], ...]
 	 * @since 13.0.0
 	 */
 	abstract protected function getColumnsByTable();
@@ -46,6 +28,7 @@ abstract class BigIntMigration extends SimpleMigrationStep {
 	 * @return null|ISchemaWrapper
 	 * @since 13.0.0
 	 */
+	#[\Override]
 	public function changeSchema(IOutput $output, \Closure $schemaClosure, array $options) {
 		/** @var ISchemaWrapper $schema */
 		$schema = $schemaClosure();
@@ -58,8 +41,8 @@ abstract class BigIntMigration extends SimpleMigrationStep {
 			foreach ($columns as $columnName) {
 				$column = $table->getColumn($columnName);
 				if ($column->getType()->getName() !== Types::BIGINT) {
-					$column->setType(Type::getType(Types::BIGINT));
-					$column->setOptions(['length' => 20]);
+					$column->setType(Types::BIGINT);
+					$column->setLength(20);
 				}
 			}
 		}

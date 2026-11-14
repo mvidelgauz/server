@@ -1,28 +1,10 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2018, Johannes Ernst
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Johannes Ernst <jernst@indiecomputing.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Log;
 
 use OC\SystemConfig;
@@ -46,7 +28,7 @@ use OCP\Log\IWriter;
 //     Syslog compatibility fields
 
 class Systemdlog extends LogDetails implements IWriter {
-	protected $levels = [
+	protected array $levels = [
 		ILogger::DEBUG => 7,
 		ILogger::INFO => 6,
 		ILogger::WARN => 4,
@@ -54,28 +36,33 @@ class Systemdlog extends LogDetails implements IWriter {
 		ILogger::FATAL => 2,
 	];
 
-	protected $syslogId;
+	protected string $syslogId;
 
-	public function __construct(SystemConfig $config) {
+	public function __construct(
+		SystemConfig $config,
+		?string $tag = null,
+	) {
 		parent::__construct($config);
 		if (!function_exists('sd_journal_send')) {
 			throw new HintException(
 				'PHP extension php-systemd is not available.',
 				'Please install and enable PHP extension systemd if you wish to log to the Systemd journal.');
 		}
-		$this->syslogId = $config->getValue('syslog_tag', 'Nextcloud');
+		if ($tag === null) {
+			$tag = $config->getValue('syslog_tag', 'Nextcloud');
+		}
+		$this->syslogId = $tag;
 	}
 
 	/**
 	 * Write a message to the log.
-	 * @param string $app
-	 * @param string $message
-	 * @param int $level
+	 * @param string|array $message
 	 */
-	public function write(string $app, $message, int $level) {
+	#[\Override]
+	public function write(string $app, $message, int $level): void {
 		$journal_level = $this->levels[$level];
-		sd_journal_send('PRIORITY='.$journal_level,
-				'SYSLOG_IDENTIFIER='.$this->syslogId,
-				'MESSAGE=' . $this->logDetailsAsJSON($app, $message, $level));
+		sd_journal_send('PRIORITY=' . $journal_level,
+			'SYSLOG_IDENTIFIER=' . $this->syslogId,
+			'MESSAGE=' . $this->logDetailsAsJSON($app, $message, $level));
 	}
 }

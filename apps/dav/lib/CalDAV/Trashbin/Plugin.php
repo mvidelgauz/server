@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2021 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV\Trashbin;
 
 use Closure;
@@ -44,23 +28,25 @@ use function implode;
 class Plugin extends ServerPlugin {
 	public const PROPERTY_DELETED_AT = '{http://nextcloud.com/ns}deleted-at';
 	public const PROPERTY_CALENDAR_URI = '{http://nextcloud.com/ns}calendar-uri';
+	public const PROPERTY_SOURCE_CALENDAR_URI = '{http://nextcloud.com/ns}source-calendar-uri';
+	public const PROPERTY_CALENDAR_OWNER_PRINCIPAL_URI = '{http://nextcloud.com/ns}calendar-owner-principal-uri';
 	public const PROPERTY_RETENTION_DURATION = '{http://nextcloud.com/ns}trash-bin-retention-duration';
+	public const PROPERTY_DELEGATOR = '{http://nextcloud.com/ns}delegator';
 
 	/** @var bool */
 	private $disableTrashbin;
 
-	/** @var RetentionService */
-	private $retentionService;
-
 	/** @var Server */
 	private $server;
 
-	public function __construct(IRequest $request,
-								RetentionService $retentionService) {
+	public function __construct(
+		IRequest $request,
+		private RetentionService $retentionService,
+	) {
 		$this->disableTrashbin = $request->getHeader('X-NC-CalDAV-No-Trashbin') === '1';
-		$this->retentionService = $retentionService;
 	}
 
+	#[\Override]
 	public function initialize(Server $server): void {
 		$this->server = $server;
 		$server->on('beforeMethod:*', [$this, 'beforeMethod']);
@@ -115,6 +101,16 @@ class Plugin extends ServerPlugin {
 			$propFind->handle(self::PROPERTY_CALENDAR_URI, function () use ($node) {
 				return $node->getCalendarUri();
 			});
+			// needed in case of delegated or shared calendars
+			$propFind->handle(self::PROPERTY_SOURCE_CALENDAR_URI, function () use ($node) {
+				return $node->getSourceCalendarUri();
+			});
+			$propFind->handle(self::PROPERTY_CALENDAR_OWNER_PRINCIPAL_URI, function () use ($node) {
+				return $node->getCalendarPrincipalUri();
+			});
+			$propFind->handle(self::PROPERTY_DELEGATOR, function () use ($node) {
+				return $node->getDelegator();
+			});
 		}
 		if ($node instanceof TrashbinHome) {
 			$propFind->handle(self::PROPERTY_RETENTION_DURATION, function () use ($node) {
@@ -123,10 +119,12 @@ class Plugin extends ServerPlugin {
 		}
 	}
 
+	#[\Override]
 	public function getFeatures(): array {
 		return ['nc-calendar-trashbin'];
 	}
 
+	#[\Override]
 	public function getPluginName(): string {
 		return 'nc-calendar-trashbin';
 	}

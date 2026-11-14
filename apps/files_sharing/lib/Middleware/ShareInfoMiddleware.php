@@ -1,26 +1,12 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016 Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Sharing\Middleware;
 
 use OCA\Files_Sharing\Controller\ShareInfoController;
@@ -33,19 +19,13 @@ use OCP\AppFramework\Middleware;
 use OCP\Share\IManager;
 
 class ShareInfoMiddleware extends Middleware {
-	/** @var IManager */
-	private $shareManager;
-
-	public function __construct(IManager $shareManager) {
-		$this->shareManager = $shareManager;
+	public function __construct(
+		private IManager $shareManager,
+	) {
 	}
 
-	/**
-	 * @param Controller $controller
-	 * @param string $methodName
-	 * @throws S2SException
-	 */
-	public function beforeController($controller, $methodName) {
+	#[\Override]
+	public function beforeController(Controller $controller, string $methodName): void {
 		if (!($controller instanceof ShareInfoController)) {
 			return;
 		}
@@ -55,14 +35,8 @@ class ShareInfoMiddleware extends Middleware {
 		}
 	}
 
-	/**
-	 * @param Controller $controller
-	 * @param string $methodName
-	 * @param \Exception $exception
-	 * @throws \Exception
-	 * @return Response
-	 */
-	public function afterException($controller, $methodName, \Exception $exception) {
+	#[\Override]
+	public function afterException(Controller $controller, string $methodName, \Exception $exception): JSONResponse {
 		if (!($controller instanceof ShareInfoController)) {
 			throw $exception;
 		}
@@ -74,13 +48,8 @@ class ShareInfoMiddleware extends Middleware {
 		throw $exception;
 	}
 
-	/**
-	 * @param Controller $controller
-	 * @param string $methodName
-	 * @param Response $response
-	 * @return Response
-	 */
-	public function afterController($controller, $methodName, Response $response) {
+	#[\Override]
+	public function afterController(Controller $controller, string $methodName, Response $response) {
 		if (!($controller instanceof ShareInfoController)) {
 			return $response;
 		}

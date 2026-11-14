@@ -1,125 +1,81 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Michael Weimann <mail@michael-weimann.eu>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Avatar;
 
 use OC\KnownUser\KnownUserService;
 use OC\User\Manager;
-use OC\User\NoUserException;
 use OCP\Accounts\IAccountManager;
 use OCP\Accounts\PropertyDoesNotExistException;
+use OCP\Config\IUserConfig;
+use OCP\Federation\ICloudIdManager;
 use OCP\Files\IAppData;
 use OCP\Files\NotFoundException;
 use OCP\Files\NotPermittedException;
+use OCP\Files\StorageNotAvailableException;
 use OCP\IAvatar;
 use OCP\IAvatarManager;
 use OCP\IConfig;
 use OCP\IL10N;
+use OCP\IUser;
 use OCP\IUserSession;
+use OCP\User\Exceptions\UserNotFoundException;
 use Psr\Log\LoggerInterface;
 
 /**
  * This class implements methods to access Avatar functionality
  */
 class AvatarManager implements IAvatarManager {
-
-	/** @var IUserSession */
-	private $userSession;
-
-	/** @var Manager */
-	private $userManager;
-
-	/** @var IAppData */
-	private $appData;
-
-	/** @var IL10N */
-	private $l;
-
-	/** @var LoggerInterface */
-	private $logger;
-
-	/** @var IConfig */
-	private $config;
-
-	/** @var IAccountManager */
-	private $accountManager;
-
-	/** @var KnownUserService */
-	private $knownUserService;
-
 	public function __construct(
-			IUserSession $userSession,
-			Manager $userManager,
-			IAppData $appData,
-			IL10N $l,
-			LoggerInterface $logger,
-			IConfig $config,
-			IAccountManager $accountManager,
-			KnownUserService $knownUserService
+		private IUserSession $userSession,
+		private Manager $userManager,
+		private IAppData $appData,
+		private IL10N $l,
+		private LoggerInterface $logger,
+		private IConfig $config,
+		private IAccountManager $accountManager,
+		private KnownUserService $knownUserService,
+		private ICloudIdManager $cloudIdManager,
+		private IUserConfig $userConfig,
 	) {
-		$this->userSession = $userSession;
-		$this->userManager = $userManager;
-		$this->appData = $appData;
-		$this->l = $l;
-		$this->logger = $logger;
-		$this->config = $config;
-		$this->accountManager = $accountManager;
-		$this->knownUserService = $knownUserService;
 	}
 
 	/**
 	 * return a user specific instance of \OCP\IAvatar
+	 *
+	 * If the user is disabled a guest avatar will be returned
+	 *
 	 * @see \OCP\IAvatar
-	 * @param string $userId the ownCloud user id
-	 * @return \OCP\IAvatar
+	 * @param string $userId the user id
 	 * @throws \Exception In case the username is potentially dangerous
 	 * @throws NotFoundException In case there is no user folder yet
 	 */
-	public function getAvatar(string $userId) : IAvatar {
+	#[\Override]
+	public function getAvatar(string $userId): IAvatar {
 		$user = $this->userManager->get($userId);
 		if ($user === null) {
+			// Remote avatars are only fetched for logged-in users, e.g. to show the owner of a federated share
+			if ($this->userSession->getUser() !== null && $this->cloudIdManager->isValidCloudId($userId)) {
+				return $this->getRemoteAvatar($userId);
+			}
+
 			throw new \Exception('user does not exist');
+		}
+
+		if (!$user->isEnabled()) {
+			return $this->getGuestAvatar($userId);
 		}
 
 		// sanitize userID - fixes casing issue (needed for the filesystem stuff that is done below)
 		$userId = $user->getUID();
 
-		$requestingUser = null;
-		if ($this->userSession !== null) {
-			$requestingUser = $this->userSession->getUser();
-		}
+		$requestingUser = $this->userSession->getUser();
 
 		try {
 			$folder = $this->appData->getFolder($userId);
@@ -127,43 +83,64 @@ class AvatarManager implements IAvatarManager {
 			$folder = $this->appData->newFolder($userId);
 		}
 
-		try {
-			$account = $this->accountManager->getAccount($user);
-			$avatarProperties = $account->getProperty(IAccountManager::PROPERTY_AVATAR);
-			$avatarScope = $avatarProperties->getScope();
-		} catch (PropertyDoesNotExistException $e) {
-			$avatarScope = '';
-		}
+		$avatarScope = $this->getAvatarScope($user);
 
-		if (
+		switch ($avatarScope) {
 			// v2-private scope hides the avatar from public access and from unknown users
-			$avatarScope === IAccountManager::SCOPE_PRIVATE
-			&& (
-				// accessing from public link
-				$requestingUser === null
-				// logged in, but unknown to user
-				|| !$this->knownUserService->isKnownToUser($requestingUser->getUID(), $userId)
-			)) {
-			// use a placeholder avatar which caches the generated images
-			return new PlaceholderAvatar($folder, $user, $this->logger);
+			case IAccountManager::SCOPE_PRIVATE:
+				if ($requestingUser !== null && $this->knownUserService->isKnownToUser($requestingUser->getUID(), $userId)) {
+					return new UserAvatar($folder, $this->l, $user, $this->logger, $this->config, $this->userConfig);
+				}
+				break;
+			case IAccountManager::SCOPE_LOCAL:
+			case IAccountManager::SCOPE_FEDERATED:
+			case IAccountManager::SCOPE_PUBLISHED:
+				return new UserAvatar($folder, $this->l, $user, $this->logger, $this->config, $this->userConfig);
+			default:
+				// use a placeholder avatar which caches the generated images
+				return new PlaceholderAvatar($folder, $user, $this->config, $this->logger, $this->userConfig);
 		}
 
-		return new UserAvatar($folder, $this->l, $user, $this->logger, $this->config);
+		return new PlaceholderAvatar($folder, $user, $this->config, $this->logger, $this->userConfig);
+	}
+
+	private function getAvatarScope(IUser $user): string {
+		try {
+			return $this->accountManager->getAccount($user)
+				->getProperty(IAccountManager::PROPERTY_AVATAR)
+				->getScope();
+		} catch (PropertyDoesNotExistException $e) {
+			return '';
+		}
+	}
+
+	/**
+	 * `SCOPE_PRIVATE` resolves through `isKnownToUser()` in {@see getAvatar()}, so
+	 * one URL gives two viewers different bytes and no per-user version tracks that.
+	 */
+	public function canCacheAvatarLongTerm(string $userId): bool {
+		$user = $this->userManager->get($userId);
+		if ($user === null) {
+			// Federated avatar fetched from another instance, or nothing at all.
+			return false;
+		}
+
+		if (!$user->isEnabled()) {
+			// Serves a guest avatar, and those went out with the short window.
+			return false;
+		}
+
+		return $this->getAvatarScope($user) !== IAccountManager::SCOPE_PRIVATE;
 	}
 
 	/**
 	 * Clear generated avatars
 	 */
-	public function clearCachedAvatars() {
+	public function clearCachedAvatars(): void {
 		$users = $this->config->getUsersForUserValue('avatar', 'generated', 'true');
 		foreach ($users as $userId) {
-			try {
-				$folder = $this->appData->getFolder($userId);
-				$folder->delete();
-			} catch (NotFoundException $e) {
-				$this->logger->debug("No cache for the user $userId. Ignoring...");
-			}
-			$this->config->setUserValue($userId, 'avatar', 'generated', 'false');
+			// This also bumps the avatar version leading to cache invalidation in browsers
+			$this->getAvatar($userId)->remove();
 		}
 	}
 
@@ -173,10 +150,10 @@ class AvatarManager implements IAvatarManager {
 			$folder->delete();
 		} catch (NotFoundException $e) {
 			$this->logger->debug("No cache for the user $userId. Ignoring avatar deletion");
-		} catch (NotPermittedException $e) {
+		} catch (NotPermittedException|StorageNotAvailableException $e) {
 			$this->logger->error("Unable to delete user avatars for $userId. gnoring avatar deletion");
-		} catch (NoUserException $e) {
-			$this->logger->debug("User $userId not found. gnoring avatar deletion");
+		} catch (UserNotFoundException $e) {
+			$this->logger->debug("Account $userId not found. Ignoring avatar deletion");
 		}
 		$this->config->deleteUserValue($userId, 'avatar', 'generated');
 	}
@@ -185,9 +162,25 @@ class AvatarManager implements IAvatarManager {
 	 * Returns a GuestAvatar.
 	 *
 	 * @param string $name The guest name, e.g. "Albert".
-	 * @return IAvatar
 	 */
+	#[\Override]
 	public function getGuestAvatar(string $name): IAvatar {
-		return new GuestAvatar($name, $this->logger);
+		return new GuestAvatar($name, $this->config, $this->logger);
+	}
+
+	/**
+	 * Returns a RemoteAvatar
+	 *
+	 * @param string $userId The \OCP\Federation\ICloudId of the remote account, e.g. account@example.com
+	 */
+	private function getRemoteAvatar(string $userId): IAvatar {
+		try {
+			$remoteAvatarFolder = $this->appData->getFolder('__remote');
+		} catch (NotFoundException $e) {
+			$remoteAvatarFolder = $this->appData->newFolder('__remote');
+		}
+
+		$folder = $remoteAvatarFolder->getOrCreateFolder($userId);
+		return new RemoteAvatar($folder, $userId, $this->config, $this->logger);
 	}
 }

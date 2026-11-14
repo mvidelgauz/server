@@ -1,29 +1,12 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Lock;
 
 use OCP\Lock\ILockingProvider;
@@ -34,10 +17,10 @@ use OCP\Lock\ILockingProvider;
  * To be used when locking is disabled.
  */
 class NoopLockingProvider implements ILockingProvider {
-
 	/**
 	 * {@inheritdoc}
 	 */
+	#[\Override]
 	public function isLocked(string $path, int $type): bool {
 		return false;
 	}
@@ -45,28 +28,32 @@ class NoopLockingProvider implements ILockingProvider {
 	/**
 	 * {@inheritdoc}
 	 */
-	public function acquireLock(string $path, int $type, string $readablePath = null) {
+	#[\Override]
+	public function acquireLock(string $path, int $type, ?string $readablePath = null): void {
 		// do nothing
 	}
 
 	/**
 	 * {@inheritdoc}
 	 */
-	public function releaseLock(string $path, int $type) {
+	#[\Override]
+	public function releaseLock(string $path, int $type): void {
 		// do nothing
 	}
 
 	/**1
 	 * {@inheritdoc}
 	 */
-	public function releaseAll() {
+	#[\Override]
+	public function releaseAll(): void {
 		// do nothing
 	}
 
 	/**
 	 * {@inheritdoc}
 	 */
-	public function changeLock(string $path, int $targetType) {
+	#[\Override]
+	public function changeLock(string $path, int $targetType): void {
 		// do nothing
 	}
 }

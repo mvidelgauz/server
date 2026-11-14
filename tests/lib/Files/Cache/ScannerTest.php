@@ -1,55 +1,53 @@
 <?php
+
 /**
- * Copyright (c) 2012 Robin Appelman <icewind@owncloud.com>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Files\Cache;
 
+use OC;
+use OC\Files\Cache\Cache;
 use OC\Files\Cache\CacheEntry;
+use OC\Files\Cache\Scanner;
+use OC\Files\Storage\Storage;
+use OC\Files\Storage\Temporary;
+use OCP\Files\Cache\IScanner;
+use OCP\IDBConnection;
+use OCP\Server;
+use Test\TestCase;
 
 /**
  * Class ScannerTest
  *
- * @group DB
  *
  * @package Test\Files\Cache
  */
-class ScannerTest extends \Test\TestCase {
-	/**
-	 * @var \OC\Files\Storage\Storage $storage
-	 */
-	private $storage;
+#[\PHPUnit\Framework\Attributes\Group('DB')]
+class ScannerTest extends TestCase {
+	private Storage $storage;
+	private Scanner $scanner;
+	private Cache $cache;
 
-	/**
-	 * @var \OC\Files\Cache\Scanner $scanner
-	 */
-	private $scanner;
-
-	/**
-	 * @var \OC\Files\Cache\Cache $cache
-	 */
-	private $cache;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->storage = new \OC\Files\Storage\Temporary([]);
-		$this->scanner = new \OC\Files\Cache\Scanner($this->storage);
-		$this->cache = new \OC\Files\Cache\Cache($this->storage);
+		$this->storage = new Temporary([]);
+		$this->scanner = new Scanner($this->storage);
+		$this->cache = new Cache($this->storage);
 	}
 
+	#[\Override]
 	protected function tearDown(): void {
-		if ($this->cache) {
-			$this->cache->clear();
-		}
+		$this->cache->clear();
 
 		parent::tearDown();
 	}
 
-	public function testFile() {
+	public function testFile(): void {
 		$data = "dummy file data\n";
 		$this->storage->file_put_contents('foo.txt', $data);
 		$this->scanner->scanFile('foo.txt');
@@ -60,7 +58,7 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertEquals($cachedData['mimetype'], 'text/plain');
 		$this->assertNotEquals($cachedData['parent'], -1); //parent folders should be scanned automatically
 
-		$data = file_get_contents(\OC::$SERVERROOT . '/core/img/logo/logo.png');
+		$data = file_get_contents(OC::$SERVERROOT . '/core/img/logo/logo.png');
 		$this->storage->file_put_contents('foo.png', $data);
 		$this->scanner->scanFile('foo.png');
 
@@ -70,11 +68,11 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertEquals($cachedData['mimetype'], 'image/png');
 	}
 
-	public function testFile4Byte() {
+	public function testFile4Byte(): void {
 		$data = "dummy file data\n";
 		$this->storage->file_put_contents('foo🙈.txt', $data);
 
-		if (\OC::$server->getDatabaseConnection()->supports4ByteText()) {
+		if (Server::get(IDBConnection::class)->supports4ByteText()) {
 			$this->assertNotNull($this->scanner->scanFile('foo🙈.txt'));
 			$this->assertTrue($this->cache->inCache('foo🙈.txt'), true);
 
@@ -88,7 +86,7 @@ class ScannerTest extends \Test\TestCase {
 		}
 	}
 
-	public function testFileInvalidChars() {
+	public function testFileInvalidChars(): void {
 		$data = "dummy file data\n";
 		$this->storage->file_put_contents("foo\nbar.txt", $data);
 
@@ -98,14 +96,14 @@ class ScannerTest extends \Test\TestCase {
 
 	private function fillTestFolders() {
 		$textData = "dummy file data\n";
-		$imgData = file_get_contents(\OC::$SERVERROOT . '/core/img/logo/logo.png');
+		$imgData = file_get_contents(OC::$SERVERROOT . '/core/img/logo/logo.png');
 		$this->storage->mkdir('folder');
 		$this->storage->file_put_contents('foo.txt', $textData);
 		$this->storage->file_put_contents('foo.png', $imgData);
 		$this->storage->file_put_contents('folder/bar.txt', $textData);
 	}
 
-	public function testFolder() {
+	public function testFolder(): void {
 		$this->fillTestFolders();
 
 		$this->scanner->scan('');
@@ -127,10 +125,10 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertEquals($cachedDataFolder2['size'], $cachedDataText2['size']);
 	}
 
-	public function testShallow() {
+	public function testShallow(): void {
 		$this->fillTestFolders();
 
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_SHALLOW);
+		$this->scanner->scan('', IScanner::SCAN_SHALLOW);
 		$this->assertEquals($this->cache->inCache(''), true);
 		$this->assertEquals($this->cache->inCache('foo.txt'), true);
 		$this->assertEquals($this->cache->inCache('foo.png'), true);
@@ -143,7 +141,7 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertEquals(-1, $cachedDataFolder['size']);
 		$this->assertEquals(-1, $cachedDataFolder2['size']);
 
-		$this->scanner->scan('folder', \OC\Files\Cache\Scanner::SCAN_SHALLOW);
+		$this->scanner->scan('folder', IScanner::SCAN_SHALLOW);
 
 		$cachedDataFolder2 = $this->cache->get('folder');
 
@@ -155,12 +153,12 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertNotEquals($cachedDataFolder['size'], -1);
 	}
 
-	public function testBackgroundScan() {
+	public function testBackgroundScan(): void {
 		$this->fillTestFolders();
 		$this->storage->mkdir('folder2');
 		$this->storage->file_put_contents('folder2/bar.txt', 'foobar');
 
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_SHALLOW);
+		$this->scanner->scan('', IScanner::SCAN_SHALLOW);
 		$this->assertFalse($this->cache->inCache('folder/bar.txt'));
 		$this->assertFalse($this->cache->inCache('folder/2bar.txt'));
 		$cachedData = $this->cache->get('');
@@ -177,12 +175,12 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertFalse($this->cache->getIncomplete());
 	}
 
-	public function testBackgroundScanOnlyRecurseIncomplete() {
+	public function testBackgroundScanOnlyRecurseIncomplete(): void {
 		$this->fillTestFolders();
 		$this->storage->mkdir('folder2');
 		$this->storage->file_put_contents('folder2/bar.txt', 'foobar');
 
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_SHALLOW);
+		$this->scanner->scan('', IScanner::SCAN_SHALLOW);
 		$this->assertFalse($this->cache->inCache('folder/bar.txt'));
 		$this->assertFalse($this->cache->inCache('folder/2bar.txt'));
 		$this->assertFalse($this->cache->inCache('folder2/bar.txt'));
@@ -191,7 +189,7 @@ class ScannerTest extends \Test\TestCase {
 		$cachedData = $this->cache->get('');
 		$this->assertEquals(-1, $cachedData['size']);
 
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_RECURSIVE_INCOMPLETE, \OC\Files\Cache\Scanner::REUSE_ETAG | \OC\Files\Cache\Scanner::REUSE_SIZE);
+		$this->scanner->scan('', IScanner::SCAN_RECURSIVE_INCOMPLETE, IScanner::REUSE_ETAG | IScanner::REUSE_SIZE);
 
 		$this->assertTrue($this->cache->inCache('folder/bar.txt'));
 		$this->assertTrue($this->cache->inCache('folder/bar.txt'));
@@ -203,7 +201,7 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertFalse($this->cache->getIncomplete());
 	}
 
-	public function testBackgroundScanNestedIncompleteFolders() {
+	public function testBackgroundScanNestedIncompleteFolders(): void {
 		$this->storage->mkdir('folder');
 		$this->scanner->backgroundScan();
 
@@ -241,14 +239,14 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertEquals(6, $this->cache->get('folder/subfolder2')['size']);
 	}
 
-	public function testReuseExisting() {
+	public function testReuseExisting(): void {
 		$this->fillTestFolders();
 
 		$this->scanner->scan('');
 		$oldData = $this->cache->get('');
 		$this->storage->unlink('folder/bar.txt');
 		$this->cache->put('folder', ['mtime' => $this->storage->filemtime('folder'), 'storage_mtime' => $this->storage->filemtime('folder')]);
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_SHALLOW, \OC\Files\Cache\Scanner::REUSE_SIZE);
+		$this->scanner->scan('', IScanner::SCAN_SHALLOW, IScanner::REUSE_SIZE);
 		$newData = $this->cache->get('');
 		$this->assertIsString($oldData['etag']);
 		$this->assertIsString($newData['etag']);
@@ -256,52 +254,52 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertEquals($oldData['size'], $newData['size']);
 
 		$oldData = $newData;
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_SHALLOW, \OC\Files\Cache\Scanner::REUSE_ETAG);
+		$this->scanner->scan('', IScanner::SCAN_SHALLOW, IScanner::REUSE_ETAG);
 		$newData = $this->cache->get('');
 		$this->assertSame($oldData['etag'], $newData['etag']);
 		$this->assertEquals(-1, $newData['size']);
 
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_RECURSIVE);
+		$this->scanner->scan('', IScanner::SCAN_RECURSIVE);
 		$oldData = $this->cache->get('');
 		$this->assertNotEquals(-1, $oldData['size']);
-		$this->scanner->scanFile('', \OC\Files\Cache\Scanner::REUSE_ETAG + \OC\Files\Cache\Scanner::REUSE_SIZE);
+		$this->scanner->scanFile('', IScanner::REUSE_ETAG + IScanner::REUSE_SIZE);
 		$newData = $this->cache->get('');
 		$this->assertSame($oldData['etag'], $newData['etag']);
 		$this->assertEquals($oldData['size'], $newData['size']);
 
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_RECURSIVE, \OC\Files\Cache\Scanner::REUSE_ETAG + \OC\Files\Cache\Scanner::REUSE_SIZE);
+		$this->scanner->scan('', IScanner::SCAN_RECURSIVE, IScanner::REUSE_ETAG + IScanner::REUSE_SIZE);
 		$newData = $this->cache->get('');
 		$this->assertSame($oldData['etag'], $newData['etag']);
 		$this->assertEquals($oldData['size'], $newData['size']);
 
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_SHALLOW, \OC\Files\Cache\Scanner::REUSE_ETAG + \OC\Files\Cache\Scanner::REUSE_SIZE);
+		$this->scanner->scan('', IScanner::SCAN_SHALLOW, IScanner::REUSE_ETAG + IScanner::REUSE_SIZE);
 		$newData = $this->cache->get('');
 		$this->assertSame($oldData['etag'], $newData['etag']);
 		$this->assertEquals($oldData['size'], $newData['size']);
 	}
 
-	public function testRemovedFile() {
+	public function testRemovedFile(): void {
 		$this->fillTestFolders();
 
 		$this->scanner->scan('');
 		$this->assertTrue($this->cache->inCache('foo.txt'));
 		$this->storage->unlink('foo.txt');
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_SHALLOW);
+		$this->scanner->scan('', IScanner::SCAN_SHALLOW);
 		$this->assertFalse($this->cache->inCache('foo.txt'));
 	}
 
-	public function testRemovedFolder() {
+	public function testRemovedFolder(): void {
 		$this->fillTestFolders();
 
 		$this->scanner->scan('');
 		$this->assertTrue($this->cache->inCache('folder/bar.txt'));
 		$this->storage->rmdir('/folder');
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_SHALLOW);
+		$this->scanner->scan('', IScanner::SCAN_SHALLOW);
 		$this->assertFalse($this->cache->inCache('folder'));
 		$this->assertFalse($this->cache->inCache('folder/bar.txt'));
 	}
 
-	public function testScanRemovedFile() {
+	public function testScanRemovedFile(): void {
 		$this->fillTestFolders();
 
 		$this->scanner->scan('');
@@ -311,13 +309,13 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertFalse($this->cache->inCache('folder/bar.txt'));
 	}
 
-	public function testETagRecreation() {
+	public function testETagRecreation(): void {
 		$this->fillTestFolders();
 
 		$this->scanner->scan('folder/bar.txt');
 
 		// manipulate etag to simulate an empty etag
-		$this->scanner->scan('', \OC\Files\Cache\Scanner::SCAN_SHALLOW, \OC\Files\Cache\Scanner::REUSE_ETAG);
+		$this->scanner->scan('', IScanner::SCAN_SHALLOW, IScanner::REUSE_ETAG);
 		/** @var CacheEntry $data0 */
 		$data0 = $this->cache->get('folder/bar.txt');
 		$this->assertIsString($data0['etag']);
@@ -329,7 +327,7 @@ class ScannerTest extends \Test\TestCase {
 		$this->cache->put('folder/bar.txt', $data0->getData());
 
 		// rescan
-		$this->scanner->scan('folder/bar.txt', \OC\Files\Cache\Scanner::SCAN_SHALLOW, \OC\Files\Cache\Scanner::REUSE_ETAG);
+		$this->scanner->scan('folder/bar.txt', IScanner::SCAN_SHALLOW, IScanner::REUSE_ETAG);
 
 		// verify cache content
 		$newData0 = $this->cache->get('folder/bar.txt');
@@ -337,17 +335,17 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertNotEmpty($newData0['etag']);
 	}
 
-	public function testRepairParent() {
+	public function testRepairParent(): void {
 		$this->fillTestFolders();
 		$this->scanner->scan('');
 		$this->assertTrue($this->cache->inCache('folder/bar.txt'));
 		$oldFolderId = $this->cache->getId('folder');
 
 		// delete the folder without removing the children
-		$query = \OC::$server->getDatabaseConnection()->getQueryBuilder();
+		$query = Server::get(IDBConnection::class)->getQueryBuilder();
 		$query->delete('filecache')
 			->where($query->expr()->eq('fileid', $query->createNamedParameter($oldFolderId)));
-		$query->execute();
+		$query->executeStatement();
 
 		$cachedData = $this->cache->get('folder/bar.txt');
 		$this->assertEquals($oldFolderId, $cachedData['parent']);
@@ -363,23 +361,23 @@ class ScannerTest extends \Test\TestCase {
 		$this->assertEquals($newFolderId, $cachedData['parent']);
 	}
 
-	public function testRepairParentShallow() {
+	public function testRepairParentShallow(): void {
 		$this->fillTestFolders();
 		$this->scanner->scan('');
 		$this->assertTrue($this->cache->inCache('folder/bar.txt'));
 		$oldFolderId = $this->cache->getId('folder');
 
 		// delete the folder without removing the children
-		$query = \OC::$server->getDatabaseConnection()->getQueryBuilder();
+		$query = Server::get(IDBConnection::class)->getQueryBuilder();
 		$query->delete('filecache')
 			->where($query->expr()->eq('fileid', $query->createNamedParameter($oldFolderId)));
-		$query->execute();
+		$query->executeStatement();
 
 		$cachedData = $this->cache->get('folder/bar.txt');
 		$this->assertEquals($oldFolderId, $cachedData['parent']);
 		$this->assertFalse($this->cache->inCache('folder'));
 
-		$this->scanner->scan('folder', \OC\Files\Cache\Scanner::SCAN_SHALLOW);
+		$this->scanner->scan('folder', IScanner::SCAN_SHALLOW);
 
 		$this->assertTrue($this->cache->inCache('folder'));
 		$newFolderId = $this->cache->getId('folder');
@@ -390,18 +388,18 @@ class ScannerTest extends \Test\TestCase {
 	}
 
 	/**
-	 * @dataProvider dataTestIsPartialFile
 	 *
 	 * @param string $path
 	 * @param bool $expected
 	 */
-	public function testIsPartialFile($path, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestIsPartialFile')]
+	public function testIsPartialFile($path, $expected): void {
 		$this->assertSame($expected,
 			$this->scanner->isPartialFile($path)
 		);
 	}
 
-	public function dataTestIsPartialFile() {
+	public static function dataTestIsPartialFile(): array {
 		return [
 			['foo.txt.part', true],
 			['/sub/folder/foo.txt.part', true],
@@ -409,5 +407,49 @@ class ScannerTest extends \Test\TestCase {
 			['foo.txt', false],
 			['/sub/folder/foo.txt', false],
 		];
+	}
+
+	public function testNoETagUnscannedFolder(): void {
+		$this->fillTestFolders();
+
+		$this->scanner->scan('');
+
+		$oldFolderEntry = $this->cache->get('folder');
+		// create a new file in a folder by keeping the mtime unchanged, but mark the folder as unscanned
+		$this->storage->file_put_contents('folder/new.txt', 'foo');
+		$this->storage->touch('folder', $oldFolderEntry->getMTime());
+		$this->cache->update($oldFolderEntry->getId(), ['size' => -1]);
+
+		$this->scanner->scan('');
+
+		$this->cache->inCache('folder/new.txt');
+
+		$newFolderEntry = $this->cache->get('folder');
+		$this->assertNotEquals($newFolderEntry->getEtag(), $oldFolderEntry->getEtag());
+	}
+
+	public function testNoETagUnscannedSubFolder(): void {
+		$this->fillTestFolders();
+		$this->storage->mkdir('folder/sub');
+
+		$this->scanner->scan('');
+
+		$oldFolderEntry1 = $this->cache->get('folder');
+		$oldFolderEntry2 = $this->cache->get('folder/sub');
+		// create a new file in a folder by keeping the mtime unchanged, but mark the folder as unscanned
+		$this->storage->file_put_contents('folder/sub/new.txt', 'foo');
+		$this->storage->touch('folder/sub', $oldFolderEntry1->getMTime());
+
+		// we only mark the direct parent as unscanned, which is the current "notify" behavior
+		$this->cache->update($oldFolderEntry2->getId(), ['size' => -1]);
+
+		$this->scanner->scan('');
+
+		$this->cache->inCache('folder/new.txt');
+
+		$newFolderEntry1 = $this->cache->get('folder');
+		$this->assertNotEquals($newFolderEntry1->getEtag(), $oldFolderEntry1->getEtag());
+		$newFolderEntry2 = $this->cache->get('folder/sub');
+		$this->assertNotEquals($newFolderEntry2->getEtag(), $oldFolderEntry2->getEtag());
 	}
 }

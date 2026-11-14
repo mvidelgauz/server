@@ -1,22 +1,9 @@
 <?php
+
 /**
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @copyright Copyright (c) 2015, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Test;
@@ -28,13 +15,13 @@ use OCP\Capabilities\IPublicCapability;
 use Psr\Log\LoggerInterface;
 
 class CapabilitiesManagerTest extends TestCase {
-
 	/** @var CapabilitiesManager */
 	private $manager;
 
 	/** @var LoggerInterface */
 	private $logger;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 		$this->logger = $this->getMockBuilder(LoggerInterface::class)->getMock();
@@ -44,7 +31,7 @@ class CapabilitiesManagerTest extends TestCase {
 	/**
 	 * Test no capabilities
 	 */
-	public function testNoCapabilities() {
+	public function testNoCapabilities(): void {
 		$res = $this->manager->getCapabilities();
 		$this->assertEmpty($res);
 	}
@@ -52,7 +39,7 @@ class CapabilitiesManagerTest extends TestCase {
 	/**
 	 * Test a valid capabilitie
 	 */
-	public function testValidCapability() {
+	public function testValidCapability(): void {
 		$this->manager->registerCapability(function () {
 			return new SimpleCapability();
 		});
@@ -64,7 +51,7 @@ class CapabilitiesManagerTest extends TestCase {
 	/**
 	 * Test a public capabilitie
 	 */
-	public function testPublicCapability() {
+	public function testPublicCapability(): void {
 		$this->manager->registerCapability(function () {
 			return new PublicSimpleCapability1();
 		});
@@ -82,7 +69,7 @@ class CapabilitiesManagerTest extends TestCase {
 	/**
 	 * Test that we need something that implents ICapability
 	 */
-	public function testNoICapability() {
+	public function testNoICapability(): void {
 		$this->expectException(\InvalidArgumentException::class);
 		$this->expectExceptionMessage('The given Capability (Test\\NoCapability) does not implement the ICapability interface');
 
@@ -97,7 +84,7 @@ class CapabilitiesManagerTest extends TestCase {
 	/**
 	 * Test a bunch of merged Capabilities
 	 */
-	public function testMergedCapabilities() {
+	public function testMergedCapabilities(): void {
 		$this->manager->registerCapability(function () {
 			return new SimpleCapability();
 		});
@@ -123,7 +110,7 @@ class CapabilitiesManagerTest extends TestCase {
 	/**
 	 * Test deep identical capabilities
 	 */
-	public function testDeepIdenticalCapabilities() {
+	public function testDeepIdenticalCapabilities(): void {
 		$this->manager->registerCapability(function () {
 			return new DeepCapability();
 		});
@@ -143,8 +130,8 @@ class CapabilitiesManagerTest extends TestCase {
 		$this->assertEquals($expected, $res);
 	}
 
-	public function testInvalidCapability() {
-		$this->manager->registerCapability(function () {
+	public function testInvalidCapability(): void {
+		$this->manager->registerCapability(function (): void {
 			throw new QueryException();
 		});
 
@@ -158,6 +145,7 @@ class CapabilitiesManagerTest extends TestCase {
 }
 
 class SimpleCapability implements ICapability {
+	#[\Override]
 	public function getCapabilities() {
 		return [
 			'foo' => 1
@@ -166,6 +154,7 @@ class SimpleCapability implements ICapability {
 }
 
 class SimpleCapability2 implements ICapability {
+	#[\Override]
 	public function getCapabilities() {
 		return [
 			'bar' => ['x' => 1]
@@ -174,6 +163,7 @@ class SimpleCapability2 implements ICapability {
 }
 
 class SimpleCapability3 implements ICapability {
+	#[\Override]
 	public function getCapabilities() {
 		return [
 			'bar' => ['y' => 2]
@@ -182,6 +172,7 @@ class SimpleCapability3 implements ICapability {
 }
 
 class PublicSimpleCapability1 implements IPublicCapability {
+	#[\Override]
 	public function getCapabilities() {
 		return [
 			'foo' => 1
@@ -198,6 +189,7 @@ class NoCapability {
 }
 
 class DeepCapability implements ICapability {
+	#[\Override]
 	public function getCapabilities() {
 		return [
 			'foo' => [

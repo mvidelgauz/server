@@ -1,59 +1,46 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC;
 
 use OCP\AppFramework\QueryException;
 use OCP\Capabilities\ICapability;
+use OCP\Capabilities\IInitialStateExcludedCapability;
 use OCP\Capabilities\IPublicCapability;
+use OCP\ILogger;
 use Psr\Log\LoggerInterface;
 
 class CapabilitiesManager {
+	/**
+	 * Anything above 0.1s to load the capabilities of an app qualifies for bad code
+	 * and should be cached within the app.
+	 */
+	public const ACCEPTABLE_LOADING_TIME = 0.1;
 
 	/** @var \Closure[] */
-	private $capabilities = [];
+	private array $capabilities = [];
 
-	/** @var LoggerInterface */
-	private $logger;
-
-	public function __construct(LoggerInterface $logger) {
-		$this->logger = $logger;
+	public function __construct(
+		private LoggerInterface $logger,
+	) {
 	}
 
 	/**
-	 * Get an array of al the capabilities that are registered at this manager
+	 * Get an array of all the capabilities that are registered at this manager
 	 *
 	 * @param bool $public get public capabilities only
 	 * @throws \InvalidArgumentException
-	 * @return array
+	 * @return array<string, mixed>
 	 */
-	public function getCapabilities(bool $public = false) : array {
+	public function getCapabilities(bool $public = false, bool $initialState = false) : array {
 		$capabilities = [];
+		$slowCapabilities = [];
 		foreach ($this->capabilities as $capability) {
 			try {
 				$c = $capability();
@@ -66,14 +53,61 @@ class CapabilitiesManager {
 
 			if ($c instanceof ICapability) {
 				if (!$public || $c instanceof IPublicCapability) {
+					if ($initialState && ($c instanceof IInitialStateExcludedCapability)) {
+						// Remove less important capabilities information that are expensive to query
+						// that we would otherwise inject to every page load
+						continue;
+					}
+
+					$startTime = microtime(true);
 					$capabilities = array_replace_recursive($capabilities, $c->getCapabilities());
+					$timeSpent = microtime(true) - $startTime;
+
+					if ($timeSpent > self::ACCEPTABLE_LOADING_TIME) {
+						$slowCapabilities[get_class($c)] = $timeSpent;
+					}
 				}
 			} else {
 				throw new \InvalidArgumentException('The given Capability (' . get_class($c) . ') does not implement the ICapability interface');
 			}
 		}
 
+		if ($slowCapabilities !== []) {
+			$this->logSlowCapabilities($slowCapabilities);
+		}
+
 		return $capabilities;
+	}
+
+	/**
+	 * Log a single message for all capabilities that took too long to generate,
+	 * using the highest log level applicable to the slowest one.
+	 *
+	 * @param array<string, float> $slowCapabilities Map of class name to time spent in seconds
+	 */
+	private function logSlowCapabilities(array $slowCapabilities): void {
+		$slowestTime = max($slowCapabilities);
+		$logLevel = match (true) {
+			$slowestTime > self::ACCEPTABLE_LOADING_TIME * 16 => ILogger::FATAL,
+			$slowestTime > self::ACCEPTABLE_LOADING_TIME * 8 => ILogger::ERROR,
+			$slowestTime > self::ACCEPTABLE_LOADING_TIME * 4 => ILogger::WARN,
+			$slowestTime > self::ACCEPTABLE_LOADING_TIME * 2 => ILogger::INFO,
+			default => ILogger::DEBUG,
+		};
+
+		$durations = [];
+		foreach ($slowCapabilities as $className => $timeSpent) {
+			$durations[] = $className . ' (' . round($timeSpent, 2) . 's)';
+		}
+
+		$this->logger->log(
+			$logLevel,
+			'Generating the capabilities of the following apps took longer than {acceptable} seconds: {capabilities}',
+			[
+				'acceptable' => self::ACCEPTABLE_LOADING_TIME,
+				'capabilities' => implode(', ', $durations),
+			]
+		);
 	}
 
 	/**

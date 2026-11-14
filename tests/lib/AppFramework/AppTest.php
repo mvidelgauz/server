@@ -1,32 +1,18 @@
 <?php
 
 /**
- * ownCloud - App Framework
- *
- * @author Bernhard Posselt
- * @copyright 2012 Bernhard Posselt <dev@bernhard-posselt.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
- * License as published by the Free Software Foundation; either
- * version 3 of the License, or any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU AFFERO GENERAL PUBLIC LICENSE for more details.
- *
- * You should have received a copy of the GNU Affero General Public
- * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\AppFramework;
 
 use OC\AppFramework\App;
+use OC\AppFramework\DependencyInjection\DIContainer;
 use OC\AppFramework\Http\Dispatcher;
 use OCP\AppFramework\Controller;
-use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\IOutput;
 use OCP\AppFramework\Http\Response;
 
 function rrmdir($directory) {
@@ -41,9 +27,8 @@ function rrmdir($directory) {
 	return rmdir($directory);
 }
 
-
 class AppTest extends \Test\TestCase {
-	private $container;
+	private DIContainer $container;
 	private $io;
 	private $api;
 	private $controller;
@@ -55,38 +40,38 @@ class AppTest extends \Test\TestCase {
 	private $controllerMethod;
 	private $appPath;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->container = new \OC\AppFramework\DependencyInjection\DIContainer('test', []);
+		$this->container = new DIContainer('test', []);
 		$this->controller = $this->createMock(Controller::class);
 		$this->dispatcher = $this->createMock(Dispatcher::class);
-		$this->io = $this->createMock(Http\IOutput::class);
+		$this->io = $this->createMock(IOutput::class);
 
 		$this->headers = ['key' => 'value'];
 		$this->output = 'hi';
 		$this->controllerName = 'Controller';
 		$this->controllerMethod = 'method';
 
-		$this->container[$this->controllerName] = $this->controller;
-		$this->container['Dispatcher'] = $this->dispatcher;
-		$this->container['OCP\\AppFramework\\Http\\IOutput'] = $this->io;
-		$this->container['urlParams'] = [];
+		$this->container->setInInternalContainer($this->controllerName, $this->controller);
+		$this->container->setInInternalContainer(Dispatcher::class, $this->dispatcher);
+		$this->container->setInInternalContainer(IOutput::class, $this->io);
+		$this->container->registerParameter('urlParams', ['_route' => 'not-profiler']);
 
 		$this->appPath = __DIR__ . '/../../../apps/namespacetestapp';
 		$infoXmlPath = $this->appPath . '/appinfo/info.xml';
 		mkdir($this->appPath . '/appinfo', 0777, true);
 
-		$xml = '<?xml version="1.0" encoding="UTF-8"?>' .
-		'<info>' .
-			'<id>namespacetestapp</id>' .
-			'<namespace>NameSpaceTestApp</namespace>' .
-		'</info>';
+		$xml = '<?xml version="1.0" encoding="UTF-8"?>'
+		. '<info>'
+			. '<id>namespacetestapp</id>'
+			. '<namespace>NameSpaceTestApp</namespace>'
+		. '</info>';
 		file_put_contents($infoXmlPath, $xml);
 	}
 
-
-	public function testControllerNameAndMethodAreBeingPassed() {
+	public function testControllerNameAndMethodAreBeingPassed(): void {
 		$return = ['HTTP/2.0 200 OK', [], [], null, new Response()];
 		$this->dispatcher->expects($this->once())
 			->method('dispatch')
@@ -101,32 +86,28 @@ class AppTest extends \Test\TestCase {
 			$this->container);
 	}
 
-
-	public function testBuildAppNamespace() {
+	public function testBuildAppNamespace(): void {
 		$ns = App::buildAppNamespace('someapp');
 		$this->assertEquals('OCA\Someapp', $ns);
 	}
 
-
-	public function testBuildAppNamespaceCore() {
+	public function testBuildAppNamespaceCore(): void {
 		$ns = App::buildAppNamespace('someapp', 'OC\\');
 		$this->assertEquals('OC\Someapp', $ns);
 	}
 
-
-	public function testBuildAppNamespaceInfoXml() {
+	public function testBuildAppNamespaceInfoXml(): void {
 		$ns = App::buildAppNamespace('namespacetestapp', 'OCA\\');
 		$this->assertEquals('OCA\NameSpaceTestApp', $ns);
 	}
 
-
+	#[\Override]
 	protected function tearDown(): void {
 		rrmdir($this->appPath);
 		parent::tearDown();
 	}
 
-
-	public function testOutputIsPrinted() {
+	public function testOutputIsPrinted(): void {
 		$return = ['HTTP/2.0 200 OK', [], [], $this->output, new Response()];
 		$this->dispatcher->expects($this->once())
 			->method('dispatch')
@@ -139,17 +120,15 @@ class AppTest extends \Test\TestCase {
 		App::main($this->controllerName, $this->controllerMethod, $this->container, []);
 	}
 
-	public function dataNoOutput() {
+	public static function dataNoOutput(): array {
 		return [
 			['HTTP/2.0 204 No content'],
 			['HTTP/2.0 304 Not modified'],
 		];
 	}
 
-	/**
-	 * @dataProvider dataNoOutput
-	 */
-	public function testNoOutput(string $statusCode) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoOutput')]
+	public function testNoOutput(string $statusCode): void {
 		$return = [$statusCode, [], [], $this->output, new Response()];
 		$this->dispatcher->expects($this->once())
 			->method('dispatch')
@@ -164,8 +143,7 @@ class AppTest extends \Test\TestCase {
 		App::main($this->controllerName, $this->controllerMethod, $this->container, []);
 	}
 
-
-	public function testCallbackIsCalled() {
+	public function testCallbackIsCalled(): void {
 		$mock = $this->getMockBuilder('OCP\AppFramework\Http\ICallbackResponse')
 			->getMock();
 
@@ -180,9 +158,10 @@ class AppTest extends \Test\TestCase {
 		App::main($this->controllerName, $this->controllerMethod, $this->container, []);
 	}
 
-	public function testCoreApp() {
-		$this->container['AppName'] = 'core';
-		$this->container['OC\Core\Controller\Foo'] = $this->controller;
+	public function testCoreApp(): void {
+		self::invokePrivate($this->container, 'appName', ['core']);
+		$this->container->setInInternalContainer('OC\Core\Controller\Foo', $this->controller);
+		$this->container->registerParameter('urlParams', ['_route' => 'not-profiler']);
 
 		$return = ['HTTP/2.0 200 OK', [], [], null, new Response()];
 		$this->dispatcher->expects($this->once())
@@ -197,9 +176,10 @@ class AppTest extends \Test\TestCase {
 		App::main('Foo', $this->controllerMethod, $this->container);
 	}
 
-	public function testSettingsApp() {
-		$this->container['AppName'] = 'settings';
-		$this->container['OCA\Settings\Controller\Foo'] = $this->controller;
+	public function testSettingsApp(): void {
+		self::invokePrivate($this->container, 'appName', ['settings']);
+		$this->container->setInInternalContainer('OCA\Settings\Controller\Foo', $this->controller);
+		$this->container->registerParameter('urlParams', ['_route' => 'not-profiler']);
 
 		$return = ['HTTP/2.0 200 OK', [], [], null, new Response()];
 		$this->dispatcher->expects($this->once())
@@ -214,9 +194,10 @@ class AppTest extends \Test\TestCase {
 		App::main('Foo', $this->controllerMethod, $this->container);
 	}
 
-	public function testApp() {
-		$this->container['AppName'] = 'bar';
-		$this->container['OCA\Bar\Controller\Foo'] = $this->controller;
+	public function testApp(): void {
+		self::invokePrivate($this->container, 'appName', ['bar']);
+		$this->container->setInInternalContainer('OCA\Bar\Controller\Foo', $this->controller);
+		$this->container->registerParameter('urlParams', ['_route' => 'not-profiler']);
 
 		$return = ['HTTP/2.0 200 OK', [], [], null, new Response()];
 		$this->dispatcher->expects($this->once())

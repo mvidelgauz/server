@@ -3,68 +3,76 @@
 declare(strict_types=1);
 
 /**
- * Copyright (c) 2014 Lukas Reschke <lukas@owncloud.com>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Security;
 
+use OC\Files\Storage\Temporary;
 use OC\Files\View;
+use OC\Security\Certificate;
 use OC\Security\CertificateManager;
+use OCP\Files\InvalidPathException;
+use OCP\Files\ISetupManager;
 use OCP\IConfig;
-use OCP\ILogger;
+use OCP\IUserManager;
 use OCP\Security\ISecureRandom;
+use OCP\Server;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 
 /**
  * Class CertificateManagerTest
- *
- * @group DB
  */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class CertificateManagerTest extends \Test\TestCase {
 	use \Test\Traits\UserTrait;
 	use \Test\Traits\MountProviderTrait;
 
-	/** @var CertificateManager */
-	private $certificateManager;
-	/** @var String */
-	private $username;
-	/** @var ISecureRandom */
-	private $random;
+	private CertificateManager $certificateManager;
+	private string $username;
+	private ISecureRandom&MockObject $random;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
 		$this->username = $this->getUniqueID('', 20);
 		$this->createUser($this->username, '');
 
-		$storage = new \OC\Files\Storage\Temporary();
+		$storage = new Temporary();
 		$this->registerMount($this->username, $storage, '/' . $this->username . '/');
 
-		\OC_Util::tearDownFS();
-		\OC_User::setUserId('');
-		\OC\Files\Filesystem::tearDown();
+		Server::get(ISetupManager::class)->tearDown();
+		\OC_User::setUserId($this->username);
 		\OC_Util::setupFS($this->username);
 
 		$config = $this->createMock(IConfig::class);
-		$config->expects($this->any())->method('getSystemValue')
+		$config->expects($this->any())->method('getSystemValueBool')
 			->with('installed', false)->willReturn(true);
+		$config
+			->expects($this->any())
+			->method('getSystemValueString')
+			->with('default_certificates_bundle_path', \OC::$SERVERROOT . '/resources/config/ca-bundle.crt')
+			->willReturn(\OC::$SERVERROOT . '/resources/config/ca-bundle.crt');
 
 		$this->random = $this->createMock(ISecureRandom::class);
 		$this->random->method('generate')
 			->willReturn('random');
 
 		$this->certificateManager = new CertificateManager(
-			new \OC\Files\View(),
+			new View(),
 			$config,
-			$this->createMock(ILogger::class),
+			$this->createMock(LoggerInterface::class),
 			$this->random
 		);
 	}
 
+	#[\Override]
 	protected function tearDown(): void {
-		$user = \OC::$server->getUserManager()->get($this->username);
+		$user = Server::get(IUserManager::class)->get($this->username);
 		if ($user !== null) {
 			$user->delete();
 		}
@@ -78,34 +86,30 @@ class CertificateManagerTest extends \Test\TestCase {
 		$this->assertEquals($expected, $actual);
 	}
 
-	public function testListCertificates() {
+	public function testListCertificates(): void {
 		// Test empty certificate bundle
 		$this->assertSame([], $this->certificateManager->listCertificates());
 
 		// Add some certificates
 		$this->certificateManager->addCertificate(file_get_contents(__DIR__ . '/../../data/certificates/goodCertificate.crt'), 'GoodCertificate');
 		$certificateStore = [];
-		$certificateStore[] = new \OC\Security\Certificate(file_get_contents(__DIR__ . '/../../data/certificates/goodCertificate.crt'), 'GoodCertificate');
+		$certificateStore[] = new Certificate(file_get_contents(__DIR__ . '/../../data/certificates/goodCertificate.crt'), 'GoodCertificate');
 		$this->assertEqualsArrays($certificateStore, $this->certificateManager->listCertificates());
 
 		// Add another certificates
 		$this->certificateManager->addCertificate(file_get_contents(__DIR__ . '/../../data/certificates/expiredCertificate.crt'), 'ExpiredCertificate');
-		$certificateStore[] = new \OC\Security\Certificate(file_get_contents(__DIR__ . '/../../data/certificates/expiredCertificate.crt'), 'ExpiredCertificate');
+		$certificateStore[] = new Certificate(file_get_contents(__DIR__ . '/../../data/certificates/expiredCertificate.crt'), 'ExpiredCertificate');
 		$this->assertEqualsArrays($certificateStore, $this->certificateManager->listCertificates());
 	}
 
-
-	public function testAddInvalidCertificate() {
+	public function testAddInvalidCertificate(): void {
 		$this->expectException(\Exception::class);
 		$this->expectExceptionMessage('Certificate could not get parsed.');
 
 		$this->certificateManager->addCertificate('InvalidCertificate', 'invalidCertificate');
 	}
 
-	/**
-	 * @return array
-	 */
-	public function dangerousFileProvider() {
+	public static function dangerousFileProvider(): array {
 		return [
 			['.htaccess'],
 			['../../foo.txt'],
@@ -114,62 +118,59 @@ class CertificateManagerTest extends \Test\TestCase {
 	}
 
 	/**
-	 * @dataProvider dangerousFileProvider
 	 * @param string $filename
 	 */
-	public function testAddDangerousFile($filename) {
-		$this->expectException(\Exception::class);
-		$this->expectExceptionMessage('Filename is not valid');
-
+	#[\PHPUnit\Framework\Attributes\DataProvider('dangerousFileProvider')]
+	public function testAddDangerousFile($filename): void {
+		$this->expectException(InvalidPathException::class);
 		$this->certificateManager->addCertificate(file_get_contents(__DIR__ . '/../../data/certificates/expiredCertificate.crt'), $filename);
 	}
 
-	public function testRemoveDangerousFile() {
+	public function testRemoveDangerousFile(): void {
 		$this->assertFalse($this->certificateManager->removeCertificate('../../foo.txt'));
 	}
 
-	public function testRemoveExistingFile() {
+	public function testRemoveExistingFile(): void {
 		$this->certificateManager->addCertificate(file_get_contents(__DIR__ . '/../../data/certificates/goodCertificate.crt'), 'GoodCertificate');
 		$this->assertTrue($this->certificateManager->removeCertificate('GoodCertificate'));
 	}
 
-	public function testGetCertificateBundle() {
+	public function testGetCertificateBundle(): void {
 		$this->assertSame('/files_external/rootcerts.crt', $this->certificateManager->getCertificateBundle());
 	}
 
 	/**
-	 * @dataProvider dataTestNeedRebundling
 	 *
 	 * @param int $CaBundleMtime
 	 * @param int $targetBundleMtime
 	 * @param int $targetBundleExists
 	 * @param bool $expected
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestNeedRebundling')]
 	public function testNeedRebundling($CaBundleMtime,
-								$targetBundleMtime,
-								$targetBundleExists,
-								$expected
-	) {
+		$targetBundleMtime,
+		$targetBundleExists,
+		$expected,
+	): void {
 		$view = $this->getMockBuilder(View::class)
 			->disableOriginalConstructor()->getMock();
 		$config = $this->createMock(IConfig::class);
 
 		/** @var CertificateManager | \PHPUnit\Framework\MockObject\MockObject $certificateManager */
 		$certificateManager = $this->getMockBuilder('OC\Security\CertificateManager')
-			->setConstructorArgs([$view, $config, $this->createMock(ILogger::class), $this->random])
-			->setMethods(['getFilemtimeOfCaBundle', 'getCertificateBundle'])
+			->setConstructorArgs([$view, $config, $this->createMock(LoggerInterface::class), $this->random])
+			->onlyMethods(['getFilemtimeOfCaBundle', 'getCertificateBundle'])
 			->getMock();
 
 		$certificateManager->expects($this->any())->method('getFilemtimeOfCaBundle')
 			->willReturn($CaBundleMtime);
 
-		$certificateManager->expects($this->at(0))->method('getCertificateBundle')
+		$certificateManager->expects($this->once())->method('getCertificateBundle')
 			->willReturn('targetBundlePath');
 
 		$view->expects($this->any())->method('file_exists')
 			->with('targetBundlePath')
 			->willReturn($targetBundleExists);
-
 
 		$view->expects($this->any())->method('filemtime')
 			->willReturnCallback(function ($path) use ($targetBundleMtime) {
@@ -179,13 +180,12 @@ class CertificateManagerTest extends \Test\TestCase {
 				throw new \Exception('unexpected path');
 			});
 
-
 		$this->assertSame($expected,
 			$this->invokePrivate($certificateManager, 'needsRebundling')
 		);
 	}
 
-	public function dataTestNeedRebundling() {
+	public static function dataTestNeedRebundling(): array {
 		return [
 			//values: CaBundleMtime, targetBundleMtime, targetBundleExists, expected
 

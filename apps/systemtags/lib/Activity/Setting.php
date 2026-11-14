@@ -1,46 +1,28 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016 Joas Schilling <coding@schilljs.com>
- *
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\SystemTags\Activity;
 
-use OCP\Activity\ISetting;
+use OCP\Activity\ActivitySettings;
 use OCP\IL10N;
 
-class Setting implements ISetting {
-
-	/** @var IL10N */
-	protected $l;
-
-	/**
-	 * @param IL10N $l
-	 */
-	public function __construct(IL10N $l) {
-		$this->l = $l;
+class Setting extends ActivitySettings {
+	public function __construct(
+		protected IL10N $l,
+	) {
 	}
 
 	/**
 	 * @return string Lowercase a-z and underscore only identifier
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function getIdentifier() {
 		return 'systemtags';
 	}
@@ -49,16 +31,36 @@ class Setting implements ISetting {
 	 * @return string A translated string
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function getName() {
 		return $this->l->t('<strong>System tags</strong> for a file have been modified');
 	}
 
 	/**
+	 * @return string Lowercase a-z and underscore only group identifier
+	 * @since 20.0.0
+	 */
+	#[\Override]
+	public function getGroupIdentifier() {
+		return 'files';
+	}
+
+	/**
+	 * @return string A translated string for the settings group
+	 * @since 20.0.0
+	 */
+	#[\Override]
+	public function getGroupName() {
+		return $this->l->t('Files');
+	}
+
+	/**
 	 * @return int whether the filter should be rather on the top or bottom of
-	 * the admin section. The filters are arranged in ascending order of the
-	 * priority values. It is required to return a value between 0 and 100.
+	 *             the admin section. The filters are arranged in ascending order of the
+	 *             priority values. It is required to return a value between 0 and 100.
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function getPriority() {
 		return 50;
 	}
@@ -67,6 +69,7 @@ class Setting implements ISetting {
 	 * @return bool True when the option can be changed for the stream
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function canChangeStream() {
 		return true;
 	}
@@ -75,6 +78,7 @@ class Setting implements ISetting {
 	 * @return bool True when the option can be changed for the stream
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function isDefaultEnabledStream() {
 		return true;
 	}
@@ -83,6 +87,7 @@ class Setting implements ISetting {
 	 * @return bool True when the option can be changed for the mail
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function canChangeMail() {
 		return true;
 	}
@@ -91,6 +96,7 @@ class Setting implements ISetting {
 	 * @return bool True when the option can be changed for the stream
 	 * @since 11.0.0
 	 */
+	#[\Override]
 	public function isDefaultEnabledMail() {
 		return false;
 	}

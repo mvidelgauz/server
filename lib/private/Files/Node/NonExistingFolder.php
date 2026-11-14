@@ -1,29 +1,16 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files\Node;
 
+use OCP\Files\Node;
 use OCP\Files\NotFoundException;
+use Override;
 
 class NonExistingFolder extends Folder {
 	/**
@@ -34,18 +21,22 @@ class NonExistingFolder extends Folder {
 		throw new NotFoundException();
 	}
 
+	#[\Override]
 	public function delete() {
 		throw new NotFoundException();
 	}
 
-	public function copy($newPath) {
+	#[\Override]
+	public function copy($targetPath) {
 		throw new NotFoundException();
 	}
 
+	#[\Override]
 	public function touch($mtime = null) {
 		throw new NotFoundException();
 	}
 
+	#[\Override]
 	public function getId() {
 		if ($this->fileInfo) {
 			return parent::getId();
@@ -54,10 +45,21 @@ class NonExistingFolder extends Folder {
 		}
 	}
 
+	#[\Override]
+	public function getInternalPath() {
+		if ($this->fileInfo) {
+			return parent::getInternalPath();
+		} else {
+			return $this->getParent()->getMountPoint()->getInternalPath($this->getPath());
+		}
+	}
+
+	#[\Override]
 	public function stat() {
 		throw new NotFoundException();
 	}
 
+	#[\Override]
 	public function getMTime() {
 		if ($this->fileInfo) {
 			return parent::getMTime();
@@ -66,7 +68,8 @@ class NonExistingFolder extends Folder {
 		}
 	}
 
-	public function getSize($includeMounts = true) {
+	#[\Override]
+	public function getSize($includeMounts = true): int|float {
 		if ($this->fileInfo) {
 			return parent::getSize($includeMounts);
 		} else {
@@ -74,6 +77,7 @@ class NonExistingFolder extends Folder {
 		}
 	}
 
+	#[\Override]
 	public function getEtag() {
 		if ($this->fileInfo) {
 			return parent::getEtag();
@@ -82,6 +86,7 @@ class NonExistingFolder extends Folder {
 		}
 	}
 
+	#[\Override]
 	public function getPermissions() {
 		if ($this->fileInfo) {
 			return parent::getPermissions();
@@ -90,6 +95,7 @@ class NonExistingFolder extends Folder {
 		}
 	}
 
+	#[\Override]
 	public function isReadable() {
 		if ($this->fileInfo) {
 			return parent::isReadable();
@@ -98,6 +104,7 @@ class NonExistingFolder extends Folder {
 		}
 	}
 
+	#[\Override]
 	public function isUpdateable() {
 		if ($this->fileInfo) {
 			return parent::isUpdateable();
@@ -106,6 +113,7 @@ class NonExistingFolder extends Folder {
 		}
 	}
 
+	#[\Override]
 	public function isDeletable() {
 		if ($this->fileInfo) {
 			return parent::isDeletable();
@@ -114,6 +122,7 @@ class NonExistingFolder extends Folder {
 		}
 	}
 
+	#[\Override]
 	public function isShareable() {
 		if ($this->fileInfo) {
 			return parent::isShareable();
@@ -122,46 +131,67 @@ class NonExistingFolder extends Folder {
 		}
 	}
 
+	#[\Override]
 	public function get($path) {
 		throw new NotFoundException();
 	}
 
-	public function getDirectoryListing() {
+	#[Override]
+	public function getDirectoryListing(?string $mimetypeFilter = null): never {
 		throw new NotFoundException();
 	}
 
+	#[\Override]
 	public function nodeExists($path) {
 		return false;
 	}
 
+	#[\Override]
 	public function newFolder($path) {
 		throw new NotFoundException();
 	}
 
+	#[\Override]
 	public function newFile($path, $content = null) {
 		throw new NotFoundException();
 	}
 
-	public function search($pattern) {
+	#[\Override]
+	public function search($query) {
 		throw new NotFoundException();
 	}
 
-	public function searchByMime($mime) {
+	#[\Override]
+	public function searchByMime($mimetype) {
 		throw new NotFoundException();
 	}
 
+	#[\Override]
 	public function searchByTag($tag, $userId) {
 		throw new NotFoundException();
 	}
 
+	#[\Override]
+	public function searchBySystemTag(string $tagName, string $userId, int $limit = 0, int $offset = 0): array {
+		throw new NotFoundException();
+	}
+
+	#[\Override]
 	public function getById($id) {
 		throw new NotFoundException();
 	}
 
+	#[\Override]
+	public function getFirstNodeById(int $id): ?Node {
+		throw new NotFoundException();
+	}
+
+	#[\Override]
 	public function getFreeSpace() {
 		throw new NotFoundException();
 	}
 
+	#[\Override]
 	public function isCreatable() {
 		if ($this->fileInfo) {
 			return parent::isCreatable();

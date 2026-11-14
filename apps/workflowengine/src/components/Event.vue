@@ -1,140 +1,116 @@
+<!--
+  - SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 <template>
-	<div class="event">
-		<div v-if="operation.isComplex && operation.fixedEntity !== ''" class="isComplex">
-			<img class="option__icon" :src="entity.icon">
-			<span class="option__title option__title_single">{{ operation.triggerHint }}</span>
+	<div :class="$style.event">
+		<div v-if="operation.isComplex && operation.fixedEntity !== ''">
+			<img :class="$style.optionIcon" :src="entity?.icon" alt="">
+			<span :class="[$style.optionTitle, $style.singleTitle]">{{ operation.triggerHint }}</span>
 		</div>
-		<Multiselect v-else
-			:value="currentEvent"
-			:options="allEvents"
-			track-by="id"
-			:multiple="true"
-			:auto-limit="false"
+		<NcSelect
+			v-else
+			:aria-label-combobox="t('workflowengine', 'Trigger')"
+			:class="$style.trigger"
 			:disabled="allEvents.length <= 1"
-			@input="updateEvent">
-			<template slot="selection" slot-scope="{ values, isOpen }">
-				<div v-if="values.length && !isOpen" class="eventlist">
-					<img class="option__icon" :src="values[0].entity.icon">
-					<span v-for="(value, index) in values" :key="value.id" class="text option__title option__title_single">{{ value.displayName }} <span v-if="index+1 < values.length">, </span></span>
-				</div>
+			:modelValue="currentEvent"
+			:multiple="true"
+			:options="allEvents"
+			:placeholder="placeholderString"
+			label="displayName"
+			@update:modelValue="updateEvent">
+			<template #option="option">
+				<img :class="$style.optionIcon" :src="option.entity.icon" alt="">
+				<span :class="$style.optionTitle">{{ option.displayName }}</span>
 			</template>
-			<template slot="option" slot-scope="props">
-				<img class="option__icon" :src="props.option.entity.icon">
-				<span class="option__title">{{ props.option.displayName }}</span>
+			<template #selected-option="option">
+				<img :class="$style.optionIcon" :src="option.entity.icon" alt="">
+				<span :class="$style.optionTitle">{{ option.displayName }}</span>
 			</template>
-		</Multiselect>
+		</NcSelect>
 	</div>
 </template>
 
-<script>
-import Multiselect from '@nextcloud/vue/dist/Components/Multiselect'
+<script setup lang="ts">
+/* eslint vue/multi-word-component-names: "warn" */
+
+import type { FlatEntityEvent, Rule } from '../types.ts'
+
 import { showWarning } from '@nextcloud/dialogs'
+import { t } from '@nextcloud/l10n'
+import { computed } from 'vue'
+import NcSelect from '@nextcloud/vue/components/NcSelect'
+import { useWorkflowStore } from '../store.ts'
 
-export default {
-	name: 'Event',
-	components: {
-		Multiselect,
-	},
-	props: {
-		rule: {
-			type: Object,
-			required: true,
-		},
-	},
-	computed: {
-		entity() {
-			return this.$store.getters.getEntityForOperation(this.operation)
-		},
-		operation() {
-			return this.$store.getters.getOperationForRule(this.rule)
-		},
-		allEvents() {
-			return this.$store.getters.getEventsForOperation(this.operation)
-		},
-		currentEvent() {
-			return this.allEvents.filter(event => event.entity.id === this.rule.entity && this.rule.events.indexOf(event.eventName) !== -1)
-		},
-	},
-	methods: {
-		updateEvent(events) {
-			if (events.length === 0) {
-				showWarning(t('workflowengine', 'At least one event must be selected'))
-				return
-			}
-			const existingEntity = this.rule.entity
-			const newEntities = events.map(event => event.entity.id).filter((value, index, self) => self.indexOf(value) === index)
-			let newEntity = null
-			if (newEntities.length > 1) {
-				newEntity = newEntities.filter(entity => entity !== existingEntity)[0]
-			} else {
-				newEntity = newEntities[0]
-			}
+const props = defineProps<{ rule: Rule }>()
 
-			this.$set(this.rule, 'entity', newEntity)
-			this.$set(this.rule, 'events', events.filter(event => event.entity.id === newEntity).map(event => event.eventName))
-			this.$emit('update', this.rule)
-		},
-	},
+const emit = defineEmits<{ update: [rule: Rule] }>()
+
+const store = useWorkflowStore()
+
+const operation = computed(() => store.operationForRule(props.rule)!)
+const entity = computed(() => store.entityForOperation(operation.value))
+const allEvents = computed(() => store.events)
+
+const currentEvent = computed(() => allEvents.value.filter((event) => event.entity.id === props.rule.entity && props.rule.events.includes(event.eventName)))
+
+// TRANSLATORS: Users should select a trigger for a workflow action
+const placeholderString = t('workflowengine', 'Select a trigger')
+
+/**
+ * Apply the picked triggers. Picking events of another entity switches the rule
+ * over to that entity, because a rule only ever watches one.
+ *
+ * @param events - The triggers that are now picked
+ */
+function updateEvent(events: FlatEntityEvent[]): void {
+	if (events.length === 0) {
+		// TRANSLATORS: Users must select an event as of "happening" or "incident" which triggers an action
+		showWarning(t('workflowengine', 'At least one event must be selected'))
+		return
+	}
+
+	const existingEntity = props.rule.entity
+	const newEntities = [...new Set(events.map((event) => event.entity.id))]
+	const newEntity = newEntities.length > 1
+		? newEntities.filter((entityId) => entityId !== existingEntity)[0]
+		: newEntities[0]
+
+	store.setRuleTrigger(
+		props.rule,
+		newEntity,
+		events.filter((event) => event.entity.id === newEntity).map((event) => event.eventName),
+	)
+	emit('update', props.rule)
 }
 </script>
 
-<style scoped lang="scss">
-	.event {
-		margin-bottom: 5px;
-	}
-	.isComplex {
-		img {
-			vertical-align: text-top;
-		}
-		span {
-			padding-top: 2px;
-			display: inline-block;
-		}
-	}
-	.multiselect {
-		width: 100%;
-		max-width: 550px;
-		margin-top: 4px;
-	}
-	.multiselect::v-deep .multiselect__single {
-		display: flex;
-	}
-	.multiselect:not(.multiselect--active)::v-deep .multiselect__tags {
-		background-color: var(--color-main-background) !important;
-		border: 1px solid transparent;
-	}
+<style module lang="scss">
+.event {
+	margin-bottom: 5px;
 
-	.multiselect::v-deep .multiselect__tags {
-		background-color: var(--color-main-background) !important;
-		height: auto;
-		min-height: 34px;
+	img {
+		vertical-align: text-top;
 	}
+}
 
-	.multiselect:not(.multiselect--disabled)::v-deep .multiselect__tags .multiselect__single {
-		background-image: var(--icon-triangle-s-000);
-		background-repeat: no-repeat;
-		background-position: right center;
-	}
+.trigger {
+	max-width: 550px;
+}
 
-	input {
-		border: 1px solid transparent;
-	}
+.optionTitle {
+	margin-inline-start: 5px;
+	color: var(--color-main-text);
+}
 
-	.option__title {
-		margin-left: 5px;
-		color: var(--color-main-text);
-	}
-	.option__title_single {
-		font-weight: 900;
-	}
+.singleTitle {
+	padding-top: 2px;
+	display: inline-block;
+}
 
-	.option__icon {
-		width: 16px;
-		height: 16px;
-	}
-
-	.eventlist img,
-	.eventlist .text {
-		vertical-align: middle;
-	}
+.optionIcon {
+	width: 16px;
+	height: 16px;
+	filter: var(--background-invert-if-dark);
+}
 </style>

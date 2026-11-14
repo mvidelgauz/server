@@ -3,49 +3,33 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2019, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\User\Events;
 
+use OCP\AppFramework\Attribute\Dispatchable;
+use OCP\AppFramework\Attribute\Listenable;
+use OCP\Authentication\IApacheBackend;
 use OCP\EventDispatcher\Event;
 
 /**
  * @since 18.0.0
  */
+#[Listenable(since: '18.0.0')]
+#[Dispatchable(since: '18.0.0')]
 class BeforeUserLoggedInEvent extends Event {
-
-	/** @var string */
-	private $username;
-
-	/** @var string */
-	private $password;
-
 	/**
 	 * @since 18.0.0
+	 * @since 26.0.0 password can be null
 	 */
-	public function __construct(string $username, string $password) {
+	public function __construct(
+		private readonly string $username,
+		private readonly ?string $password,
+		private readonly ?IApacheBackend $backend = null,
+	) {
 		parent::__construct();
-		$this->username = $username;
-		$this->password = $password;
 	}
 
 	/**
@@ -59,8 +43,18 @@ class BeforeUserLoggedInEvent extends Event {
 
 	/**
 	 * @since 18.0.0
+	 * @since 26.0.0 value can be null
 	 */
-	public function getPassword(): string {
+	public function getPassword(): ?string {
 		return $this->password;
+	}
+
+	/**
+	 * return backend if available (or null)
+	 *
+	 * @since 26.0.0
+	 */
+	public function getBackend(): ?IApacheBackend {
+		return $this->backend;
 	}
 }

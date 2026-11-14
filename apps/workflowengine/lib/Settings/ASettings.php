@@ -3,31 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2019 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\WorkflowEngine\Settings;
 
 use OCA\WorkflowEngine\AppInfo\Application;
@@ -36,7 +15,7 @@ use OCP\AppFramework\Http\TemplateResponse;
 use OCP\AppFramework\Services\IInitialState;
 use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IConfig;
-use OCP\IL10N;
+use OCP\IURLGenerator;
 use OCP\Settings\ISettings;
 use OCP\WorkflowEngine\Events\LoadSettingsScriptsEvent;
 use OCP\WorkflowEngine\ICheck;
@@ -47,51 +26,19 @@ use OCP\WorkflowEngine\IOperation;
 use OCP\WorkflowEngine\ISpecificOperation;
 
 abstract class ASettings implements ISettings {
-	/** @var IL10N */
-	private $l10n;
-
-	/** @var string */
-	private $appName;
-
-	/** @var IEventDispatcher */
-	private $eventDispatcher;
-
-	/** @var Manager */
-	protected $manager;
-
-	/** @var IInitialState */
-	private $initialStateService;
-
-	/** @var IConfig */
-	private $config;
-
 	public function __construct(
-		string $appName,
-		IL10N $l,
-		IEventDispatcher $eventDispatcher,
-		Manager $manager,
-		IInitialState $initialStateService,
-		IConfig $config
+		private readonly IEventDispatcher $eventDispatcher,
+		protected readonly Manager $manager,
+		private readonly IInitialState $initialStateService,
+		private readonly IConfig $config,
+		private readonly IURLGenerator $urlGenerator,
 	) {
-		$this->appName = $appName;
-		$this->l10n = $l;
-		$this->eventDispatcher = $eventDispatcher;
-		$this->manager = $manager;
-		$this->initialStateService = $initialStateService;
-		$this->config = $config;
 	}
 
 	abstract public function getScope(): int;
 
-	/**
-	 * @return TemplateResponse
-	 */
+	#[\Override]
 	public function getForm(): TemplateResponse {
-		// @deprecated in 20.0.0: retire this one in favor of the typed event
-		$this->eventDispatcher->dispatch(
-			'OCP\WorkflowEngine::loadAdditionalSettingScripts',
-			new LoadSettingsScriptsEvent()
-		);
 		$this->eventDispatcher->dispatchTyped(new LoadSettingsScriptsEvent());
 
 		$entities = $this->manager->getEntitiesList();
@@ -122,30 +69,41 @@ abstract class ASettings implements ISettings {
 			$this->config->getSystemValueBool('appstoreenabled', true)
 		);
 
-		return new TemplateResponse(Application::APP_ID, 'settings', [], 'blank');
+		$this->initialStateService->provideInitialState(
+			'doc-url',
+			$this->urlGenerator->linkToDocs('admin-workflowengine')
+		);
+
+		return new TemplateResponse(Application::APP_ID, 'settings', [], TemplateResponse::RENDER_AS_BLANK);
 	}
 
 	/**
-	 * @return string the section ID, e.g. 'sharing'
+	 * @return string|null the section ID, e.g. 'sharing'
 	 */
+	#[\Override]
 	public function getSection(): ?string {
 		return 'workflow';
 	}
 
 	/**
 	 * @return int whether the form should be rather on the top or bottom of
-	 * the admin section. The forms are arranged in ascending order of the
-	 * priority values. It is required to return a value between 0 and 100.
+	 *             the admin section. The forms are arranged in ascending order of the
+	 *             priority values. It is required to return a value between 0 and 100.
 	 *
 	 * E.g.: 70
 	 */
+	#[\Override]
 	public function getPriority(): int {
 		return 0;
 	}
 
-	private function entitiesToArray(array $entities) {
-		return array_map(function (IEntity $entity) {
-			$events = array_map(function (IEntityEvent $entityEvent) {
+	/**
+	 * @param IEntity[] $entities
+	 * @return array<array-key, array{id: class-string<IEntity>, icon: string, name: string, events: array<array-key, array{eventName: string, displayName: string}>}>
+	 */
+	private function entitiesToArray(array $entities): array {
+		return array_map(function (IEntity $entity): array {
+			$events = array_map(function (IEntityEvent $entityEvent): array {
 				return [
 					'eventName' => $entityEvent->getEventName(),
 					'displayName' => $entityEvent->getDisplayName()
@@ -161,10 +119,8 @@ abstract class ASettings implements ISettings {
 		}, $entities);
 	}
 
-	private function operatorsToArray(array $operators) {
-		$operators = array_filter($operators, function (IOperation $operator) {
-			return $operator->isAvailableForScope($this->getScope());
-		});
+	private function operatorsToArray(array $operators): array {
+		$operators = array_filter($operators, fn (IOperation $operator): bool => $operator->isAvailableForScope($this->getScope()));
 
 		return array_map(function (IOperation $operator) {
 			return [
@@ -179,10 +135,8 @@ abstract class ASettings implements ISettings {
 		}, $operators);
 	}
 
-	private function checksToArray(array $checks) {
-		$checks = array_filter($checks, function (ICheck $check) {
-			return $check->isAvailableForScope($this->getScope());
-		});
+	private function checksToArray(array $checks): array {
+		$checks = array_filter($checks, fn (ICheck $check): bool => $check->isAvailableForScope($this->getScope()));
 
 		return array_map(function (ICheck $check) {
 			return [

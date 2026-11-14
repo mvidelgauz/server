@@ -1,35 +1,19 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2018, michag86 (michag86@arcor.de)
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author michag86 <micha_g@arcor.de>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Core\Command\App;
 
 use OC\Installer;
+use OCP\App\AppPathNotFoundException;
 use OCP\App\IAppManager;
-use OCP\ILogger;
+use OCP\IConfig;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -37,26 +21,19 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class Update extends Command {
+	public const APP_STORE_URL = 'https://apps.nextcloud.com/api/v1';
 
-	/** @var IAppManager */
-	protected $manager;
-	/** @var Installer */
-	private $installer;
-	/** @var ILogger */
-	private $logger;
-
-	/**
-	 * @param IAppManager $manager
-	 * @param Installer $installer
-	 */
-	public function __construct(IAppManager $manager, Installer $installer, ILogger $logger) {
+	public function __construct(
+		protected IAppManager $manager,
+		protected IConfig $config,
+		private Installer $installer,
+		private LoggerInterface $logger,
+	) {
 		parent::__construct();
-		$this->manager = $manager;
-		$this->installer = $installer;
-		$this->logger = $logger;
 	}
 
-	protected function configure() {
+	#[\Override]
+	protected function configure(): void {
 		$this
 			->setName('app:update')
 			->setDescription('update an app or all apps')
@@ -78,6 +55,12 @@ class Update extends Command {
 				'show update(s) without updating'
 			)
 			->addOption(
+				'showcurrent',
+				null,
+				InputOption::VALUE_NONE,
+				'show currently installed version'
+			)
+			->addOption(
 				'allow-unstable',
 				null,
 				InputOption::VALUE_NONE,
@@ -86,21 +69,37 @@ class Update extends Command {
 		;
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
+		$appStoreEnabled = $this->config->getSystemValueBool('appstoreenabled', true);
+		if ($appStoreEnabled === false) {
+			$output->writeln('App store access is disabled');
+			return 1;
+		}
+
+		$internetAvailable = $this->config->getSystemValueBool('has_internet_connection', true);
+		$isDefaultAppStore = $this->config->getSystemValueString('appstoreurl', self::APP_STORE_URL) === self::APP_STORE_URL;
+		if ($internetAvailable === false && $isDefaultAppStore === true) {
+			$output->writeln('Internet connection is disabled, and therefore the default public App store is not reachable');
+			return 1;
+		}
+
 		$singleAppId = $input->getArgument('app-id');
+		$updateFound = false;
+		$showOnly = $input->getOption('showonly') || $input->getOption('showcurrent');
 
 		if ($singleAppId) {
 			$apps = [$singleAppId];
 			try {
 				$this->manager->getAppPath($singleAppId);
-			} catch (\OCP\App\AppPathNotFoundException $e) {
+			} catch (AppPathNotFoundException $e) {
 				$output->writeln($singleAppId . ' not installed');
 				return 1;
 			}
-		} elseif ($input->getOption('all') || $input->getOption('showonly')) {
-			$apps = \OC_App::getAllApps();
+		} elseif ($input->getOption('all') || $showOnly) {
+			$apps = $this->manager->getAllAppsInAppsFolders();
 		} else {
-			$output->writeln("<error>Please specify an app to update or \"--all\" to update all updatable apps\"</error>");
+			$output->writeln('<error>Please specify an app to update or "--all" to update all updatable apps"</error>');
 			return 1;
 		}
 
@@ -108,24 +107,41 @@ class Update extends Command {
 		foreach ($apps as $appId) {
 			$newVersion = $this->installer->isUpdateAvailable($appId, $input->getOption('allow-unstable'));
 			if ($newVersion) {
-				$output->writeln($appId . ' new version available: ' . $newVersion);
+				$updateFound = true;
+				$message = $appId . ' new version available: ' . $newVersion;
+				if ($input->getOption('showcurrent')) {
+					$message .= ' (current version: ' . $this->manager->getAppVersion($appId) . ')';
+				}
+				$output->writeln($message);
 
-				if (!$input->getOption('showonly')) {
+				if (!$showOnly) {
 					try {
 						$result = $this->installer->updateAppstoreApp($appId, $input->getOption('allow-unstable'));
 					} catch (\Exception $e) {
-						$this->logger->logException($e, ['message' => 'Failure during update of app "' . $appId . '"','app' => 'app:update']);
+						$this->logger->error('Failure during update of app "' . $appId . '"', [
+							'app' => 'app:update',
+							'exception' => $e,
+						]);
 						$output->writeln('Error: ' . $e->getMessage());
+						$result = false;
 						$return = 1;
 					}
 
 					if ($result === false) {
 						$output->writeln($appId . ' couldn\'t be updated');
 						$return = 1;
-					} elseif ($result === true) {
+					} else {
 						$output->writeln($appId . ' updated');
 					}
 				}
+			}
+		}
+
+		if (!$updateFound) {
+			if ($singleAppId) {
+				$output->writeln($singleAppId . ' is up-to-date or no updates could be found');
+			} else {
+				$output->writeln('All apps are up-to-date or no updates could be found');
 			}
 		}
 

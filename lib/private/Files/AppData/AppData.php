@@ -3,32 +3,15 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2016 Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Files\AppData;
 
-use OC\Cache\CappedMemoryCache;
 use OC\Files\SimpleFS\SimpleFolder;
 use OC\SystemConfig;
+use OCP\Cache\CappedMemoryCache;
 use OCP\Files\Folder;
 use OCP\Files\IAppData;
 use OCP\Files\IRootFolder;
@@ -38,35 +21,15 @@ use OCP\Files\NotPermittedException;
 use OCP\Files\SimpleFS\ISimpleFolder;
 
 class AppData implements IAppData {
+	private ?Folder $folder = null;
+	/** @var CappedMemoryCache<ISimpleFolder|NotFoundException> */
+	private CappedMemoryCache $folders;
 
-	/** @var IRootFolder */
-	private $rootFolder;
-
-	/** @var SystemConfig */
-	private $config;
-
-	/** @var string */
-	private $appId;
-
-	/** @var Folder */
-	private $folder;
-
-	/** @var (ISimpleFolder|NotFoundException)[]|CappedMemoryCache */
-	private $folders;
-
-	/**
-	 * AppData constructor.
-	 *
-	 * @param IRootFolder $rootFolder
-	 * @param SystemConfig $systemConfig
-	 * @param string $appId
-	 */
-	public function __construct(IRootFolder $rootFolder,
-								SystemConfig $systemConfig,
-								string $appId) {
-		$this->rootFolder = $rootFolder;
-		$this->config = $systemConfig;
-		$this->appId = $appId;
+	public function __construct(
+		private IRootFolder $rootFolder,
+		private SystemConfig $config,
+		private string $appId,
+	) {
 		$this->folders = new CappedMemoryCache();
 	}
 
@@ -79,7 +42,7 @@ class AppData implements IAppData {
 		return 'appdata_' . $instanceId;
 	}
 
-	private function getAppDataRootFolder(): Folder {
+	protected function getAppDataRootFolder(): Folder {
 		$name = $this->getAppDataFolderName();
 
 		try {
@@ -123,6 +86,7 @@ class AppData implements IAppData {
 		return $this->folder;
 	}
 
+	#[\Override]
 	public function getFolder(string $name): ISimpleFolder {
 		$key = $this->appId . '/' . $name;
 		if ($cachedFolder = $this->folders->get($key)) {
@@ -151,6 +115,7 @@ class AppData implements IAppData {
 		return $folder;
 	}
 
+	#[\Override]
 	public function newFolder(string $name): ISimpleFolder {
 		$key = $this->appId . '/' . $name;
 		$folder = $this->getAppDataFolder()->newFolder($name);
@@ -160,6 +125,7 @@ class AppData implements IAppData {
 		return $simpleFolder;
 	}
 
+	#[\Override]
 	public function getDirectoryListing(): array {
 		$listing = $this->getAppDataFolder()->getDirectoryListing();
 

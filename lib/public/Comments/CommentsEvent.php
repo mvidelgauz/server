@@ -1,87 +1,84 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCP\Comments;
 
+use OCP\AppFramework\Attribute\Listenable;
 use OCP\EventDispatcher\Event;
+use OCP\EventDispatcher\IWebhookCompatibleEvent;
 
 /**
  * Class CommentsEvent
  *
  * @since 9.0.0
+ *
+ * In the future, once the deprecated methods are removed, this class will be abstract.
  */
-class CommentsEvent extends Event {
-
+#[Listenable(since: '9.0.0')]
+class CommentsEvent extends Event implements IWebhookCompatibleEvent {
 	/**
-	 * @deprecated 22.0.0
+	 * @since 11.0.0
+	 * @deprecated 33.0.0 Use \OCP\Comments\Events\CommentAddedEvent instead.
 	 */
 	public const EVENT_ADD = 'OCP\Comments\ICommentsManager::addComment';
 
 	/**
-	 * @deprecated 22.0.0
+	 * @since 11.0.0
+	 * @deprecated 33.0.0 Use \OCP\Comments\Events\BeforeCommentUpdatedEvent instead.
 	 */
 	public const EVENT_PRE_UPDATE = 'OCP\Comments\ICommentsManager::preUpdateComment';
 
 	/**
-	 * @deprecated 22.0.0
+	 * @since 11.0.0
+	 * @deprecated 33.0.0 Use \OCP\Comments\Events\CommentUpdatedEvent instead.
 	 */
 	public const EVENT_UPDATE = 'OCP\Comments\ICommentsManager::updateComment';
 
 	/**
-	 * @deprecated 22.0.0
+	 * @since 11.0.0
+	 * @deprecated 33.0.0 Use \OCP\Comments\Events\CommentDeletedEvent instead.
 	 */
 	public const EVENT_DELETE = 'OCP\Comments\ICommentsManager::deleteComment';
 
-	/** @var string */
-	protected $event;
-	/** @var IComment */
-	protected $comment;
-
 	/**
-	 * DispatcherEvent constructor.
+	 * CommentsEvent constructor.
 	 *
-	 * @param string $event
-	 * @param IComment $comment
 	 * @since 9.0.0
 	 */
-	public function __construct($event, IComment $comment) {
-		$this->event = $event;
-		$this->comment = $comment;
+	public function __construct(
+		protected readonly string $event,
+		protected readonly IComment $comment,
+	) {
+		parent::__construct();
 	}
 
 	/**
-	 * @return string
 	 * @since 9.0.0
+	 * @deprecated 33.0.0 Use instanceof CommentAddedEvent, CommentRemovedEvent, CommentUpdatedEvent or BeforeCommentUpdatedEvent instead.
 	 */
-	public function getEvent() {
+	public function getEvent(): string {
 		return $this->event;
 	}
 
 	/**
-	 * @return IComment
 	 * @since 9.0.0
 	 */
-	public function getComment() {
+	public function getComment(): IComment {
 		return $this->comment;
+	}
+
+	/**
+	 * @since 35.0.2
+	 */
+	#[\Override]
+	public function getWebhookSerializable(): array {
+		return [
+			'comment' => $this->comment,
+		];
 	}
 }

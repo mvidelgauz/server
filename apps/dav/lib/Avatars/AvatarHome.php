@@ -1,27 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud GmbH
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2017 ownCloud GmbH
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Avatars;
 
 use OCP\IAvatarManager;
@@ -33,34 +17,33 @@ use Sabre\Uri;
 
 class AvatarHome implements ICollection {
 
-	/** @var array */
-	private $principalInfo;
-	/** @var IAvatarManager */
-	private $avatarManager;
-
 	/**
 	 * AvatarHome constructor.
 	 *
 	 * @param array $principalInfo
 	 * @param IAvatarManager $avatarManager
 	 */
-	public function __construct($principalInfo, IAvatarManager $avatarManager) {
-		$this->principalInfo = $principalInfo;
-		$this->avatarManager = $avatarManager;
+	public function __construct(
+		private $principalInfo,
+		private IAvatarManager $avatarManager,
+	) {
 	}
 
+	#[\Override]
 	public function createFile($name, $data = null) {
 		throw new Forbidden('Permission denied to create a file');
 	}
 
+	#[\Override]
 	public function createDirectory($name) {
 		throw new Forbidden('Permission denied to create a folder');
 	}
 
+	#[\Override]
 	public function getChild($name) {
 		$elements = pathinfo($name);
-		$ext = isset($elements['extension']) ? $elements['extension'] : '';
-		$size = (int)(isset($elements['filename']) ? $elements['filename'] : '64');
+		$ext = $elements['extension'] ?? '';
+		$size = (int)($elements['filename'] ?? '64');
 		if (!in_array($ext, ['jpeg', 'png'], true)) {
 			throw new MethodNotAllowed('File format not allowed');
 		}
@@ -74,6 +57,7 @@ class AvatarHome implements ICollection {
 		return new AvatarNode($size, $ext, $avatar);
 	}
 
+	#[\Override]
 	public function getChildren() {
 		try {
 			return [
@@ -84,6 +68,7 @@ class AvatarHome implements ICollection {
 		}
 	}
 
+	#[\Override]
 	public function childExists($name) {
 		try {
 			$ret = $this->getChild($name);
@@ -95,15 +80,18 @@ class AvatarHome implements ICollection {
 		}
 	}
 
+	#[\Override]
 	public function delete() {
 		throw new Forbidden('Permission denied to delete this folder');
 	}
 
+	#[\Override]
 	public function getName() {
 		[,$name] = Uri\split($this->principalInfo['uri']);
 		return $name;
 	}
 
+	#[\Override]
 	public function setName($name) {
 		throw new Forbidden('Permission denied to rename this folder');
 	}
@@ -113,6 +101,7 @@ class AvatarHome implements ICollection {
 	 *
 	 * @return int|null
 	 */
+	#[\Override]
 	public function getLastModified() {
 		return null;
 	}

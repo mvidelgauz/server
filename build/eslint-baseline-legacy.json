@@ -1,0 +1,20 @@
+{
+  "apps/settings/src/components/Users/NewUserDialog.vue": {
+    "vue/no-mutating-props": {
+      "count": 2
+    }
+  },
+  "apps/workflowengine/src/components/Check.vue": {
+    "vue/no-mutating-props": {
+      "count": 3
+    }
+  },
+  "apps/workflowengine/src/components/Rule.vue": {
+    "vue/multi-word-component-names": {
+      "count": 1
+    },
+    "vue/no-mutating-props": {
+      "count": 1
+    }
+  }
+}

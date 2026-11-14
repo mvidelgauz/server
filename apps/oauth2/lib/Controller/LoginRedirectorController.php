@@ -3,88 +3,68 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2017 Lukas Reschke <lukas@statuscode.ch>
- *
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\OAuth2\Controller;
 
+use OC\Core\Controller\ClientFlowLoginController;
 use OCA\OAuth2\Db\ClientMapper;
 use OCA\OAuth2\Exceptions\ClientNotFoundException;
 use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
+use OCP\AppFramework\Http\Attribute\OpenAPI;
+use OCP\AppFramework\Http\Attribute\PublicPage;
+use OCP\AppFramework\Http\Attribute\UseSession;
 use OCP\AppFramework\Http\RedirectResponse;
-use OCP\AppFramework\Http\Response;
 use OCP\AppFramework\Http\TemplateResponse;
+use OCP\IAppConfig;
+use OCP\IConfig;
 use OCP\IL10N;
 use OCP\IRequest;
 use OCP\ISession;
 use OCP\IURLGenerator;
+use OCP\Security\ISecureRandom;
 
-class LoginRedirectorController extends Controller {
-	/** @var IURLGenerator */
-	private $urlGenerator;
-	/** @var ClientMapper */
-	private $clientMapper;
-	/** @var ISession */
-	private $session;
-	/** @var IL10N */
-	private $l;
-
-	/**
-	 * @param string $appName
-	 * @param IRequest $request
-	 * @param IURLGenerator $urlGenerator
-	 * @param ClientMapper $clientMapper
-	 * @param ISession $session
-	 * @param IL10N $l
-	 */
-	public function __construct(string $appName,
-								IRequest $request,
-								IURLGenerator $urlGenerator,
-								ClientMapper $clientMapper,
-								ISession $session,
-								IL10N $l) {
+#[OpenAPI(scope: OpenAPI::SCOPE_DEFAULT)]
+final class LoginRedirectorController extends Controller {
+	public function __construct(
+		string $appName,
+		IRequest $request,
+		private readonly IURLGenerator $urlGenerator,
+		private readonly ClientMapper $clientMapper,
+		private readonly ISession $session,
+		private readonly IL10N $l,
+		private readonly ISecureRandom $random,
+		private readonly IAppConfig $appConfig,
+		private readonly IConfig $config,
+	) {
 		parent::__construct($appName, $request);
-		$this->urlGenerator = $urlGenerator;
-		$this->clientMapper = $clientMapper;
-		$this->session = $session;
-		$this->l = $l;
 	}
 
 	/**
-	 * @PublicPage
-	 * @NoCSRFRequired
-	 * @UseSession
+	 * Authorize the user
 	 *
-	 * @param string $client_id
-	 * @param string $state
-	 * @param string $response_type
-	 * @return Response
+	 * @param string $client_id Client ID
+	 * @param string $state State of the flow
+	 * @param string $response_type Response type for the flow
+	 * @param string $redirect_uri URI to redirect to after the flow (is only used for legacy ownCloud clients)
+	 * @return TemplateResponse<Http::STATUS_OK, array{}>|RedirectResponse<Http::STATUS_SEE_OTHER, array{}>
+	 *
+	 * 200: Client not found
+	 * 303: Redirect to the login URL
 	 */
-	public function authorize($client_id,
-							  $state,
-							  $response_type): Response {
+	#[PublicPage]
+	#[NoCSRFRequired]
+	#[UseSession]
+	public function authorize(
+		string $client_id, string $state, string $response_type, string $redirect_uri = '',
+	): TemplateResponse|RedirectResponse {
 		try {
 			$client = $this->clientMapper->getByIdentifier($client_id);
-		} catch (ClientNotFoundException $e) {
+		} catch (ClientNotFoundException) {
 			$params = [
 				'content' => $this->l->t('Your client is not authorized to connect. Please inform the administrator of your client.'),
 			];
@@ -93,18 +73,44 @@ class LoginRedirectorController extends Controller {
 
 		if ($response_type !== 'code') {
 			//Fail
-			$url = $client->getRedirectUri() . '?error=unsupported_response_type&state=' . $state;
+			$url = $client->redirectUri . '?error=unsupported_response_type&state=' . \urlencode($state);
 			return new RedirectResponse($url);
+		}
+
+		$enableOcClients = $this->config->getSystemValueBool('oauth2.enable_oc_clients', false);
+
+		$providedRedirectUri = '';
+		if ($enableOcClients && $client->redirectUri === 'http://localhost:*') {
+			$providedRedirectUri = $redirect_uri;
 		}
 
 		$this->session->set('oauth.state', $state);
 
-		$targetUrl = $this->urlGenerator->linkToRouteAbsolute(
-			'core.ClientFlowLogin.showAuthPickerPage',
-			[
-				'clientIdentifier' => $client->getClientIdentifier(),
-			]
-		);
+		if (in_array($client->name, $this->appConfig->getValueArray('oauth2', 'skipAuthPickerApplications', []), true)) {
+			/** @see ClientFlowLoginController::showAuthPickerPage **/
+			$stateToken = $this->random->generate(
+				64,
+				ISecureRandom::CHAR_LOWER . ISecureRandom::CHAR_UPPER . ISecureRandom::CHAR_DIGITS
+			);
+			$this->session->set(ClientFlowLoginController::STATE_NAME, $stateToken);
+			$targetUrl = $this->urlGenerator->linkToRouteAbsolute(
+				'core.ClientFlowLogin.grantPage',
+				[
+					'stateToken' => $stateToken,
+					'clientIdentifier' => $client->clientIdentifier,
+					'providedRedirectUri' => $providedRedirectUri,
+				]
+			);
+		} else {
+			$targetUrl = $this->urlGenerator->linkToRouteAbsolute(
+				'core.ClientFlowLogin.showAuthPickerPage',
+				[
+					'clientIdentifier' => $client->clientIdentifier,
+					'providedRedirectUri' => $providedRedirectUri,
+				]
+			);
+		}
+
 		return new RedirectResponse($targetUrl);
 	}
 }

@@ -2,43 +2,24 @@
 
 declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2018 Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Authentication\Token;
 
-use OC;
-use OC\Authentication\Token\IToken;
 use OC\Authentication\Token\PublicKeyToken;
 use OC\Authentication\Token\PublicKeyTokenMapper;
+use OCP\AppFramework\Db\DoesNotExistException;
+use OCP\Authentication\Token\IToken;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 use OCP\IUser;
+use OCP\Server;
 use Test\TestCase;
 
-/**
- * @group DB
- */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class PublicKeyTokenMapperTest extends TestCase {
-
 	/** @var PublicKeyTokenMapper */
 	private $mapper;
 
@@ -48,10 +29,11 @@ class PublicKeyTokenMapperTest extends TestCase {
 	/** @var int */
 	private $time;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->dbConnection = OC::$server->getDatabaseConnection();
+		$this->dbConnection = Server::get(IDBConnection::class);
 		$this->time = time();
 		$this->resetDatabase();
 
@@ -60,7 +42,7 @@ class PublicKeyTokenMapperTest extends TestCase {
 
 	private function resetDatabase() {
 		$qb = $this->dbConnection->getQueryBuilder();
-		$qb->delete('authtoken')->execute();
+		$qb->delete('authtoken')->executeStatement();
 		$qb->insert('authtoken')->values([
 			'uid' => $qb->createNamedParameter('user1'),
 			'login_name' => $qb->createNamedParameter('User1'),
@@ -73,7 +55,7 @@ class PublicKeyTokenMapperTest extends TestCase {
 			'public_key' => $qb->createNamedParameter('public key'),
 			'private_key' => $qb->createNamedParameter('private key'),
 			'version' => $qb->createNamedParameter(2),
-		])->execute();
+		])->executeStatement();
 		$qb->insert('authtoken')->values([
 			'uid' => $qb->createNamedParameter('user2'),
 			'login_name' => $qb->createNamedParameter('User2'),
@@ -86,7 +68,7 @@ class PublicKeyTokenMapperTest extends TestCase {
 			'public_key' => $qb->createNamedParameter('public key'),
 			'private_key' => $qb->createNamedParameter('private key'),
 			'version' => $qb->createNamedParameter(2),
-		])->execute();
+		])->executeStatement();
 		$qb->insert('authtoken')->values([
 			'uid' => $qb->createNamedParameter('user1'),
 			'login_name' => $qb->createNamedParameter('User1'),
@@ -99,7 +81,7 @@ class PublicKeyTokenMapperTest extends TestCase {
 			'public_key' => $qb->createNamedParameter('public key'),
 			'private_key' => $qb->createNamedParameter('private key'),
 			'version' => $qb->createNamedParameter(2),
-		])->execute();
+		])->executeStatement();
 		$qb->insert('authtoken')->values([
 			'uid' => $qb->createNamedParameter('user3'),
 			'login_name' => $qb->createNamedParameter('User3'),
@@ -113,43 +95,65 @@ class PublicKeyTokenMapperTest extends TestCase {
 			'private_key' => $qb->createNamedParameter('private key'),
 			'version' => $qb->createNamedParameter(2),
 			'password_invalid' => $qb->createNamedParameter(1),
-		])->execute();
+		])->executeStatement();
+		$qb->insert('authtoken')->values([
+			'uid' => $qb->createNamedParameter('user3'),
+			'login_name' => $qb->createNamedParameter('User3'),
+			'password' => $qb->createNamedParameter('063de945d6f6b26862d9b6f40652f2d5|DZ/z520tfdXPtd0T|395f6b89be8d9d605e409e20b9d9abe477fde1be38a3223f9e508f979bf906e50d9eaa4dca983ca4fb22a241eb696c3f98654e7775f78c4caf13108f98642b53'),
+			'name' => $qb->createNamedParameter('Iceweasel on Linux'),
+			'token' => $qb->createNamedParameter('84c5808c6445b6d65b8aa5b03840f09b27de603f0fb970906fb14ea4b115b7bf5ec53fada5c093fe46afdcd7bbc9617253a4d105f7dfb32719f9973d72412f31'),
+			'type' => $qb->createNamedParameter(IToken::PERMANENT_TOKEN),
+			'last_activity' => $qb->createNamedParameter($this->time - 60 * 3, IQueryBuilder::PARAM_INT), // Three minutes ago
+			'last_check' => $this->time - 60 * 10, // 10mins ago
+			'public_key' => $qb->createNamedParameter('public key'),
+			'private_key' => $qb->createNamedParameter('private key'),
+			'version' => $qb->createNamedParameter(2),
+			'password_invalid' => $qb->createNamedParameter(1),
+		])->executeStatement();
 	}
 
 	private function getNumberOfTokens() {
 		$qb = $this->dbConnection->getQueryBuilder();
 		$result = $qb->select($qb->func()->count('*', 'count'))
 			->from('authtoken')
-			->execute()
-			->fetch();
-		return (int) $result['count'];
+			->executeQuery()
+			->fetchAssociative();
+		return (int)$result['count'];
 	}
 
-	public function testInvalidate() {
+	public function testInvalidate(): void {
 		$token = '9c5a2e661482b65597408a6bb6c4a3d1af36337381872ac56e445a06cdb7fea2b1039db707545c11027a4966919918b19d875a8b774840b18c6cbb7ae56fe206';
-
-		$this->mapper->invalidate($token);
-
-		$this->assertSame(3, $this->getNumberOfTokens());
-	}
-
-	public function testInvalidateInvalid() {
-		$token = 'youwontfindthisoneinthedatabase';
 
 		$this->mapper->invalidate($token);
 
 		$this->assertSame(4, $this->getNumberOfTokens());
 	}
 
-	public function testInvalidateOld() {
+	public function testInvalidateInvalid(): void {
+		$token = 'youwontfindthisoneinthedatabase';
+
+		$this->mapper->invalidate($token);
+
+		$this->assertSame(5, $this->getNumberOfTokens());
+	}
+
+	public function testInvalidateOld(): void {
 		$olderThan = $this->time - 60 * 60; // One hour
 
 		$this->mapper->invalidateOld($olderThan);
 
-		$this->assertSame(3, $this->getNumberOfTokens());
+		$this->assertSame(4, $this->getNumberOfTokens());
 	}
 
-	public function testGetToken() {
+	public function testInvalidateLastUsedBefore(): void {
+		$before = $this->time - 60 * 2; // Two minutes
+
+		$this->mapper->invalidateLastUsedBefore('user3', $before);
+
+		$this->assertSame(4, $this->getNumberOfTokens());
+	}
+
+	public function testGetToken(): void {
 		$token = new PublicKeyToken();
 		$token->setUid('user2');
 		$token->setLoginName('User2');
@@ -172,16 +176,15 @@ class PublicKeyTokenMapperTest extends TestCase {
 		$this->assertEquals($token, $dbToken);
 	}
 
-
-	public function testGetInvalidToken() {
-		$this->expectException(\OCP\AppFramework\Db\DoesNotExistException::class);
+	public function testGetInvalidToken(): void {
+		$this->expectException(DoesNotExistException::class);
 
 		$token = 'thisisaninvalidtokenthatisnotinthedatabase';
 
 		$this->mapper->getToken($token);
 	}
 
-	public function testGetTokenById() {
+	public function testGetTokenById(): void {
 		$token = new PublicKeyToken();
 		$token->setUid('user2');
 		$token->setLoginName('User2');
@@ -204,65 +207,54 @@ class PublicKeyTokenMapperTest extends TestCase {
 		$this->assertEquals($token, $dbToken);
 	}
 
-
-	public function testGetTokenByIdNotFound() {
-		$this->expectException(\OCP\AppFramework\Db\DoesNotExistException::class);
+	public function testGetTokenByIdNotFound(): void {
+		$this->expectException(DoesNotExistException::class);
 
 		$this->mapper->getTokenById(-1);
 	}
 
-
-	public function testGetInvalidTokenById() {
-		$this->expectException(\OCP\AppFramework\Db\DoesNotExistException::class);
+	public function testGetInvalidTokenById(): void {
+		$this->expectException(DoesNotExistException::class);
 
 		$id = '42';
 
 		$this->mapper->getToken($id);
 	}
 
-	public function testGetTokenByUser() {
+	public function testGetTokenByUser(): void {
 		$this->assertCount(2, $this->mapper->getTokenByUser('user1'));
 	}
 
-	public function testGetTokenByUserNotFound() {
+	public function testGetTokenByUserNotFound(): void {
 		$this->assertCount(0, $this->mapper->getTokenByUser('user1000'));
 	}
 
-	public function testDeleteById() {
+	public function testGetById(): void {
 		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
 		$user = $this->createMock(IUser::class);
 		$qb = $this->dbConnection->getQueryBuilder();
 		$qb->select('id')
 			->from('authtoken')
 			->where($qb->expr()->eq('token', $qb->createNamedParameter('9c5a2e661482b65597408a6bb6c4a3d1af36337381872ac56e445a06cdb7fea2b1039db707545c11027a4966919918b19d875a8b774840b18c6cbb7ae56fe206')));
-		$result = $qb->execute();
-		$id = $result->fetch()['id'];
+		$result = $qb->executeQuery();
+		$id = $result->fetchAssociative()['id'];
 
-		$this->mapper->deleteById('user1', (int)$id);
-		$this->assertEquals(3, $this->getNumberOfTokens());
+		$token = $this->mapper->getTokenById((int)$id);
+		$this->assertEquals('user1', $token->getUID());
 	}
 
-	public function testDeleteByIdWrongUser() {
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
-		$user = $this->createMock(IUser::class);
-		$id = 33;
-
-		$this->mapper->deleteById('user1000', $id);
-		$this->assertEquals(4, $this->getNumberOfTokens());
-	}
-
-	public function testDeleteByName() {
+	public function testDeleteByName(): void {
 		$qb = $this->dbConnection->getQueryBuilder();
 		$qb->select('name')
 			->from('authtoken')
 			->where($qb->expr()->eq('token', $qb->createNamedParameter('9c5a2e661482b65597408a6bb6c4a3d1af36337381872ac56e445a06cdb7fea2b1039db707545c11027a4966919918b19d875a8b774840b18c6cbb7ae56fe206')));
-		$result = $qb->execute();
-		$name = $result->fetch()['name'];
+		$result = $qb->executeQuery();
+		$name = $result->fetchAssociative()['name'];
 		$this->mapper->deleteByName($name);
-		$this->assertEquals(3, $this->getNumberOfTokens());
+		$this->assertEquals(4, $this->getNumberOfTokens());
 	}
 
-	public function testHasExpiredTokens() {
+	public function testHasExpiredTokens(): void {
 		$this->assertFalse($this->mapper->hasExpiredTokens('user1'));
 		$this->assertTrue($this->mapper->hasExpiredTokens('user3'));
 	}

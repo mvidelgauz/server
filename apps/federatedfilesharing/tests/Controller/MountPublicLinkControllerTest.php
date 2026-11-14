@@ -1,43 +1,27 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- * @copyright Copyright (c) 2016, Björn Schießle <bjoern@schiessle.org>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\FederatedFileSharing\Tests\Controller;
 
 use OC\Federation\CloudIdManager;
+use OC\Share20\Share;
 use OCA\FederatedFileSharing\AddressHandler;
 use OCA\FederatedFileSharing\Controller\MountPublicLinkController;
 use OCA\FederatedFileSharing\FederatedShareProvider;
 use OCP\AppFramework\Http;
 use OCP\Contacts\IManager as IContactsManager;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\Federation\ICloudIdManager;
 use OCP\Files\IRootFolder;
 use OCP\HintException;
 use OCP\Http\Client\IClientService;
+use OCP\ICacheFactory;
 use OCP\IL10N;
 use OCP\IRequest;
 use OCP\ISession;
@@ -46,68 +30,48 @@ use OCP\IUserManager;
 use OCP\IUserSession;
 use OCP\Share\IManager;
 use OCP\Share\IShare;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 
 class MountPublicLinkControllerTest extends \Test\TestCase {
-	/** @var IContactsManager|\PHPUnit\Framework\MockObject\MockObject */
-	protected $contactsManager;
-
-	/** @var  MountPublicLinkController */
-	private $controller;
-
-	/** @var  \OCP\IRequest | \PHPUnit\Framework\MockObject\MockObject */
-	private $request;
-
-	/** @var  FederatedShareProvider | \PHPUnit\Framework\MockObject\MockObject */
-	private $federatedShareProvider;
-
-	/** @var  IManager | \PHPUnit\Framework\MockObject\MockObject */
-	private $shareManager;
-
-	/** @var  AddressHandler | \PHPUnit\Framework\MockObject\MockObject */
-	private $addressHandler;
-
-	/** @var  IRootFolder | \PHPUnit\Framework\MockObject\MockObject */
-	private $rootFolder;
-
-	/** @var  IUserManager | \PHPUnit\Framework\MockObject\MockObject */
-	private $userManager;
-
-	/** @var  ISession | \PHPUnit\Framework\MockObject\MockObject */
-	private $session;
-
-	/** @var  IL10N | \PHPUnit\Framework\MockObject\MockObject */
-	private $l10n;
-
-	/** @var  IUserSession | \PHPUnit\Framework\MockObject\MockObject */
-	private $userSession;
-
-	/** @var  IClientService | \PHPUnit\Framework\MockObject\MockObject */
-	private $clientService;
-
-	/** @var  IShare */
-	private $share;
-
-	/** @var  ICloudIdManager */
-	private $cloudIdManager;
+	protected IContactsManager&MockObject $contactsManager;
+	private IRequest&MockObject $request;
+	private FederatedShareProvider&MockObject $federatedShareProvider;
+	private IManager&MockObject $shareManager;
+	private AddressHandler&MockObject $addressHandler;
+	private IRootFolder&MockObject $rootFolder;
+	private IUserManager&MockObject $userManager;
+	private ISession&MockObject $session;
+	private IL10N&MockObject $l10n;
+	private IUserSession&MockObject $userSession;
+	private IClientService&MockObject $clientService;
+	private IShare $share;
+	private ICloudIdManager $cloudIdManager;
+	private MountPublicLinkController $controller;
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->request = $this->getMockBuilder(IRequest::class)->disableOriginalConstructor()->getMock();
-		$this->federatedShareProvider = $this->getMockBuilder('OCA\FederatedFileSharing\FederatedShareProvider')
-			->disableOriginalConstructor()->getMock();
-		$this->shareManager = $this->getMockBuilder(IManager::class)->disableOriginalConstructor()->getMock();
-		$this->addressHandler = $this->getMockBuilder('OCA\FederatedFileSharing\AddressHandler')
-			->disableOriginalConstructor()->getMock();
-		$this->rootFolder = $this->getMockBuilder('OCP\Files\IRootFolder')->disableOriginalConstructor()->getMock();
-		$this->userManager = $this->getMockBuilder(IUserManager::class)->disableOriginalConstructor()->getMock();
-		$this->share = new \OC\Share20\Share($this->rootFolder, $this->userManager);
-		$this->session = $this->getMockBuilder(ISession::class)->disableOriginalConstructor()->getMock();
-		$this->l10n = $this->getMockBuilder(IL10N::class)->disableOriginalConstructor()->getMock();
-		$this->userSession = $this->getMockBuilder(IUserSession::class)->disableOriginalConstructor()->getMock();
-		$this->clientService = $this->getMockBuilder('OCP\Http\Client\IClientService')->disableOriginalConstructor()->getMock();
+		$this->request = $this->createMock(IRequest::class);
+		$this->federatedShareProvider = $this->createMock(FederatedShareProvider::class);
+		$this->shareManager = $this->createMock(IManager::class);
+		$this->addressHandler = $this->createMock(AddressHandler::class);
+		$this->rootFolder = $this->createMock(IRootFolder::class);
+		$this->userManager = $this->createMock(IUserManager::class);
+		$this->share = new Share($this->rootFolder, $this->userManager);
+		$this->share->setId('42');
+		$this->session = $this->createMock(ISession::class);
+		$this->l10n = $this->createMock(IL10N::class);
+		$this->userSession = $this->createMock(IUserSession::class);
+		$this->clientService = $this->createMock(IClientService::class);
 		$this->contactsManager = $this->createMock(IContactsManager::class);
-		$this->cloudIdManager = new CloudIdManager($this->contactsManager, $this->createMock(IURLGenerator::class), $this->userManager);
+		$this->cloudIdManager = new CloudIdManager(
+			$this->createMock(ICacheFactory::class),
+			$this->createMock(IEventDispatcher::class),
+			$this->contactsManager,
+			$this->createMock(IURLGenerator::class),
+			$this->userManager,
+		);
 
 		$this->controller = new MountPublicLinkController(
 			'federatedfilesharing', $this->request,
@@ -118,30 +82,22 @@ class MountPublicLinkControllerTest extends \Test\TestCase {
 			$this->l10n,
 			$this->userSession,
 			$this->clientService,
-			$this->cloudIdManager
+			$this->cloudIdManager,
+			$this->createMock(LoggerInterface::class),
 		);
 	}
 
-	/**
-	 * @dataProvider dataTestCreateFederatedShare
-	 *
-	 * @param string $shareWith
-	 * @param bool $outgoingSharesAllowed
-	 * @param bool $validShareWith
-	 * @param string $token
-	 * @param bool $validToken
-	 * @param bool $createSuccessful
-	 * @param string $expectedReturnData
-	 */
-	public function testCreateFederatedShare($shareWith,
-											 $outgoingSharesAllowed,
-											 $validShareWith,
-											 $token,
-											 $validToken,
-											 $createSuccessful,
-											 $expectedReturnData,
-											 $permissions
-	) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataTestCreateFederatedShare')]
+	public function testCreateFederatedShare(
+		string $shareWith,
+		bool $outgoingSharesAllowed,
+		bool $validShareWith,
+		string $token,
+		bool $validToken,
+		bool $createSuccessful,
+		string $expectedReturnData,
+		int $permissions,
+	): void {
 		$this->federatedShareProvider->expects($this->any())
 			->method('isOutgoingServer2serverShareEnabled')
 			->willReturn($outgoingSharesAllowed);
@@ -198,7 +154,7 @@ class MountPublicLinkControllerTest extends \Test\TestCase {
 		}
 	}
 
-	public function dataTestCreateFederatedShare() {
+	public static function dataTestCreateFederatedShare(): array {
 		return [
 			//shareWith, outgoingSharesAllowed, validShareWith, token, validToken, createSuccessful, expectedReturnData
 			['user@server', true, true, 'token', true, true, 'server', 31],
@@ -212,5 +168,36 @@ class MountPublicLinkControllerTest extends \Test\TestCase {
 			['user@server', true, true, 'token', true, false, 'can not create share', 31],
 			['user@server', false, true, 'token', true, true, 'This server doesn\'t support outgoing federated shares', 31],
 		];
+	}
+
+	public static function dataCreateFederatedSharePasswordProtected(): array {
+		return [
+			'session for current password' => ['{"token":"password-hash"}', '', false, true],
+			'session for changed password' => ['{"token":"old-password-hash"}', '', false, false],
+			'session for other share' => ['{"other-token":"password-hash"}', '', false, false],
+			'no session, valid password' => [null, 'password', true, true],
+			'no session, invalid password' => [null, 'wrong', false, false],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataCreateFederatedSharePasswordProtected')]
+	public function testCreateFederatedSharePasswordProtected(?string $sessionTokens, string $password, bool $passwordValid, bool $expectSuccess): void {
+		$this->federatedShareProvider->method('isOutgoingServer2serverShareEnabled')->willReturn(true);
+		$this->addressHandler->method('splitUserRemote')->willReturn(['user', 'server']);
+
+		$this->share->setToken('token');
+		$this->share->setPassword('password-hash');
+		$this->share->setPermissions(31);
+		$this->shareManager->method('getShareByToken')->with('token')->willReturn($this->share);
+		$this->shareManager->method('checkPassword')->with($this->share, $password)->willReturn($passwordValid);
+		$this->session->method('get')->with('public_link_authenticated_frontend')->willReturn($sessionTokens);
+
+		$this->federatedShareProvider->expects($expectSuccess ? $this->once() : $this->never())
+			->method('create')
+			->willReturnArgument(0);
+
+		$result = $this->controller->createFederatedShare('user@server', 'token', $password);
+
+		$this->assertSame($expectSuccess ? Http::STATUS_OK : Http::STATUS_BAD_REQUEST, $result->getStatus());
 	}
 }

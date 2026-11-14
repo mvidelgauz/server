@@ -1,56 +1,38 @@
 <?php
-/**
- * @copyright Copyright (c) 2021 Nextcloud GmbH
- *
- * @author Carl Schwan <carl@carlschwan.eu>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- *
- */
 
+/**
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
 
 namespace OCA\Settings\Tests\Controller\Admin;
 
 use OC\Settings\AuthorizedGroup;
 use OCA\Settings\Controller\AuthorizedGroupController;
 use OCA\Settings\Service\AuthorizedGroupService;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IRequest;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class DelegationControllerTest extends TestCase {
-
-	/** @var AuthorizedGroupService */
-	private $service;
-
-	/** @var IRequest */
-	private $request;
-
-	/** @var AuthorizedGroupController */
-	private $controller;
+	private AuthorizedGroupService&MockObject $service;
+	private IRequest&MockObject $request;
+	private IEventDispatcher&MockObject $eventDispatcher;
+	private AuthorizedGroupController $controller;
 
 	protected function setUp(): void {
 		parent::setUp();
-		$this->request = $this->getMockBuilder(IRequest::class)->getMock();
-		$this->service = $this->getMockBuilder(AuthorizedGroupService::class)->disableOriginalConstructor()->getMock();
+		$this->request = $this->createMock(IRequest::class);
+		$this->service = $this->createMock(AuthorizedGroupService::class);
+		$this->eventDispatcher = $this->createMock(IEventDispatcher::class);
 		$this->controller = new AuthorizedGroupController(
-			'settings', $this->request, $this->service
+			'settings', $this->request, $this->service, $this->eventDispatcher
 		);
 	}
 
-	public function testSaveSettings() {
+	public function testSaveSettings(): void {
 		$setting = 'MySecretSetting';
 		$oldGroups = [];
 		$oldGroups[] = AuthorizedGroup::fromParams(['groupId' => 'hello', 'class' => $setting]);
@@ -59,7 +41,7 @@ class DelegationControllerTest extends TestCase {
 		$this->service->expects($this->once())
 			->method('findExistingGroupsForClass')
 			->with('MySecretSetting')
-			->will($this->returnValue($oldGroups));
+			->willReturn($oldGroups);
 
 		$this->service->expects($this->once())
 			->method('delete')
@@ -68,10 +50,26 @@ class DelegationControllerTest extends TestCase {
 		$this->service->expects($this->once())
 			->method('create')
 			->with('world', 'MySecretSetting')
-			->will($this->returnValue(AuthorizedGroup::fromParams(['groupId' => 'world', 'class' => $setting])));
+			->willReturn(AuthorizedGroup::fromParams(['groupId' => 'world', 'class' => $setting]));
+
+		$this->eventDispatcher->expects($this->once())
+			->method('dispatchTyped')
+			->with($this->callback(fn (CriticalActionPerformedEvent $event): bool => $event->getOperation() === 'settings.delegation.updated'
+				&& $event->getParameters() === ['settingClass' => 'MySecretSetting', 'addedGroups' => 'world', 'removedGroups' => 'goodbye']
+				&& $event->getLogMessage() === 'Admin delegation for setting "%s" was changed: added groups "%s", removed groups "%s"'));
 
 		$result = $this->controller->saveSettings([['gid' => 'hello'], ['gid' => 'world']], 'MySecretSetting');
 
 		$this->assertEquals(['valid' => true], $result->getData());
+	}
+
+	public function testSaveSettingsWithoutChangesIsNotAudited(): void {
+		$this->service->method('findExistingGroupsForClass')
+			->willReturn([AuthorizedGroup::fromParams(['groupId' => 'hello', 'class' => 'MySecretSetting'])]);
+
+		$this->eventDispatcher->expects($this->never())
+			->method('dispatchTyped');
+
+		$this->controller->saveSettings([['gid' => 'hello']], 'MySecretSetting');
 	}
 }

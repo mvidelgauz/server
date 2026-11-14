@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2019, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files\BackgroundJob;
 
 use OCA\Files\AppInfo\Application;
@@ -33,65 +17,53 @@ use OCA\Files\Service\OwnershipTransferService;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\QueuedJob;
 use OCP\Files\IRootFolder;
-use OCP\ILogger;
+use OCP\Files\Node;
 use OCP\IUser;
 use OCP\IUserManager;
 use OCP\Notification\IManager as NotificationManager;
+use Psr\Log\LoggerInterface;
 use function ltrim;
 
-class TransferOwnership extends QueuedJob {
-
-	/** @var IUserManager $userManager */
-	private $userManager;
-
-	/** @var OwnershipTransferService */
-	private $transferService;
-
-	/** @var ILogger */
-	private $logger;
-
-	/** @var NotificationManager */
-	private $notificationManager;
-
-	/** @var TransferOwnershipMapper */
-	private $mapper;
-	/** @var IRootFolder */
-	private $rootFolder;
-
-	public function __construct(ITimeFactory $timeFactory,
-								IUserManager $userManager,
-								OwnershipTransferService $transferService,
-								ILogger $logger,
-								NotificationManager $notificationManager,
-								TransferOwnershipMapper $mapper,
-								IRootFolder $rootFolder) {
+final class TransferOwnership extends QueuedJob {
+	public function __construct(
+		ITimeFactory $timeFactory,
+		private readonly IUserManager $userManager,
+		private readonly OwnershipTransferService $transferService,
+		private readonly LoggerInterface $logger,
+		private readonly NotificationManager $notificationManager,
+		private readonly TransferOwnershipMapper $mapper,
+		private readonly IRootFolder $rootFolder,
+	) {
 		parent::__construct($timeFactory);
-
-		$this->userManager = $userManager;
-		$this->transferService = $transferService;
-		$this->logger = $logger;
-		$this->notificationManager = $notificationManager;
-		$this->mapper = $mapper;
-		$this->rootFolder = $rootFolder;
 	}
 
-	protected function run($argument) {
+	/**
+	 * @param array{id: int} $argument
+	 */
+	#[\Override]
+	protected function run($argument): void {
 		$id = $argument['id'];
 
 		$transfer = $this->mapper->getById($id);
-		$sourceUser = $transfer->getSourceUser();
-		$destinationUser = $transfer->getTargetUser();
-		$fileId = $transfer->getFileId();
+		$sourceUser = $transfer->sourceUser;
+		$destinationUser = $transfer->targetUser;
+		$fileId = $transfer->fileId;
 
 		$userFolder = $this->rootFolder->getUserFolder($sourceUser);
-		$nodes = $userFolder->getById($fileId);
+		$node = $userFolder->getFirstNodeById($fileId);
 
-		if (empty($nodes)) {
+		if (!$node instanceof Node) {
 			$this->logger->alert('Could not transfer ownership: Node not found');
 			$this->failedNotication($transfer);
 			return;
 		}
-		$path = $userFolder->getRelativePath($nodes[0]->getPath());
+
+		$path = $userFolder->getRelativePath($node->getPath());
+		if ($path === null) {
+			$this->logger->alert('Could not transfer ownership: Node not found');
+			$this->failedNotication($transfer);
+			return;
+		}
 
 		$sourceUserObject = $this->userManager->get($sourceUser);
 		$destinationUserObject = $this->userManager->get($destinationUser);
@@ -115,8 +87,13 @@ class TransferOwnership extends QueuedJob {
 				ltrim($path, '/')
 			);
 			$this->successNotification($transfer);
-		} catch (TransferOwnershipException $e) {
-			$this->logger->logException($e);
+		} catch (TransferOwnershipException $transferOwnershipException) {
+			$this->logger->error(
+				$transferOwnershipException->getMessage(),
+				[
+					'exception' => $transferOwnershipException,
+				],
+			);
 			$this->failedNotication($transfer);
 		}
 
@@ -126,56 +103,55 @@ class TransferOwnership extends QueuedJob {
 	private function failedNotication(Transfer $transfer): void {
 		// Send notification to source user
 		$notification = $this->notificationManager->createNotification();
-		$notification->setUser($transfer->getSourceUser())
+		$notification->setUser($transfer->sourceUser)
 			->setApp(Application::APP_ID)
 			->setDateTime($this->time->getDateTime())
 			->setSubject('transferOwnershipFailedSource', [
-				'sourceUser' => $transfer->getSourceUser(),
-				'targetUser' => $transfer->getTargetUser(),
-				'nodeName' => $transfer->getNodeName(),
+				'sourceUser' => $transfer->sourceUser,
+				'targetUser' => $transfer->targetUser,
+				'nodeName' => $transfer->nodeName,
 			])
-			->setObject('transfer', (string)$transfer->getId());
+			->setObject('transfer', (string)$transfer->id);
 		$this->notificationManager->notify($notification);
-
 		// Send notification to source user
 		$notification = $this->notificationManager->createNotification();
-		$notification->setUser($transfer->getTargetUser())
+		$notification->setUser($transfer->targetUser)
 			->setApp(Application::APP_ID)
 			->setDateTime($this->time->getDateTime())
 			->setSubject('transferOwnershipFailedTarget', [
-				'sourceUser' => $transfer->getSourceUser(),
-				'targetUser' => $transfer->getTargetUser(),
-				'nodeName' => $transfer->getNodeName(),
+				'sourceUser' => $transfer->sourceUser,
+				'targetUser' => $transfer->targetUser,
+				'nodeName' => $transfer->nodeName,
 			])
-			->setObject('transfer', (string)$transfer->getId());
+			->setObject('transfer', (string)$transfer->id);
 		$this->notificationManager->notify($notification);
 	}
 
 	private function successNotification(Transfer $transfer): void {
 		// Send notification to source user
 		$notification = $this->notificationManager->createNotification();
-		$notification->setUser($transfer->getSourceUser())
+		$notification->setUser($transfer->sourceUser)
 			->setApp(Application::APP_ID)
 			->setDateTime($this->time->getDateTime())
 			->setSubject('transferOwnershipDoneSource', [
-				'sourceUser' => $transfer->getSourceUser(),
-				'targetUser' => $transfer->getTargetUser(),
-				'nodeName' => $transfer->getNodeName(),
+				'sourceUser' => $transfer->sourceUser,
+				'targetUser' => $transfer->targetUser,
+				'nodeName' => $transfer->nodeName,
 			])
-			->setObject('transfer', (string)$transfer->getId());
+			->setObject('transfer', (string)$transfer->id);
 		$this->notificationManager->notify($notification);
 
 		// Send notification to source user
 		$notification = $this->notificationManager->createNotification();
-		$notification->setUser($transfer->getTargetUser())
+		$notification->setUser($transfer->targetUser)
 			->setApp(Application::APP_ID)
 			->setDateTime($this->time->getDateTime())
 			->setSubject('transferOwnershipDoneTarget', [
-				'sourceUser' => $transfer->getSourceUser(),
-				'targetUser' => $transfer->getTargetUser(),
-				'nodeName' => $transfer->getNodeName(),
+				'sourceUser' => $transfer->sourceUser,
+				'targetUser' => $transfer->targetUser,
+				'nodeName' => $transfer->nodeName,
 			])
-			->setObject('transfer', (string)$transfer->getId());
+			->setObject('transfer', (string)$transfer->id);
 		$this->notificationManager->notify($notification);
 	}
 }

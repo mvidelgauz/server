@@ -1,65 +1,37 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright 2017, Georg Ehrke <oc.list@georgehrke.com>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author François Freitag <mail@franek.fr>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-namespace OCA\DAV\Tests\Unit\DAV\Controller;
+
+namespace OCA\DAV\Tests\unit\DAV\Controller;
 
 use OCA\DAV\BackgroundJob\GenerateBirthdayCalendarBackgroundJob;
 use OCA\DAV\CalDAV\CalDavBackend;
 use OCA\DAV\Controller\BirthdayCalendarController;
+use OCP\AppFramework\Http\JSONResponse;
 use OCP\BackgroundJob\IJobList;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IConfig;
 use OCP\IDBConnection;
 use OCP\IRequest;
 use OCP\IUser;
 use OCP\IUserManager;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class BirthdayCalendarControllerTest extends TestCase {
-
-	/** @var IConfig|\PHPUnit\Framework\MockObject\MockObject */
-	private $config;
-
-	/** @var IRequest|\PHPUnit\Framework\MockObject\MockObject */
-	private $request;
-
-	/** @var IDBConnection|\PHPUnit\Framework\MockObject\MockObject */
-	private $db;
-
-	/** @var IJobList|\PHPUnit\Framework\MockObject\MockObject */
-	private $jobList;
-
-	/** @var IUserManager|\PHPUnit\Framework\MockObject\MockObject */
-	private $userManager;
-
-	/** @var CalDavBackend|\PHPUnit\Framework\MockObject\MockObject */
-	private $caldav;
-
-	/** @var BirthdayCalendarController|\PHPUnit\Framework\MockObject\MockObject */
-	private $controller;
+	private IConfig&MockObject $config;
+	private IRequest&MockObject $request;
+	private IDBConnection&MockObject $db;
+	private IJobList&MockObject $jobList;
+	private IUserManager&MockObject $userManager;
+	private CalDavBackend&MockObject $caldav;
+	private IEventDispatcher&MockObject $eventDispatcher;
+	private BirthdayCalendarController $controller;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -70,20 +42,21 @@ class BirthdayCalendarControllerTest extends TestCase {
 		$this->jobList = $this->createMock(IJobList::class);
 		$this->userManager = $this->createMock(IUserManager::class);
 		$this->caldav = $this->createMock(CalDavBackend::class);
+		$this->eventDispatcher = $this->createMock(IEventDispatcher::class);
 
 		$this->controller = new BirthdayCalendarController('dav',
 			$this->request, $this->db, $this->config, $this->jobList,
-			$this->userManager, $this->caldav);
+			$this->userManager, $this->caldav, $this->eventDispatcher);
 	}
 
-	public function testEnable() {
+	public function testEnable(): void {
 		$this->config->expects($this->once())
 			->method('setAppValue')
 			->with('dav', 'generateBirthdayCalendar', 'yes');
 
 		$this->userManager->expects($this->once())
 			->method('callForSeenUsers')
-			->willReturnCallback(function ($closure) {
+			->willReturnCallback(function ($closure): void {
 				$user1 = $this->createMock(IUser::class);
 				$user1->method('getUID')->willReturn('uid1');
 				$user2 = $this->createMock(IUser::class);
@@ -96,19 +69,25 @@ class BirthdayCalendarControllerTest extends TestCase {
 				$closure($user3);
 			});
 
+		$calls = [
+			[GenerateBirthdayCalendarBackgroundJob::class, ['userId' => 'uid1']],
+			[GenerateBirthdayCalendarBackgroundJob::class, ['userId' => 'uid2']],
+			[GenerateBirthdayCalendarBackgroundJob::class, ['userId' => 'uid3']],
+		];
 		$this->jobList->expects($this->exactly(3))
 			->method('add')
-			->withConsecutive(
-				[GenerateBirthdayCalendarBackgroundJob::class, ['userId' => 'uid1']],
-				[GenerateBirthdayCalendarBackgroundJob::class, ['userId' => 'uid2']],
-				[GenerateBirthdayCalendarBackgroundJob::class, ['userId' => 'uid3']],
-			);
+			->willReturnCallback(function () use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, func_get_args());
+			});
+
+		$this->expectAuditEvent('dav.birthday_calendar.enabled', 'Birthday calendars were enabled');
 
 		$response = $this->controller->enable();
-		$this->assertInstanceOf('OCP\AppFramework\Http\JSONResponse', $response);
+		$this->assertInstanceOf(JSONResponse::class, $response);
 	}
 
-	public function testDisable() {
+	public function testDisable(): void {
 		$this->config->expects($this->once())
 			->method('setAppValue')
 			->with('dav', 'generateBirthdayCalendar', 'no');
@@ -118,7 +97,17 @@ class BirthdayCalendarControllerTest extends TestCase {
 		$this->caldav->expects($this->once())
 			->method('deleteAllBirthdayCalendars');
 
+		$this->expectAuditEvent('dav.birthday_calendar.disabled', 'Birthday calendars were disabled');
+
 		$response = $this->controller->disable();
-		$this->assertInstanceOf('OCP\AppFramework\Http\JSONResponse', $response);
+		$this->assertInstanceOf(JSONResponse::class, $response);
+	}
+
+	private function expectAuditEvent(string $operation, string $message): void {
+		$this->eventDispatcher->expects($this->once())
+			->method('dispatchTyped')
+			->with($this->callback(fn (CriticalActionPerformedEvent $event): bool => $event->getOperation() === $operation
+				&& $event->getLogMessage() === $message
+				&& $event->getParameters() === []));
 	}
 }

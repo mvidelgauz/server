@@ -1,68 +1,40 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Versions\Tests\Controller;
 
 use OCA\Files_Versions\Controller\PreviewController;
 use OCA\Files_Versions\Versions\IVersionManager;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\DataResponse;
-use OCP\AppFramework\Http\FileDisplayResponse;
 use OCP\Files\File;
 use OCP\Files\Folder;
-use OCP\Files\IMimeTypeDetector;
 use OCP\Files\IRootFolder;
+use OCP\Files\IUserFolder;
 use OCP\Files\NotFoundException;
 use OCP\Files\SimpleFS\ISimpleFile;
 use OCP\IPreview;
 use OCP\IRequest;
 use OCP\IUser;
 use OCP\IUserSession;
+use OCP\Preview\IMimeIconProvider;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class PreviewControllerTest extends TestCase {
+	private IRootFolder&MockObject $rootFolder;
+	private string $userId;
+	private IPreview&MockObject $previewManager;
+	private IUserSession&MockObject $userSession;
+	private IVersionManager&MockObject $versionManager;
 
-	/** @var IRootFolder|\PHPUnit\Framework\MockObject\MockObject */
-	private $rootFolder;
-
-	/** @var string */
-	private $userId;
-
-	/** @var IMimeTypeDetector|\PHPUnit\Framework\MockObject\MockObject */
-	private $mimeTypeDetector;
-
-	/** @var IPreview|\PHPUnit\Framework\MockObject\MockObject */
-	private $previewManager;
-
-	/** @var PreviewController|\PHPUnit\Framework\MockObject\MockObject */
-	private $controller;
-
-	/** @var IUserSession|\PHPUnit\Framework\MockObject\MockObject */
-	private $userSession;
-
-	/** @var IVersionManager|\PHPUnit\Framework\MockObject\MockObject */
-	private $versionManager;
+	private IMimeIconProvider&MockObject $mimeIconProvider;
+	private PreviewController $controller;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -79,6 +51,7 @@ class PreviewControllerTest extends TestCase {
 			->method('getUser')
 			->willReturn($user);
 		$this->versionManager = $this->createMock(IVersionManager::class);
+		$this->mimeIconProvider = $this->createMock(IMimeIconProvider::class);
 
 		$this->controller = new PreviewController(
 			'files_versions',
@@ -86,40 +59,41 @@ class PreviewControllerTest extends TestCase {
 			$this->rootFolder,
 			$this->userSession,
 			$this->versionManager,
-			$this->previewManager
+			$this->previewManager,
+			$this->mimeIconProvider,
 		);
 	}
 
-	public function testInvalidFile() {
+	public function testInvalidFile(): void {
 		$res = $this->controller->getPreview('');
 		$expected = new DataResponse([], Http::STATUS_BAD_REQUEST);
 
 		$this->assertEquals($expected, $res);
 	}
 
-	public function testInvalidWidth() {
+	public function testInvalidWidth(): void {
 		$res = $this->controller->getPreview('file', 0);
 		$expected = new DataResponse([], Http::STATUS_BAD_REQUEST);
 
 		$this->assertEquals($expected, $res);
 	}
 
-	public function testInvalidHeight() {
+	public function testInvalidHeight(): void {
 		$res = $this->controller->getPreview('file', 10, 0);
 		$expected = new DataResponse([], Http::STATUS_BAD_REQUEST);
 
 		$this->assertEquals($expected, $res);
 	}
 
-	public function testInvalidVersion() {
+	public function testInvalidVersion(): void {
 		$res = $this->controller->getPreview('file', 10, 0);
 		$expected = new DataResponse([], Http::STATUS_BAD_REQUEST);
 
 		$this->assertEquals($expected, $res);
 	}
 
-	public function testValidPreview() {
-		$userFolder = $this->createMock(Folder::class);
+	public function testValidPreview(): void {
+		$userFolder = $this->createMock(IUserFolder::class);
 		$userRoot = $this->createMock(Folder::class);
 
 		$this->rootFolder->method('getUserFolder')
@@ -141,6 +115,8 @@ class PreviewControllerTest extends TestCase {
 			->willReturn($file);
 
 		$preview = $this->createMock(ISimpleFile::class);
+		$preview->method('getName')->willReturn('name');
+		$preview->method('getMTime')->willReturn(42);
 		$this->previewManager->method('getPreview')
 			->with($this->equalTo($file), 10, 10, true, IPreview::MODE_FILL, 'myMime')
 			->willReturn($preview);
@@ -148,13 +124,14 @@ class PreviewControllerTest extends TestCase {
 			->willReturn('previewMime');
 
 		$res = $this->controller->getPreview('file', 10, 10, '42');
-		$expected = new FileDisplayResponse($preview, Http::STATUS_OK, ['Content-Type' => 'previewMime']);
 
-		$this->assertEquals($expected, $res);
+		$this->assertEquals('previewMime', $res->getHeaders()['Content-Type']);
+		$this->assertEquals(Http::STATUS_OK, $res->getStatus());
+		$this->assertEquals($preview, $this->invokePrivate($res, 'file'));
 	}
 
-	public function testVersionNotFound() {
-		$userFolder = $this->createMock(Folder::class);
+	public function testVersionNotFound(): void {
+		$userFolder = $this->createMock(IUserFolder::class);
 		$userRoot = $this->createMock(Folder::class);
 
 		$this->rootFolder->method('getUserFolder')

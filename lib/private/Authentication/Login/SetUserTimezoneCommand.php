@@ -3,53 +3,31 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Authentication\Login;
 
+use OC\Core\AppInfo\Application;
+use OC\Core\AppInfo\ConfigLexicon;
 use OCP\IConfig;
 use OCP\ISession;
 
 class SetUserTimezoneCommand extends ALoginCommand {
-
-	/** @var IConfig */
-	private $config;
-
-	/** @var ISession */
-	private $session;
-
-	public function __construct(IConfig $config,
-								ISession $session) {
-		$this->config = $config;
-		$this->session = $session;
+	public function __construct(
+		private IConfig $config,
+		private ISession $session,
+	) {
 	}
 
+	#[\Override]
 	public function process(LoginData $loginData): LoginResult {
-		if ($loginData->getTimeZoneOffset() !== '') {
-			$this->config->setUserValue(
-				$loginData->getUser()->getUID(),
-				'core',
-				'timezone',
-				$loginData->getTimeZone()
-			);
+		if ($loginData->getTimeZoneOffset() !== '' && $this->isValidTimezone($loginData->getTimeZone())) {
+			$userId = $loginData->getUser()->getUID();
+			if ($this->config->getUserValue($userId, Application::APP_ID, ConfigLexicon::USER_TIMEZONE, '') === '') {
+				$this->config->setUserValue($userId, Application::APP_ID, ConfigLexicon::USER_TIMEZONE, $loginData->getTimeZone());
+			}
 			$this->session->set(
 				'timezone',
 				$loginData->getTimeZoneOffset()
@@ -57,5 +35,10 @@ class SetUserTimezoneCommand extends ALoginCommand {
 		}
 
 		return $this->processNextOrFinishSuccessfully($loginData);
+	}
+
+	private function isValidTimezone(?string $value): bool {
+		// Older browsers still report deprecated aliases like Europe/Kiev.
+		return $value && in_array($value, \DateTimeZone::listIdentifiers(\DateTimeZone::ALL_WITH_BC), true);
 	}
 }

@@ -1,59 +1,47 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @author Joas Schilling <nickvergessen@owncloud.com>
- *
- * @copyright Copyright (c) 2015, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Tests\Core\Command\Config\App;
 
+use OC\AppConfig;
 use OC\Core\Command\Config\App\SetConfig;
-use OCP\IConfig;
+use OCP\Config\BeforeAppConfigSetEvent;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Exceptions\AppConfigUnknownKeyException;
+use OCP\IAppConfig;
+use PHPUnit\Framework\MockObject\MockObject;
+use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Test\TestCase;
 
 class SetConfigTest extends TestCase {
-	/** @var \PHPUnit\Framework\MockObject\MockObject */
-	protected $config;
+	protected InputInterface&MockObject $consoleInput;
+	protected OutputInterface&MockObject $consoleOutput;
+	protected Command $command;
 
-	/** @var \PHPUnit\Framework\MockObject\MockObject */
-	protected $consoleInput;
-	/** @var \PHPUnit\Framework\MockObject\MockObject */
-	protected $consoleOutput;
-
-	/** @var \Symfony\Component\Console\Command\Command */
-	protected $command;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
+		$this->consoleInput = $this->createMock(InputInterface::class);
+		$this->consoleOutput = $this->createMock(OutputInterface::class);
 
-		$config = $this->config = $this->getMockBuilder(IConfig::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$this->consoleInput = $this->getMockBuilder(InputInterface::class)->getMock();
-		$this->consoleOutput = $this->getMockBuilder(OutputInterface::class)->getMock();
-
-		/** @var \OCP\IConfig $config */
-		$this->command = new SetConfig($config);
+		$this->command = $this->createInstanceWithMocks(
+			SetConfig::class,
+			[
+				/* Mock internal class */
+				'appConfig' => $this->getAutoMock(AppConfig::class),
+			],
+		);
 	}
 
-
-	public function setData() {
+	public static function dataSet(): array {
 		return [
 			[
 				'name',
@@ -71,28 +59,35 @@ class SetConfigTest extends TestCase {
 				false,
 				'comment',
 			],
+			[
+				'name',
+				'newvalue',
+				true,
+				true,
+				true,
+				'info',
+				IAppConfig::VALUE_MIXED | IAppConfig::FLAG_SENSITIVE,
+			],
 		];
 	}
 
-	/**
-	 * @dataProvider setData
-	 *
-	 * @param string $configName
-	 * @param mixed $newValue
-	 * @param bool $configExists
-	 * @param bool $updateOnly
-	 * @param bool $updated
-	 * @param string $expectedMessage
-	 */
-	public function testSet($configName, $newValue, $configExists, $updateOnly, $updated, $expectedMessage) {
-		$this->config->expects($this->once())
-			->method('getAppKeys')
-			->with('app-name')
-			->willReturn($configExists ? [$configName] : []);
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataSet')]
+	public function testSet(string $configName, mixed $newValue, bool $configExists, bool $updateOnly, bool $updated, string $expectedMessage, int $storedType = IAppConfig::VALUE_MIXED): void {
+		$this->getAutoMock(AppConfig::class)->method('hasKey')
+			->with('app-name', $configName)
+			->willReturn($configExists);
+
+		if (!$configExists) {
+			$this->getAutoMock(AppConfig::class)->method('getValueType')
+				->willThrowException(new AppConfigUnknownKeyException());
+		} else {
+			$this->getAutoMock(AppConfig::class)->method('getValueType')
+				->willReturn($storedType);
+		}
 
 		if ($updated) {
-			$this->config->expects($this->once())
-				->method('setAppValue')
+			$this->getAutoMock(AppConfig::class)->expects($this->once())
+				->method('setValueMixed')
 				->with('app-name', $configName, $newValue);
 		}
 
@@ -102,19 +97,93 @@ class SetConfigTest extends TestCase {
 				['app', 'app-name'],
 				['name', $configName],
 			]);
-		$this->consoleInput->expects($this->any())
-			->method('getOption')
-			->with('value')
-			->willReturn($newValue);
-		$this->consoleInput->expects($this->any())
-			->method('hasParameterOption')
-			->with('--update-only')
-			->willReturn($updateOnly);
-
-		$this->consoleOutput->expects($this->any())
-			->method('writeln')
+		$this->consoleInput->method('getOption')
+			->willReturnMap([
+				['value', $newValue],
+				['lazy', null],
+				['sensitive', null],
+				['no-interaction', true],
+			]);
+		$this->consoleInput->method('hasParameterOption')
+			->willReturnMap([
+				['--type', false, false],
+				['--value', false, true],
+				['--update-only', false, $updateOnly]
+			]);
+		$this->consoleOutput->method('writeln')
 			->with($this->stringContains($expectedMessage));
 
-		$this->invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
+		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
+	}
+
+	public function testSetRejected(): void {
+		$this->getAutoMock(IEventDispatcher::class)->expects($this->once())
+			->method('dispatchTyped')
+			->willReturnCallback(function (BeforeAppConfigSetEvent $event): void {
+				$this->assertSame('app-name', $event->getAppId());
+				$this->assertSame('name', $event->getConfigKey());
+				$this->assertSame('newvalue', $event->getConfigValue());
+				$event->setValid(false);
+			});
+		$this->getAutoMock(AppConfig::class)->expects($this->never())
+			->method('updateType');
+		$this->getAutoMock(AppConfig::class)->expects($this->never())
+			->method('setValueMixed');
+
+		$this->consoleInput->method('getArgument')
+			->willReturnMap([
+				['app', 'app-name'],
+				['name', 'name'],
+			]);
+		$this->consoleInput->method('getOption')
+			->willReturnMap([
+				['value', 'newvalue'],
+			]);
+		$this->consoleInput->method('hasParameterOption')
+			->willReturnMap([
+				['--update-only', false, false],
+				['--type', false, false],
+				['--value', false, true],
+			]);
+		$this->consoleOutput->expects($this->once())
+			->method('writeln')
+			->with($this->stringContains('error'));
+
+		$this->assertSame(1, self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]));
+	}
+
+	public function testSetRejectedForced(): void {
+		$this->getAutoMock(IEventDispatcher::class)->expects($this->once())
+			->method('dispatchTyped')
+			->willReturnCallback(function (BeforeAppConfigSetEvent $event): void {
+				$event->setValid(false);
+			});
+		$this->getAutoMock(AppConfig::class)->method('getValueType')
+			->willReturn(IAppConfig::VALUE_MIXED);
+		$this->getAutoMock(AppConfig::class)->expects($this->once())
+			->method('setValueMixed')
+			->with('app-name', 'name', 'newvalue')
+			->willReturn(true);
+		$this->getAutoMock(AppConfig::class)->method('getDetails')
+			->willReturn(['sensitive' => false, 'value' => 'newvalue', 'typeString' => 'mixed', 'lazy' => false]);
+
+		$this->consoleInput->method('getArgument')
+			->willReturnMap([
+				['app', 'app-name'],
+				['name', 'name'],
+			]);
+		$this->consoleInput->method('getOption')
+			->willReturnMap([
+				['value', 'newvalue'],
+				['force', true],
+			]);
+		$this->consoleInput->method('hasParameterOption')
+			->willReturnMap([
+				['--update-only', false, false],
+				['--type', false, false],
+				['--value', false, true],
+			]);
+
+		$this->assertSame(0, self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]));
 	}
 }

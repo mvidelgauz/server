@@ -2,25 +2,8 @@
 
 declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2021 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Repair;
@@ -32,47 +15,28 @@ use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IConfig;
 use OCP\IDBConnection;
 use OCP\IGroupManager;
-use Psr\Log\LoggerInterface;
-use Test\TestCase;
 use OCP\Migration\IOutput;
+use PHPUnit\Framework\MockObject\MockObject;
+use Test\TestCase;
 use function in_array;
 
 class RepairDavSharesTest extends TestCase {
 
-	/** @var IOutput|\PHPUnit\Framework\MockObject\MockObject */
-	protected $output;
-	/** @var IConfig|\PHPUnit\Framework\MockObject\MockObject */
-	protected $config;
-	/** @var IDBConnection|\PHPUnit\Framework\MockObject\MockObject */
-	protected $dbc;
-	/** @var IGroupManager|\PHPUnit\Framework\MockObject\MockObject */
-	protected $groupManager;
-	/** @var \PHPUnit\Framework\MockObject\MockObject|LoggerInterface */
-	protected $logger;
-	/** @var RepairDavSharesTest */
-	protected $repair;
+	private IOutput&MockObject $output;
+	private RepairDavShares $repair;
 
+	#[\Override]
 	public function setUp(): void {
 		parent::setUp();
 
 		$this->output = $this->createMock(IOutput::class);
 
-		$this->config = $this->createMock(IConfig::class);
-		$this->dbc = $this->createMock(IDBConnection::class);
-		$this->groupManager = $this->createMock(IGroupManager::class);
-		$this->logger = $this->createMock(LoggerInterface::class);
-
-		$this->repair = new RepairDavShares(
-			$this->config,
-			$this->dbc,
-			$this->groupManager,
-			$this->logger
-		);
+		$this->repair = $this->createInstanceWithMocks(RepairDavShares::class);
 	}
 
-	public function testRun() {
-		$this->config->expects($this->any())
-			->method('getSystemValue')
+	public function testRun(): void {
+		$this->getAutoMock(IConfig::class)->expects($this->any())
+			->method('getSystemValueString')
 			->with('version', '0.0.0')
 			->willReturn('20.0.2');
 
@@ -132,9 +96,9 @@ class RepairDavSharesTest extends TestCase {
 
 		$shareResults = $this->createMock(IResult::class);
 		$shareResults->expects($this->any())
-			->method('fetch')
+			->method('fetchAssociative')
 			->willReturnCallback(function () use (&$shareResultData) {
-				return array_pop($shareResultData);
+				return array_pop($shareResultData) ?? false;
 			});
 
 		$expressionBuilder = $this->createMock(IExpressionBuilder::class);
@@ -153,9 +117,10 @@ class RepairDavSharesTest extends TestCase {
 			->method('where')
 			->willReturnSelf();
 		$selectMock->expects($this->once())
-			->method('execute')
+			->method('executeQuery')
 			->willReturn($shareResults);
 
+		$updateCalls = [];
 		$updateMock = $this->createMock(IQueryBuilder::class);
 		$updateMock->expects($this->any())
 			->method('expr')
@@ -171,26 +136,29 @@ class RepairDavSharesTest extends TestCase {
 			->willReturnSelf();
 		$updateMock->expects($this->exactly(4))
 			->method('setParameter')
-			->withConsecutive(
-				['updatedPrincipalUri', 'principals/groups/' . urlencode('family friends')],
-				['shareId', 7],
-				['updatedPrincipalUri', 'principals/groups/' . urlencode('Wants Repair')],
-				['shareId', 1],
-			)
-			->willReturnSelf();
+			->willReturnCallback(function () use (&$updateCalls, &$updateMock) {
+				$updateCalls[] = func_get_args();
+				return $updateMock;
+			});
 		$updateMock->expects($this->exactly(2))
-			->method('execute');
+			->method('executeStatement');
 
-		$this->dbc->expects($this->atLeast(2))
+		$this->getAutoMock(IDBConnection::class)->expects($this->atLeast(2))
 			->method('getQueryBuilder')
 			->willReturnOnConsecutiveCalls($selectMock, $updateMock);
 
-		$this->groupManager->expects($this->any())
+		$this->getAutoMock(IGroupManager::class)->expects($this->any())
 			->method('groupExists')
 			->willReturnCallback(function (string $gid) use ($existingGroups) {
-				return in_array($gid, $existingGroups);
+				return in_array($gid, $existingGroups, true);
 			});
 
 		$this->repair->run($this->output);
+		self::assertEquals([
+			['updatedPrincipalUri', 'principals/groups/' . urlencode('family friends'), null],
+			['shareId', 7, null],
+			['updatedPrincipalUri', 'principals/groups/' . urlencode('Wants Repair'), null],
+			['shareId', 1, null]
+		], $updateCalls);
 	}
 }

@@ -1,28 +1,11 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2019 Robin Appelman <robin@icewind.nl>
- *
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\Preview;
 
 use OCP\Files\File;
@@ -30,31 +13,35 @@ use OCP\Files\FileInfo;
 use OCP\IImage;
 
 /**
+ * Public interface for preview providers.
+ *
+ * A preview provider generates a thumbnail image for supported files. That image
+ * may be stored and reused by the preview system.
+ *
  * @since 17.0.0
  */
 interface IProviderV2 {
 	/**
-	 * @return string Regex with the mimetypes that are supported by this provider
+	 * Returns a regex matching the MIME types supported by this provider.
+	 *
 	 * @since 17.0.0
 	 */
 	public function getMimeType(): string;
 
 	/**
-	 * Check if a preview can be generated for $path
+	 * Returns whether this provider can currently generate a thumbnail for the given file.
 	 *
-	 * @param FileInfo $file
-	 * @return bool
 	 * @since 17.0.0
 	 */
 	public function isAvailable(FileInfo $file): bool;
 
 	/**
-	 * get thumbnail for file at path $path
+	 * Generates a thumbnail image for the given file.
 	 *
 	 * @param File $file
-	 * @param int $maxX The maximum X size of the thumbnail. It can be smaller depending on the shape of the image
-	 * @param int $maxY The maximum Y size of the thumbnail. It can be smaller depending on the shape of the image
-	 * @return null|\OCP\IImage null if no preview was generated
+	 * @param int $maxX Maximum thumbnail width; the returned image may be smaller depending on its aspect ratio
+	 * @param int $maxY Maximum thumbnail height; the returned image may be smaller depending on its aspect ratio
+	 * @return IImage|null Null if no thumbnail could be generated
 	 * @since 17.0.0
 	 */
 	public function getThumbnail(File $file, int $maxX, int $maxY): ?IImage;

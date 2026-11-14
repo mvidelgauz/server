@@ -1,29 +1,11 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright 2018
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Maxence Lange <maxence@artificial-owl.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\FullTextSearch\Model;
 
 /**
@@ -40,10 +22,20 @@ namespace OCP\FullTextSearch\Model;
  *
  */
 interface IRunner {
+	/**
+	 * @since 15.0.0
+	 */
 	public const RESULT_TYPE_SUCCESS = 1;
-	public const RESULT_TYPE_WARNING = 4;
-	public const RESULT_TYPE_FAIL = 9;
 
+	/**
+	 * @since 15.0.0
+	 */
+	public const RESULT_TYPE_WARNING = 4;
+
+	/**
+	 * @since 15.0.0
+	 */
+	public const RESULT_TYPE_FAIL = 9;
 
 	/**
 	 * Info are displayed in the user interface when an admin execute the
@@ -65,7 +57,6 @@ interface IRunner {
 	 */
 	public function setInfo(string $info, string $value);
 
-
 	/**
 	 * This method should be used when editing multiple info to avoid too many
 	 * refresh of the interface.
@@ -75,7 +66,6 @@ interface IRunner {
 	 * @param array $data
 	 */
 	public function setInfoArray(array $data);
-
 
 	/**
 	 * Method used to update the current Action when an index is running.
@@ -98,7 +88,6 @@ interface IRunner {
 	 */
 	public function updateAction(string $action = '', bool $force = false): string;
 
-
 	/**
 	 * Call this method in a Search Platform or Content Provider if there is an
 	 * issue while generating a document or while indexing the current document.
@@ -113,7 +102,6 @@ interface IRunner {
 	 * @param int $sev
 	 */
 	public function newIndexError(IIndex $index, string $message, string $class = '', int $sev = 3);
-
 
 	/**
 	 * Call this method only in a Search Platform after an index of a document.

@@ -1,32 +1,19 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright 2018, Georg Ehrke <oc.list@georgehrke.com>
- *
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV\ResourceBooking;
 
 use OCA\DAV\CalDAV\Proxy\ProxyMapper;
 use OCP\IDBConnection;
 use OCP\IGroupManager;
-use OCP\ILogger;
 use OCP\IUserSession;
+use Psr\Log\LoggerInterface;
 
 /**
  * Class RoomPrincipalBackend
@@ -37,18 +24,12 @@ class RoomPrincipalBackend extends AbstractPrincipalBackend {
 
 	/**
 	 * RoomPrincipalBackend constructor.
-	 *
-	 * @param IDBConnection $dbConnection
-	 * @param IUserSession $userSession
-	 * @param IGroupManager $groupManager
-	 * @param ILogger $logger
-	 * @param ProxyMapper $proxyMapper
 	 */
 	public function __construct(IDBConnection $dbConnection,
-								IUserSession $userSession,
-								IGroupManager $groupManager,
-								ILogger $logger,
-								ProxyMapper $proxyMapper) {
+		IUserSession $userSession,
+		IGroupManager $groupManager,
+		LoggerInterface $logger,
+		ProxyMapper $proxyMapper) {
 		parent::__construct($dbConnection, $userSession, $groupManager, $logger,
 			$proxyMapper, 'principals/calendar-rooms', 'room', 'ROOM');
 	}

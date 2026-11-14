@@ -1,11 +1,20 @@
-@import 'styles.scss';
-@import 'inputs.scss';
-@import 'header.scss';
-@import 'icons.scss';
-@import 'apps.scss';
-@import 'global.scss';
-@import 'fixes.scss';
-@import 'mobile.scss';
-@import 'tooltip.scss';
-@import 'toast.scss';
-@import 'public.scss';
+/*!
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+@use 'styles.scss';
+@use 'inputs.scss';
+@use 'header.scss';
+@use 'icons.scss';
+@use 'apps.scss';
+@use 'global.scss';
+@use 'fixes.scss';
+@use 'mobile.scss';
+@use 'tooltip.scss';
+@use 'public.scss';
+@use 'forced-colors.scss';
+
+// If you include .css, it will be imported as url
+@use '../../node_modules/@nextcloud/dialogs/dist/style.css' as *;
+@use '../../node_modules/@nextcloud/password-confirmation/dist/style.css' as *;

@@ -1,5 +1,10 @@
 <?php
 
+/**
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 namespace Tests\Core\Command\Maintenance;
 
 use OC\Core\Command\Maintenance\Mode;
@@ -48,6 +53,7 @@ class ModeTest extends TestCase {
 	 *
 	 * @return void
 	 */
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 		$this->config = $this->getMockBuilder(IConfig::class)
@@ -64,7 +70,7 @@ class ModeTest extends TestCase {
 	 *
 	 * @return array
 	 */
-	public function getExecuteTestData(): array {
+	public static function getExecuteTestData(): array {
 		return [
 			'off -> on' => [
 				'on', // command option
@@ -108,20 +114,20 @@ class ModeTest extends TestCase {
 	/**
 	 * Asserts that execute works as expected.
 	 *
-	 * @dataProvider getExecuteTestData
 	 * @param string $option The command option.
 	 * @param bool $currentMaintenanceState The current maintenance state.
 	 * @param null|bool $expectedMaintenanceState
-	 * 					The expected maintenance state. Null for no change.
+	 *                                            The expected maintenance state. Null for no change.
 	 * @param string $expectedOutput The expected command output.
 	 * @throws \Exception
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('getExecuteTestData')]
 	public function testExecute(
 		string $option,
 		bool $currentMaintenanceState,
 		$expectedMaintenanceState,
-		string $expectedOutput
-	) {
+		string $expectedOutput,
+	): void {
 		$this->config->expects($this->any())
 			->method('getSystemValueBool')
 			->willReturn($currentMaintenanceState);

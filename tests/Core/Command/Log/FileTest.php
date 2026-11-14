@@ -1,22 +1,9 @@
 <?php
+
 /**
- * @author Robin McCorkell <rmccorkell@owncloud.com>
- *
- * @copyright Copyright (c) 2015, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Tests\Core\Command\Log;
@@ -38,6 +25,7 @@ class FileTest extends TestCase {
 	/** @var \Symfony\Component\Console\Command\Command */
 	protected $command;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
@@ -50,7 +38,8 @@ class FileTest extends TestCase {
 		$this->command = new File($config);
 	}
 
-	public function testEnable() {
+	public function testEnable(): void {
+		$this->config->method('getSystemValue')->willReturnArgument(1);
 		$this->consoleInput->method('getOption')
 			->willReturnMap([
 				['enable', 'true']
@@ -62,7 +51,8 @@ class FileTest extends TestCase {
 		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
 	}
 
-	public function testChangeFile() {
+	public function testChangeFile(): void {
+		$this->config->method('getSystemValue')->willReturnArgument(1);
 		$this->consoleInput->method('getOption')
 			->willReturnMap([
 				['file', '/foo/bar/file.log']
@@ -74,7 +64,7 @@ class FileTest extends TestCase {
 		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
 	}
 
-	public function changeRotateSizeProvider() {
+	public static function changeRotateSizeProvider(): array {
 		return [
 			['42', 42],
 			['0', 0],
@@ -83,10 +73,9 @@ class FileTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider changeRotateSizeProvider
-	 */
-	public function testChangeRotateSize($optionValue, $configValue) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('changeRotateSizeProvider')]
+	public function testChangeRotateSize($optionValue, $configValue): void {
+		$this->config->method('getSystemValue')->willReturnArgument(1);
 		$this->consoleInput->method('getOption')
 			->willReturnMap([
 				['rotate-size', $optionValue]
@@ -98,24 +87,26 @@ class FileTest extends TestCase {
 		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
 	}
 
-	public function testGetConfiguration() {
+	public function testGetConfiguration(): void {
 		$this->config->method('getSystemValue')
 			->willReturnMap([
 				['log_type', 'file', 'log_type_value'],
-				['datadirectory', \OC::$SERVERROOT.'/data', '/data/directory/'],
+				['datadirectory', \OC::$SERVERROOT . '/data', '/data/directory/'],
 				['logfile', '/data/directory/nextcloud.log', '/var/log/nextcloud.log'],
 				['log_rotate_size', 100 * 1024 * 1024, 5 * 1024 * 1024],
 			]);
 
-		$this->consoleOutput->expects($this->at(0))
+		$calls = [
+			['Log backend file: disabled'],
+			['Log file: /var/log/nextcloud.log'],
+			['Rotate at: 5 MB'],
+		];
+		$this->consoleOutput->expects($this->exactly(3))
 			->method('writeln')
-			->with('Log backend file: disabled');
-		$this->consoleOutput->expects($this->at(1))
-			->method('writeln')
-			->with('Log file: /var/log/nextcloud.log');
-		$this->consoleOutput->expects($this->at(2))
-			->method('writeln')
-			->with('Rotate at: 5 MB');
+			->willReturnCallback(function (string $message) use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected[0], $message);
+			});
 
 		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
 	}

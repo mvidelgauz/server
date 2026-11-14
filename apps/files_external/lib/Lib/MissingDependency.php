@@ -1,24 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_External\Lib;
 
 /**
@@ -26,30 +13,23 @@ namespace OCA\Files_External\Lib;
  */
 class MissingDependency {
 
-	/** @var string */
-	private $dependency;
-
 	/** @var string|null Custom message */
-	private $message = null;
+	private ?string $message = null;
+	private bool $optional = false;
 
 	/**
 	 * @param string $dependency
 	 */
-	public function __construct($dependency) {
-		$this->dependency = $dependency;
+	public function __construct(
+		private readonly string $dependency,
+	) {
 	}
 
-	/**
-	 * @return string
-	 */
-	public function getDependency() {
+	public function getDependency(): string {
 		return $this->dependency;
 	}
 
-	/**
-	 * @return string|null
-	 */
-	public function getMessage() {
+	public function getMessage(): ?string {
 		return $this->message;
 	}
 
@@ -60,5 +40,13 @@ class MissingDependency {
 	public function setMessage($message) {
 		$this->message = $message;
 		return $this;
+	}
+
+	public function isOptional(): bool {
+		return $this->optional;
+	}
+
+	public function setOptional(bool $optional): void {
+		$this->optional = $optional;
 	}
 }

@@ -1,24 +1,11 @@
 <?php
 
+declare(strict_types=1);
+
 /**
- * ownCloud - App Framework
- *
- * @author Bernhard Posselt
- * @copyright 2015 Bernhard Posselt <dev@bernhard-posselt.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
- * License as published by the Free Software Foundation; either
- * version 3 of the License, or any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU AFFERO GENERAL PUBLIC LICENSE for more details.
- *
- * You should have received a copy of the GNU Affero General Public
- * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\AppFramework\Controller;
@@ -28,26 +15,21 @@ use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\Http\EmptyContentSecurityPolicy;
 use OCP\AppFramework\OCSController;
 use OCP\IConfig;
-use OCP\Security\ISecureRandom;
+use OCP\IRequestId;
 
 class ChildOCSController extends OCSController {
 }
 
-
 class OCSControllerTest extends \Test\TestCase {
-	public function testCors() {
+	public function testCors(): void {
 		$request = new Request(
 			[
 				'server' => [
 					'HTTP_ORIGIN' => 'test',
 				],
 			],
-			$this->getMockBuilder(ISecureRandom::class)
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		);
 		$controller = new ChildOCSController('app', $request, 'verbs',
 			'headers', 100);
@@ -63,32 +45,27 @@ class OCSControllerTest extends \Test\TestCase {
 		$this->assertEquals(100, $headers['Access-Control-Max-Age']);
 	}
 
-
-	public function testXML() {
+	public function testXML(): void {
 		$controller = new ChildOCSController('app', new Request(
 			[],
-			$this->getMockBuilder(ISecureRandom::class)
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		));
 		$controller->setOCSVersion(1);
 
-		$expected = "<?xml version=\"1.0\"?>\n" .
-		"<ocs>\n" .
-		" <meta>\n" .
-		"  <status>ok</status>\n" .
-		"  <statuscode>100</statuscode>\n" .
-		"  <message>OK</message>\n" .
-		"  <totalitems></totalitems>\n" .
-		"  <itemsperpage></itemsperpage>\n" .
-		" </meta>\n" .
-		" <data>\n" .
-		"  <test>hi</test>\n" .
-		" </data>\n" .
-		"</ocs>\n";
+		$expected = "<?xml version=\"1.0\"?>\n"
+		. "<ocs>\n"
+		. " <meta>\n"
+		. "  <status>ok</status>\n"
+		. "  <statuscode>100</statuscode>\n"
+		. "  <message>OK</message>\n"
+		. "  <totalitems></totalitems>\n"
+		. "  <itemsperpage></itemsperpage>\n"
+		. " </meta>\n"
+		. " <data>\n"
+		. "  <test>hi</test>\n"
+		. " </data>\n"
+		. "</ocs>\n";
 
 		$params = new DataResponse(['test' => 'hi']);
 
@@ -97,19 +74,15 @@ class OCSControllerTest extends \Test\TestCase {
 		$this->assertEquals($expected, $response->render());
 	}
 
-	public function testJSON() {
+	public function testJSON(): void {
 		$controller = new ChildOCSController('app', new Request(
 			[],
-			$this->getMockBuilder(ISecureRandom::class)
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		));
 		$controller->setOCSVersion(1);
-		$expected = '{"ocs":{"meta":{"status":"ok","statuscode":100,"message":"OK",' .
-					'"totalitems":"","itemsperpage":""},"data":{"test":"hi"}}}';
+		$expected = '{"ocs":{"meta":{"status":"ok","statuscode":100,"message":"OK",'
+					. '"totalitems":"","itemsperpage":""},"data":{"test":"hi"}}}';
 		$params = new DataResponse(['test' => 'hi']);
 
 		$response = $controller->buildResponse($params, 'json');
@@ -118,29 +91,25 @@ class OCSControllerTest extends \Test\TestCase {
 		$this->assertEquals($expected, $response->render());
 	}
 
-	public function testXMLV2() {
+	public function testXMLV2(): void {
 		$controller = new ChildOCSController('app', new Request(
 			[],
-			$this->getMockBuilder(ISecureRandom::class)
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		));
 		$controller->setOCSVersion(2);
 
-		$expected = "<?xml version=\"1.0\"?>\n" .
-			"<ocs>\n" .
-			" <meta>\n" .
-			"  <status>ok</status>\n" .
-			"  <statuscode>200</statuscode>\n" .
-			"  <message>OK</message>\n" .
-			" </meta>\n" .
-			" <data>\n" .
-			"  <test>hi</test>\n" .
-			" </data>\n" .
-			"</ocs>\n";
+		$expected = "<?xml version=\"1.0\"?>\n"
+			. "<ocs>\n"
+			. " <meta>\n"
+			. "  <status>ok</status>\n"
+			. "  <statuscode>200</statuscode>\n"
+			. "  <message>OK</message>\n"
+			. " </meta>\n"
+			. " <data>\n"
+			. "  <test>hi</test>\n"
+			. " </data>\n"
+			. "</ocs>\n";
 
 		$params = new DataResponse(['test' => 'hi']);
 
@@ -149,15 +118,11 @@ class OCSControllerTest extends \Test\TestCase {
 		$this->assertEquals($expected, $response->render());
 	}
 
-	public function testJSONV2() {
+	public function testJSONV2(): void {
 		$controller = new ChildOCSController('app', new Request(
 			[],
-			$this->getMockBuilder(ISecureRandom::class)
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		));
 		$controller->setOCSVersion(2);
 		$expected = '{"ocs":{"meta":{"status":"ok","statuscode":200,"message":"OK"},"data":{"test":"hi"}}}';

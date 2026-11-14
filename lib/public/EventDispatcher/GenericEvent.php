@@ -3,27 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2019 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\EventDispatcher;
 
 use ArrayAccess;
@@ -36,10 +19,12 @@ use function array_key_exists;
 /**
  * Class GenericEvent
  *
- * convenience reimplementation of \Symfony\Component\GenericEvent against
+ * convenience re-implementation of \Symfony\Component\GenericEvent against
  * \OCP\EventDispatcher\Event
  *
  * @since 18.0.0
+ * @template-implements ArrayAccess<array-key, mixed>
+ * @template-implements IteratorAggregate<array-key, mixed>
  * @deprecated 22.0.0 use \OCP\EventDispatcher\Event
  */
 class GenericEvent extends Event implements ArrayAccess, IteratorAggregate {
@@ -135,6 +120,7 @@ class GenericEvent extends Event implements ArrayAccess, IteratorAggregate {
 	 * @since 18.0.0
 	 * @deprecated 22.0.0
 	 */
+	#[\Override]
 	public function getIterator(): Traversable {
 		return new ArrayIterator($this->arguments);
 	}
@@ -146,6 +132,7 @@ class GenericEvent extends Event implements ArrayAccess, IteratorAggregate {
 	 * @since 18.0.0
 	 * @deprecated 22.0.0
 	 */
+	#[\Override]
 	public function offsetExists($offset): bool {
 		return $this->hasArgument($offset);
 	}
@@ -156,7 +143,10 @@ class GenericEvent extends Event implements ArrayAccess, IteratorAggregate {
 	 * @link https://php.net/manual/en/arrayaccess.offsetget.php
 	 * @since 18.0.0
 	 * @deprecated 22.0.0
+	 * @return mixed
 	 */
+	#[\Override]
+	#[\ReturnTypeWillChange]
 	public function offsetGet($offset) {
 		return $this->arguments[$offset];
 	}
@@ -168,6 +158,7 @@ class GenericEvent extends Event implements ArrayAccess, IteratorAggregate {
 	 * @since 18.0.0
 	 * @deprecated 22.0.0
 	 */
+	#[\Override]
 	public function offsetSet($offset, $value): void {
 		$this->setArgument($offset, $value);
 	}
@@ -179,6 +170,7 @@ class GenericEvent extends Event implements ArrayAccess, IteratorAggregate {
 	 * @since 18.0.0
 	 * @deprecated 22.0.0
 	 */
+	#[\Override]
 	public function offsetUnset($offset): void {
 		if ($this->hasArgument($offset)) {
 			unset($this->arguments[$offset]);

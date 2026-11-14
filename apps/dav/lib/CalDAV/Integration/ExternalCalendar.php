@@ -1,25 +1,12 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright 2020, Georg Ehrke <oc.list@georgehrke.com>
- *
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV\Integration;
 
 use Sabre\CalDAV;
@@ -34,7 +21,7 @@ use Sabre\DAV;
 abstract class ExternalCalendar implements CalDAV\ICalendar, DAV\IProperties {
 
 	/** @var string */
-	private const PREFIX = 'app-generated';
+	private const string PREFIX = 'app-generated';
 
 	/**
 	 * @var string
@@ -47,13 +34,7 @@ abstract class ExternalCalendar implements CalDAV\ICalendar, DAV\IProperties {
 	 * - explode has a limit of three, so even if the app-generated
 	 *   calendar uri has double dashes, it won't be split
 	 */
-	private const DELIMITER = '--';
-
-	/** @var string */
-	private $appId;
-
-	/** @var string */
-	private $calendarUri;
+	private const string DELIMITER = '--';
 
 	/**
 	 * ExternalCalendar constructor.
@@ -61,14 +42,16 @@ abstract class ExternalCalendar implements CalDAV\ICalendar, DAV\IProperties {
 	 * @param string $appId
 	 * @param string $calendarUri
 	 */
-	public function __construct(string $appId, string $calendarUri) {
-		$this->appId = $appId;
-		$this->calendarUri = $calendarUri;
+	public function __construct(
+		private string $appId,
+		private string $calendarUri,
+	) {
 	}
 
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	final public function getName() {
 		return implode(self::DELIMITER, [
 			self::PREFIX,
@@ -80,6 +63,7 @@ abstract class ExternalCalendar implements CalDAV\ICalendar, DAV\IProperties {
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	final public function setName($name) {
 		throw new DAV\Exception\MethodNotAllowed('Renaming calendars is not yet supported');
 	}
@@ -87,6 +71,7 @@ abstract class ExternalCalendar implements CalDAV\ICalendar, DAV\IProperties {
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	final public function createDirectory($name) {
 		throw new DAV\Exception\MethodNotAllowed('Creating collections in calendar objects is not allowed');
 	}
@@ -98,7 +83,7 @@ abstract class ExternalCalendar implements CalDAV\ICalendar, DAV\IProperties {
 	 * @return bool
 	 */
 	public static function isAppGeneratedCalendar(string $calendarUri):bool {
-		return strpos($calendarUri, self::PREFIX) === 0 && substr_count($calendarUri, self::DELIMITER) >= 2;
+		return str_starts_with($calendarUri, self::PREFIX) && substr_count($calendarUri, self::DELIMITER) >= 2;
 	}
 
 	/**
@@ -126,6 +111,6 @@ abstract class ExternalCalendar implements CalDAV\ICalendar, DAV\IProperties {
 	 * @return bool
 	 */
 	public static function doesViolateReservedName(string $calendarUri):bool {
-		return strpos($calendarUri, self::PREFIX) === 0;
+		return str_starts_with($calendarUri, self::PREFIX);
 	}
 }

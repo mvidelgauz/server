@@ -1,88 +1,118 @@
 <?php
+
 /**
- * ownCloud
- *
- * @author Thomas Tanghus
- * @copyright 2012-13 Thomas Tanghus (thomas@tanghus.net)
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
- * License as published by the Free Software Foundation; either
- * version 3 of the License, or any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU AFFERO GENERAL PUBLIC LICENSE for more details.
- *
- * You should have received a copy of the GNU Affero General Public
- * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test;
 
+use OC\Tagging\TagMapper;
+use OC\TagManager;
+use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Files\IRootFolder;
+use OCP\Files\IUserFolder;
+use OCP\Files\Node;
+use OCP\IDBConnection;
 use OCP\IUser;
+use OCP\IUserManager;
 use OCP\IUserSession;
+use OCP\Server;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 
 /**
  * Class TagsTest
- *
- * @group DB
  */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class TagsTest extends \Test\TestCase {
 	protected $objectType;
-	/** @var \OCP\IUser */
-	protected $user;
-	/** @var \OCP\IUserSession */
-	protected $userSession;
-	protected $backupGlobals = false;
-	/** @var \OC\Tagging\TagMapper */
-	protected $tagMapper;
-	/** @var \OCP\ITagManager */
-	protected $tagMgr;
+	protected IUser&MockObject $user;
+	protected IUserSession&MockObject $userSession;
+	protected IUserManager&MockObject $userManager;
+	protected IRootFolder&MockObject $rootFolder;
 
+	protected TagMapper $tagMapper;
+	protected TagManager $tagMgr;
+
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		\OC_User::clearBackends();
-		\OC_User::useBackend('dummy');
+		Server::get(IUserManager::class)->clearBackends();
+		Server::get(IUserManager::class)->registerBackend(new \Test\Util\User\Dummy());
 		$userId = $this->getUniqueID('user_');
-		\OC::$server->getUserManager()->createUser($userId, 'pass');
+		Server::get(IUserManager::class)->createUser($userId, 'pass');
 		\OC_User::setUserId($userId);
 		$this->user = $this->createMock(IUser::class);
 		$this->user->method('getUID')
 			->willReturn($userId);
+		$this->userManager = $this->createMock(IUserManager::class);
+		$this->userManager
+			->expects($this->any())
+			->method('getExistingUser')
+			->willReturn($this->user);
 		$this->userSession = $this->createMock(IUserSession::class);
 		$this->userSession
 			->expects($this->any())
 			->method('getUser')
 			->willReturn($this->user);
+		$userFolder = $this->createMock(IUserFolder::class);
+		$node = $this->createMock(Node::class);
+		$this->rootFolder = $this->createMock(IRootFolder::class);
+		$this->rootFolder
+			->method('getUserFolder')
+			->willReturnCallback(fn () => $userFolder);
+		$userFolder
+			->method('getFirstNodeById')
+			->willReturnCallback(fn () => $node);
+		$node
+			->method('getPath')
+			->willReturnCallback(fn () => 'file.txt');
 
 		$this->objectType = $this->getUniqueID('type_');
-		$this->tagMapper = new \OC\Tagging\TagMapper(\OC::$server->getDatabaseConnection());
-		$this->tagMgr = new \OC\TagManager($this->tagMapper, $this->userSession, \OC::$server->getDatabaseConnection());
+		$this->tagMapper = Server::get(TagMapper::class);
+		$this->tagMgr = new TagManager(
+			$this->tagMapper,
+			$this->userSession,
+			$this->userManager,
+			Server::get(IDBConnection::class),
+			Server::get(LoggerInterface::class),
+			Server::get(IEventDispatcher::class),
+			$this->rootFolder
+		);
 	}
 
+	#[\Override]
 	protected function tearDown(): void {
-		$conn = \OC::$server->getDatabaseConnection();
-		$conn->executeQuery('DELETE FROM `*PREFIX*vcategory_to_object`');
-		$conn->executeQuery('DELETE FROM `*PREFIX*vcategory`');
+		$conn = Server::get(IDBConnection::class);
+		$conn->getQueryBuilder()->delete('vcategory_to_object')->executeStatement();
+		$conn->getQueryBuilder()->delete('vcategory')->executeStatement();
 
 		parent::tearDown();
 	}
 
-	public function testTagManagerWithoutUserReturnsNull() {
+	public function testTagManagerWithoutUserReturnsNull(): void {
 		$this->userSession = $this->createMock(IUserSession::class);
 		$this->userSession
 			->expects($this->any())
 			->method('getUser')
 			->willReturn(null);
-		$this->tagMgr = new \OC\TagManager($this->tagMapper, $this->userSession, \OC::$server->getDatabaseConnection());
+		$this->tagMgr = new TagManager(
+			$this->tagMapper,
+			$this->userSession,
+			$this->userManager,
+			Server::get(IDBConnection::class),
+			Server::get(LoggerInterface::class),
+			Server::get(IEventDispatcher::class),
+			$this->rootFolder
+		);
 		$this->assertNull($this->tagMgr->load($this->objectType));
 	}
 
-	public function testInstantiateWithDefaults() {
+	public function testInstantiateWithDefaults(): void {
 		$defaultTags = ['Friends', 'Family', 'Work', 'Other'];
 
 		$tagger = $this->tagMgr->load($this->objectType, $defaultTags);
@@ -90,7 +120,7 @@ class TagsTest extends \Test\TestCase {
 		$this->assertEquals(4, count($tagger->getTags()));
 	}
 
-	public function testAddTags() {
+	public function testAddTags(): void {
 		$tags = ['Friends', 'Family', 'Work', 'Other'];
 
 		$tagger = $this->tagMgr->load($this->objectType);
@@ -107,7 +137,7 @@ class TagsTest extends \Test\TestCase {
 		$this->assertCount(4, $tagger->getTags(), 'Wrong number of added tags');
 	}
 
-	public function testAddMultiple() {
+	public function testAddMultiple(): void {
 		$tags = ['Friends', 'Family', 'Work', 'Other'];
 
 		$tagger = $this->tagMgr->load($this->objectType);
@@ -155,7 +185,7 @@ class TagsTest extends \Test\TestCase {
 		$this->assertCount(4, $tagger->getTags(), 'Not all previously saved tags found');
 	}
 
-	public function testIsEmpty() {
+	public function testIsEmpty(): void {
 		$tagger = $this->tagMgr->load($this->objectType);
 
 		$this->assertEquals(0, count($tagger->getTags()));
@@ -167,7 +197,7 @@ class TagsTest extends \Test\TestCase {
 		$this->assertFalse($tagger->isEmpty());
 	}
 
-	public function testGetTagsForObjects() {
+	public function testGetTagsForObjects(): void {
 		$defaultTags = ['Friends', 'Family', 'Work', 'Other'];
 		$tagger = $this->tagMgr->load($this->objectType, $defaultTags);
 
@@ -197,24 +227,26 @@ class TagsTest extends \Test\TestCase {
 		);
 	}
 
-	public function testGetTagsForObjectsMassiveResults() {
+	public function testGetTagsForObjectsMassiveResults(): void {
 		$defaultTags = ['tag1'];
 		$tagger = $this->tagMgr->load($this->objectType, $defaultTags);
 		$tagData = $tagger->getTags();
 		$tagId = $tagData[0]['id'];
 		$tagType = $tagData[0]['type'];
 
-		$conn = \OC::$server->getDatabaseConnection();
-		$statement = $conn->prepare(
-				'INSERT INTO `*PREFIX*vcategory_to_object` ' .
-				'(`objid`, `categoryid`, `type`) VALUES ' .
-				'(?, ?, ?)'
-		);
+		$conn = Server::get(IDBConnection::class);
 
 		// insert lots of entries
 		$idsArray = [];
 		for ($i = 1; $i <= 1500; $i++) {
-			$statement->execute([$i, $tagId, $tagType]);
+			$qb = $conn->getQueryBuilder();
+			$qb->insert('vcategory_to_object')
+				->values([
+					'objid' => $qb->createNamedParameter($i, IQueryBuilder::PARAM_INT),
+					'categoryid' => $qb->createNamedParameter($tagId, IQueryBuilder::PARAM_INT),
+					'type' => $qb->createNamedParameter($tagType),
+				])
+				->executeStatement();
 			$idsArray[] = $i;
 		}
 
@@ -222,7 +254,7 @@ class TagsTest extends \Test\TestCase {
 		$this->assertEquals(1500, count($tags));
 	}
 
-	public function testDeleteTags() {
+	public function testDeleteTags(): void {
 		$defaultTags = ['Friends', 'Family', 'Work', 'Other'];
 		$tagger = $this->tagMgr->load($this->objectType, $defaultTags);
 
@@ -235,7 +267,7 @@ class TagsTest extends \Test\TestCase {
 		$this->assertEquals(0, count($tagger->getTags()));
 	}
 
-	public function testRenameTag() {
+	public function testRenameTag(): void {
 		$defaultTags = ['Friends', 'Family', 'Wrok', 'Other'];
 		$tagger = $this->tagMgr->load($this->objectType, $defaultTags);
 
@@ -246,7 +278,7 @@ class TagsTest extends \Test\TestCase {
 		$this->assertFalse($tagger->rename('Work', 'Family')); // Collide with existing tag.
 	}
 
-	public function testTagAs() {
+	public function testTagAs(): void {
 		$objids = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 		$tagger = $this->tagMgr->load($this->objectType);
@@ -259,10 +291,8 @@ class TagsTest extends \Test\TestCase {
 		$this->assertEquals(9, count($tagger->getIdsForTag('Family')));
 	}
 
-	/**
-	 * @depends testTagAs
-	 */
-	public function testUnTag() {
+	#[\PHPUnit\Framework\Attributes\Depends('testTagAs')]
+	public function testUnTag(): void {
 		$objIds = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 		// Is this "legal"?
@@ -279,7 +309,39 @@ class TagsTest extends \Test\TestCase {
 		$this->assertEquals(0, count($tagger->getIdsForTag('Family')));
 	}
 
-	public function testFavorite() {
+	public function testTagById(): void {
+		$tagger = $this->tagMgr->load($this->objectType);
+		$tagId = $tagger->add('Family');
+
+		$this->assertTrue($tagger->tagAs(1, (string)$tagId));
+		$this->assertEquals([1], $tagger->getIdsForTag('Family'));
+		$this->assertEquals([1], $tagger->getIdsForTag($tagId));
+		$this->assertTrue($tagger->unTag(1, (string)$tagId));
+		$this->assertEquals([], $tagger->getIdsForTag('Family'));
+		$this->assertEquals(1, count($tagger->getTags()));
+	}
+
+	public function testTagByNumericValue(): void {
+		$otherTagger = $this->tagMgr->load($this->objectType, [], false, self::getUniqueID('user_'));
+		$otherTagId = $otherTagger->add('Family');
+		$this->assertTrue($otherTagger->tagAs(1, 'Family'));
+
+		$tagger = $this->tagMgr->load($this->objectType);
+
+		// Treated as the name of an own tag
+		$this->assertTrue($tagger->tagAs(2, (string)$otherTagId));
+		$this->assertTrue($tagger->hasTag((string)$otherTagId));
+		$this->assertEquals([2], $tagger->getIdsForTag((string)$otherTagId));
+		$this->assertEquals([1], $otherTagger->getIdsForTag('Family'));
+
+		$tagger->unTag(1, (string)$otherTagId);
+		$this->assertEquals([1], $otherTagger->getIdsForTag('Family'));
+
+		$tagger->unTag(2, (string)$otherTagId);
+		$this->assertEquals([], $tagger->getIdsForTag((string)$otherTagId));
+	}
+
+	public function testFavorite(): void {
 		$tagger = $this->tagMgr->load($this->objectType);
 		$this->assertTrue($tagger->addToFavorites(1));
 		$this->assertEquals([1], $tagger->getFavorites());

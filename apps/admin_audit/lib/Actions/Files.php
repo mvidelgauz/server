@@ -1,31 +1,25 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016 Lukas Reschke <lukas@statuscode.ch>
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\AdminAudit\Actions;
+
+use OC\Files\Node\NonExistingFile;
+use OCA\AdminAudit\Operation;
+use OCP\Files\Events\Node\BeforeNodeDeletedEvent;
+use OCP\Files\Events\Node\BeforeNodeReadEvent;
+use OCP\Files\Events\Node\NodeCopiedEvent;
+use OCP\Files\Events\Node\NodeCreatedEvent;
+use OCP\Files\Events\Node\NodeRenamedEvent;
+use OCP\Files\Events\Node\NodeWrittenEvent;
+use OCP\Files\InvalidPathException;
+use OCP\Files\NotFoundException;
+use OCP\Server;
+use Psr\Log\LoggerInterface;
 
 /**
  * Class Files logs the actions to files
@@ -35,135 +29,168 @@ namespace OCA\AdminAudit\Actions;
 class Files extends Action {
 	/**
 	 * Logs file read actions
-	 *
-	 * @param array $params
 	 */
-	public function read(array $params): void {
+	public function read(BeforeNodeReadEvent $event): void {
+		try {
+			$node = $event->getNode();
+			$params = [
+				'id' => $node instanceof NonExistingFile ? 'not-yet-assigned' : $node->getId(),
+				'path' => $node->getPath(),
+			] + $this->getRealPathParam('realPath', $node)
+				+ $this->getOwnerPathParam('ownerPath', $node);
+		} catch (InvalidPathException|NotFoundException $e) {
+			Server::get(LoggerInterface::class)->error(
+				'Exception thrown in file read: ' . $e->getMessage(), ['app' => 'admin_audit', 'exception' => $e]
+			);
+			return;
+		}
 		$this->log(
-			'File accessed: "%s"',
+			Operation::FileRead,
+			$this->appendRealPathText('File with id "%s" accessed: "%s"', $params),
 			$params,
-			[
-				'path',
-			]
+			array_keys($params)
 		);
 	}
 
 	/**
 	 * Logs rename actions of files
-	 *
-	 * @param array $params
 	 */
-	public function rename(array $params): void {
+	public function afterRename(NodeRenamedEvent $event): void {
+		try {
+			$target = $event->getTarget();
+			$source = $event->getSource();
+			$params = [
+				'newid' => $target->getId(),
+				'oldpath' => $source->getPath(),
+				'newpath' => $target->getPath(),
+			] + $this->getRealPathParam('oldRealPath', $source)
+				+ $this->getRealPathParam('newRealPath', $target)
+				+ $this->getOwnerPathParam('oldOwnerPath', $source)
+				+ $this->getOwnerPathParam('newOwnerPath', $target);
+		} catch (InvalidPathException|NotFoundException $e) {
+			Server::get(LoggerInterface::class)->error(
+				'Exception thrown in file rename: ' . $e->getMessage(), ['app' => 'admin_audit', 'exception' => $e]
+			);
+			return;
+		}
+
 		$this->log(
-			'File renamed: "%s" to "%s"',
+			Operation::FileRenamed,
+			$this->appendRealPathText('File renamed with id "%s" from "%s" to "%s"', $params),
 			$params,
-			[
-				'oldpath',
-				'newpath',
-			]
+			array_keys($params)
 		);
 	}
 
 	/**
 	 * Logs creation of files
-	 *
-	 * @param array $params
 	 */
-	public function create(array $params): void {
-		if ($params['path'] === '/' || $params['path'] === '' || $params['path'] === null) {
+	public function create(NodeCreatedEvent $event): void {
+		try {
+			$node = $event->getNode();
+			$params = [
+				'id' => $node->getId(),
+				'path' => $node->getPath(),
+			] + $this->getRealPathParam('realPath', $node)
+				+ $this->getOwnerPathParam('ownerPath', $node);
+		} catch (InvalidPathException|NotFoundException $e) {
+			Server::get(LoggerInterface::class)->error(
+				'Exception thrown in file create: ' . $e->getMessage(), ['app' => 'admin_audit', 'exception' => $e]
+			);
 			return;
 		}
-
+		if ($params['path'] === '/' || $params['path'] === '') {
+			return;
+		}
 		$this->log(
-			'File created: "%s"',
+			Operation::FileCreated,
+			$this->appendRealPathText('File with id "%s" created: "%s"', $params),
 			$params,
-			[
-				'path',
-			]
+			array_keys($params)
 		);
 	}
 
 	/**
 	 * Logs copying of files
-	 *
-	 * @param array $params
 	 */
-	public function copy(array $params): void {
+	public function copy(NodeCopiedEvent $event): void {
+		try {
+			$source = $event->getSource();
+			$target = $event->getTarget();
+			$params = [
+				'oldid' => $source->getId(),
+				'newid' => $target->getId(),
+				'oldpath' => $source->getPath(),
+				'newpath' => $target->getPath(),
+			] + $this->getRealPathParam('oldRealPath', $source)
+				+ $this->getRealPathParam('newRealPath', $target)
+				+ $this->getOwnerPathParam('oldOwnerPath', $source)
+				+ $this->getOwnerPathParam('newOwnerPath', $target);
+		} catch (InvalidPathException|NotFoundException $e) {
+			Server::get(LoggerInterface::class)->error(
+				'Exception thrown in file copy: ' . $e->getMessage(), ['app' => 'admin_audit', 'exception' => $e]
+			);
+			return;
+		}
 		$this->log(
-			'File copied: "%s" to "%s"',
+			Operation::FileCopied,
+			$this->appendRealPathText('File id copied from: "%s" to "%s", path from "%s" to "%s"', $params),
 			$params,
-			[
-				'oldpath',
-				'newpath',
-			]
+			array_keys($params)
 		);
 	}
 
 	/**
 	 * Logs writing of files
-	 *
-	 * @param array $params
 	 */
-	public function write(array $params): void {
-		if ($params['path'] === '/' || $params['path'] === '' || $params['path'] === null) {
+	public function write(NodeWrittenEvent $event): void {
+		try {
+			$node = $event->getNode();
+			$params = [
+				'id' => $node->getId(),
+				'path' => $node->getPath(),
+			] + $this->getRealPathParam('realPath', $node)
+				+ $this->getOwnerPathParam('ownerPath', $node);
+		} catch (InvalidPathException|NotFoundException $e) {
+			Server::get(LoggerInterface::class)->error(
+				'Exception thrown in file write: ' . $e->getMessage(), ['app' => 'admin_audit', 'exception' => $e]
+			);
+			return;
+		}
+		if ($params['path'] === '/' || $params['path'] === '') {
 			return;
 		}
 
 		$this->log(
-			'File written to: "%s"',
+			Operation::FileWritten,
+			$this->appendRealPathText('File with id "%s" written to: "%s"', $params),
 			$params,
-			[
-				'path',
-			]
-		);
-	}
-
-	/**
-	 * Logs update of files
-	 *
-	 * @param array $params
-	 */
-	public function update(array $params): void {
-		$this->log(
-			'File updated: "%s"',
-			$params,
-			[
-				'path',
-			]
+			array_keys($params)
 		);
 	}
 
 	/**
 	 * Logs deletions of files
-	 *
-	 * @param array $params
 	 */
-	public function delete(array $params): void {
+	public function delete(BeforeNodeDeletedEvent $event): void {
+		try {
+			$node = $event->getNode();
+			$params = [
+				'id' => $node->getId(),
+				'path' => $node->getPath(),
+			] + $this->getRealPathParam('realPath', $node)
+				+ $this->getOwnerPathParam('ownerPath', $node);
+		} catch (InvalidPathException|NotFoundException $e) {
+			Server::get(LoggerInterface::class)->error(
+				'Exception thrown in file delete: ' . $e->getMessage(), ['app' => 'admin_audit', 'exception' => $e]
+			);
+			return;
+		}
 		$this->log(
-			'File deleted: "%s"',
+			Operation::FileDeleted,
+			$this->appendRealPathText('File with id "%s" deleted: "%s"', $params),
 			$params,
-			[
-				'path',
-			]
-		);
-	}
-
-	/**
-	 * Logs preview access to a file
-	 *
-	 * @param array $params
-	 */
-	public function preview(array $params): void {
-		$this->log(
-			'Preview accessed: "%s" (width: "%s", height: "%s" crop: "%s", mode: "%s")',
-			$params,
-			[
-				'path',
-				'width',
-				'height',
-				'crop',
-				'mode'
-			]
+			array_keys($params)
 		);
 	}
 }

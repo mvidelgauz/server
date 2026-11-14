@@ -1,24 +1,8 @@
 <?php
 
 /**
- * @copyright 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 declare(strict_types=1);
@@ -27,29 +11,21 @@ namespace Test\Authentication\Login;
 
 use OC\Authentication\Login\UpdateLastPasswordConfirmCommand;
 use OCP\ISession;
-use PHPUnit\Framework\MockObject\MockObject;
 
-class UpdateLastPasswordConfirmCommandTest extends ALoginCommandTest {
-
-	/** @var ISession|MockObject */
-	private $session;
-
+class UpdateLastPasswordConfirmCommandTest extends ALoginTestCommand {
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->session = $this->createMock(ISession::class);
-
-		$this->cmd = new UpdateLastPasswordConfirmCommand(
-			$this->session
-		);
+		$this->cmd = $this->createInstanceWithMocks(UpdateLastPasswordConfirmCommand::class);
 	}
 
-	public function testProcess() {
+	public function testProcess(): void {
 		$data = $this->getLoggedInLoginData();
 		$this->user->expects($this->once())
 			->method('getLastLogin')
 			->willReturn(1234);
-		$this->session->expects($this->once())
+		$this->getAutoMock(ISession::class)->expects($this->once())
 			->method('set')
 			->with(
 				'last-password-confirm',

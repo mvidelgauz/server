@@ -3,28 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Authentication\WebAuthn;
 
 use Cose\Algorithm\Signature\ECDSA\ES256;
@@ -45,6 +27,7 @@ use Webauthn\AuthenticatorAssertionResponse;
 use Webauthn\AuthenticatorAssertionResponseValidator;
 use Webauthn\AuthenticatorAttestationResponse;
 use Webauthn\AuthenticatorAttestationResponseValidator;
+use Webauthn\AuthenticatorData;
 use Webauthn\AuthenticatorSelectionCriteria;
 use Webauthn\PublicKeyCredentialCreationOptions;
 use Webauthn\PublicKeyCredentialDescriptor;
@@ -56,43 +39,26 @@ use Webauthn\PublicKeyCredentialUserEntity;
 use Webauthn\TokenBinding\TokenBindingNotSupportedHandler;
 
 class Manager {
-
-	/** @var CredentialRepository */
-	private $repository;
-
-	/** @var PublicKeyCredentialMapper */
-	private $credentialMapper;
-
-	/** @var LoggerInterface */
-	private $logger;
-
-	/** @var IConfig */
-	private $config;
-
 	public function __construct(
-		CredentialRepository $repository,
-		PublicKeyCredentialMapper $credentialMapper,
-		LoggerInterface $logger,
-		IConfig $config
+		private CredentialRepository $repository,
+		private PublicKeyCredentialMapper $credentialMapper,
+		private LoggerInterface $logger,
+		private IConfig $config,
 	) {
-		$this->repository = $repository;
-		$this->credentialMapper = $credentialMapper;
-		$this->logger = $logger;
-		$this->config = $config;
 	}
 
 	public function startRegistration(IUser $user, string $serverHost): PublicKeyCredentialCreationOptions {
 		$rpEntity = new PublicKeyCredentialRpEntity(
 			'Nextcloud', //Name
-			$this->stripPort($serverHost),        //ID
+			$this->stripPort($serverHost),  //ID
 			null                            //Icon
 		);
 
 		$userEntity = new PublicKeyCredentialUserEntity(
-			$user->getUID(),                              //Name
-			$user->getUID(),                              //ID
-			$user->getDisplayName()                      //Display name
-//            'https://foo.example.co/avatar/123e4567-e89b-12d3-a456-426655440000' //Icon
+			$user->getUID(),                             // Name
+			$user->getUID(),                             // ID
+			$user->getDisplayName()                      // Display name
+			//            'https://foo.example.co/avatar/123e4567-e89b-12d3-a456-426655440000' //Icon
 		);
 
 		$challenge = random_bytes(32);
@@ -108,9 +74,10 @@ class Manager {
 		];
 
 		$authenticatorSelectionCriteria = new AuthenticatorSelectionCriteria(
+			AuthenticatorSelectionCriteria::AUTHENTICATOR_ATTACHMENT_NO_PREFERENCE,
+			AuthenticatorSelectionCriteria::USER_VERIFICATION_REQUIREMENT_PREFERRED,
 			null,
 			false,
-			AuthenticatorSelectionCriteria::USER_VERIFICATION_REQUIREMENT_DISCOURAGED
 		);
 
 		return new PublicKeyCredentialCreationOptions(
@@ -118,11 +85,10 @@ class Manager {
 			$userEntity,
 			$challenge,
 			$publicKeyCredentialParametersList,
-			$timeout,
-			$excludedPublicKeyDescriptors,
 			$authenticatorSelectionCriteria,
 			PublicKeyCredentialCreationOptions::ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
-			null
+			$excludedPublicKeyDescriptors,
+			$timeout,
 		);
 	}
 
@@ -145,11 +111,12 @@ class Manager {
 			$tokenBindingHandler,
 			$extensionOutputCheckerHandler
 		);
+		$authenticatorAttestationResponseValidator->setLogger($this->logger);
 
 		try {
 			// Load the data
 			$publicKeyCredential = $publicKeyCredentialLoader->load($data);
-			$response = $publicKeyCredential->getResponse();
+			$response = $publicKeyCredential->response;
 
 			// Check if the response is an Authenticator Attestation Response
 			if (!$response instanceof AuthenticatorAttestationResponse) {
@@ -162,40 +129,47 @@ class Manager {
 			$publicKeyCredentialSource = $authenticatorAttestationResponseValidator->check(
 				$response,
 				$publicKeyCredentialCreationOptions,
-				$request);
+				$request,
+				['localhost'],
+			);
 		} catch (\Throwable $exception) {
 			throw $exception;
 		}
 
 		// Persist the data
-		return $this->repository->saveAndReturnCredentialSource($publicKeyCredentialSource, $name);
+		$userVerification = $response->attestationObject->authData->isUserVerified();
+		return $this->repository->saveAndReturnCredentialSource($publicKeyCredentialSource, $name, $userVerification);
 	}
 
 	private function stripPort(string $serverHost): string {
-		return preg_replace('/(:\d+$)/', '', $serverHost);
+		return preg_replace('/(:\d+$)/', '', $serverHost) ?? '';
 	}
 
 	public function startAuthentication(string $uid, string $serverHost): PublicKeyCredentialRequestOptions {
 		// List of registered PublicKeyCredentialDescriptor classes associated to the user
-		$registeredPublicKeyCredentialDescriptors = array_map(function (PublicKeyCredentialEntity $entity) {
+		$userVerificationRequirement = AuthenticatorSelectionCriteria::USER_VERIFICATION_REQUIREMENT_REQUIRED;
+		$registeredPublicKeyCredentialDescriptors = array_map(function (PublicKeyCredentialEntity $entity) use (&$userVerificationRequirement) {
+			if ($entity->getUserVerification() !== true) {
+				$userVerificationRequirement = AuthenticatorSelectionCriteria::USER_VERIFICATION_REQUIREMENT_DISCOURAGED;
+			}
 			$credential = $entity->toPublicKeyCredentialSource();
 			return new PublicKeyCredentialDescriptor(
-				$credential->getType(),
-				$credential->getPublicKeyCredentialId()
+				$credential->type,
+				$credential->publicKeyCredentialId,
 			);
 		}, $this->credentialMapper->findAllForUid($uid));
 
 		// Public Key Credential Request Options
 		return new PublicKeyCredentialRequestOptions(
-			random_bytes(32),                                                    // Challenge
-			60000,                                                              // Timeout
-			$this->stripPort($serverHost),                                                                  // Relying Party ID
-			$registeredPublicKeyCredentialDescriptors,                                  // Registered PublicKeyCredentialDescriptor classes
-			AuthenticatorSelectionCriteria::USER_VERIFICATION_REQUIREMENT_DISCOURAGED
+			random_bytes(32),                                                          // Challenge
+			$this->stripPort($serverHost),                                             // Relying Party ID
+			$registeredPublicKeyCredentialDescriptors,                                 // Registered PublicKeyCredentialDescriptor classes
+			$userVerificationRequirement,
+			60000,                                                                     // Timeout
 		);
 	}
 
-	public function finishAuthentication(PublicKeyCredentialRequestOptions $publicKeyCredentialRequestOptions, string $data, string $uid) {
+	public function finishAuthentication(PublicKeyCredentialRequestOptions $publicKeyCredentialRequestOptions, string $data, string $uid): AuthenticatorData {
 		$attestationStatementSupportManager = new AttestationStatementSupportManager();
 		$attestationStatementSupportManager->add(new NoneAttestationStatementSupport());
 
@@ -212,15 +186,16 @@ class Manager {
 			$this->repository,
 			$tokenBindingHandler,
 			$extensionOutputCheckerHandler,
-			$algorithmManager
+			$algorithmManager,
 		);
+		$authenticatorAssertionResponseValidator->setLogger($this->logger);
 
 		try {
 			$this->logger->debug('Loading publickey credentials from: ' . $data);
 
 			// Load the data
 			$publicKeyCredential = $publicKeyCredentialLoader->load($data);
-			$response = $publicKeyCredential->getResponse();
+			$response = $publicKeyCredential->response;
 
 			// Check if the response is an Authenticator Attestation Response
 			if (!$response instanceof AuthenticatorAssertionResponse) {
@@ -231,19 +206,18 @@ class Manager {
 			$request = ServerRequest::fromGlobals();
 
 			$publicKeyCredentialSource = $authenticatorAssertionResponseValidator->check(
-				$publicKeyCredential->getRawId(),
+				$publicKeyCredential->rawId,
 				$response,
 				$publicKeyCredentialRequestOptions,
 				$request,
-				$uid
+				$uid,
+				['localhost'],
 			);
 		} catch (\Throwable $e) {
 			throw $e;
 		}
 
-
-
-		return true;
+		return $response->authenticatorData;
 	}
 
 	public function deleteRegistration(IUser $user, int $id): void {
@@ -258,14 +232,6 @@ class Manager {
 	}
 
 	public function isWebAuthnAvailable(): bool {
-		if (!extension_loaded('bcmath')) {
-			return false;
-		}
-
-		if (!extension_loaded('gmp')) {
-			return false;
-		}
-
 		if (!$this->config->getSystemValueBool('auth.webauthn.enabled', true)) {
 			return false;
 		}

@@ -1,41 +1,16 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Jan-Christoph Borchardt <hey@jancborchardt.net>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Julius Haertl <jus@bitgrid.net>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Markus Staab <markus.staab@redaxo.de>
- * @author Michael Weimann <mail@michael-weimann.eu>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Pascal de Bruijn <pmjdebruijn@pcode.nl>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author scolebrook <scolebrook@mac.com>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Volkan Gezer <volkangezer@gmail.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+use OCP\IConfig;
+use OCP\IURLGenerator;
+use OCP\L10N\IFactory;
+use OCP\Server;
+use OCP\ServerVersion;
+use OCP\Util;
 
 class OC_Defaults {
 	private $theme;
@@ -52,12 +27,14 @@ class OC_Defaults {
 	private $defaultDocBaseUrl;
 	private $defaultDocVersion;
 	private $defaultSlogan;
+	private $defaultColorBackground;
 	private $defaultColorPrimary;
 	private $defaultTextColorPrimary;
 	private $defaultProductName;
 
 	public function __construct() {
-		$config = \OC::$server->getConfig();
+		$config = Server::get(IConfig::class);
+		$serverVersion = Server::get(ServerVersion::class);
 
 		$this->defaultEntity = 'Nextcloud'; /* e.g. company name, used for footers and copyright notices */
 		$this->defaultName = 'Nextcloud'; /* short name, used when referring to the software */
@@ -69,8 +46,9 @@ class OC_Defaults {
 		$this->defaultAndroidClientUrl = $config->getSystemValue('customclient_android', 'https://play.google.com/store/apps/details?id=com.nextcloud.client');
 		$this->defaultFDroidClientUrl = $config->getSystemValue('customclient_fdroid', 'https://f-droid.org/packages/com.nextcloud.client/');
 		$this->defaultDocBaseUrl = 'https://docs.nextcloud.com';
-		$this->defaultDocVersion = \OC_Util::getVersion()[0]; // used to generate doc links
-		$this->defaultColorPrimary = '#0082c9';
+		$this->defaultDocVersion = $serverVersion->getMajorVersion(); // used to generate doc links
+		$this->defaultColorBackground = '#00679e';
+		$this->defaultColorPrimary = '#00679e';
 		$this->defaultTextColorPrimary = '#ffffff';
 		$this->defaultProductName = 'Nextcloud';
 
@@ -237,20 +215,11 @@ class OC_Defaults {
 			return $this->theme->getSlogan($lang);
 		} else {
 			if ($this->defaultSlogan === null) {
-				$l10n = \OC::$server->getL10N('lib', $lang);
+				$l10n = Server::get(IFactory::class)->get('lib', $lang);
 				$this->defaultSlogan = $l10n->t('a safe home for all your data');
 			}
 			return $this->defaultSlogan;
 		}
-	}
-
-	/**
-	 * Returns logo claim
-	 * @return string logo claim
-	 * @deprecated 13.0.0
-	 */
-	public function getLogoClaim() {
-		return '';
 	}
 
 	/**
@@ -261,9 +230,9 @@ class OC_Defaults {
 		if ($this->themeExist('getShortFooter')) {
 			$footer = $this->theme->getShortFooter();
 		} else {
-			$footer = '<a href="'. $this->getBaseUrl() . '" target="_blank"' .
-				' rel="noreferrer noopener">' .$this->getEntity() . '</a>'.
-				' – ' . $this->getSlogan();
+			$footer = '<a href="' . $this->getBaseUrl() . '" target="_blank"'
+				. ' rel="noreferrer noopener">' . $this->getEntity() . '</a>'
+				. ' – ' . $this->getSlogan();
 		}
 
 		return $footer;
@@ -309,6 +278,17 @@ class OC_Defaults {
 	}
 
 	/**
+	 * Returns primary color
+	 * @return string
+	 */
+	public function getColorBackground() {
+		if ($this->themeExist('getColorBackground')) {
+			return $this->theme->getColorBackground();
+		}
+		return $this->defaultColorBackground;
+	}
+
+	/**
 	 * @return array scss variables to overwrite
 	 */
 	public function getScssVariables() {
@@ -334,11 +314,29 @@ class OC_Defaults {
 		}
 
 		if ($useSvg) {
-			$logo = \OC::$server->getURLGenerator()->imagePath('core', 'logo/logo.svg');
+			$logo = Server::get(IURLGenerator::class)->imagePath('core', 'logo/logo.svg');
 		} else {
-			$logo = \OC::$server->getURLGenerator()->imagePath('core', 'logo/logo.png');
+			$logo = Server::get(IURLGenerator::class)->imagePath('core', 'logo/logo.png');
 		}
-		return $logo . '?v=' . hash('sha1', implode('.', \OCP\Util::getVersion()));
+		return $logo . '?v=' . hash('sha1', implode('.', Util::getVersion()));
+	}
+
+	/**
+	 * Raw logo image data (raster, not SVG) for embedding directly into emails,
+	 * so mail clients don't have to fetch it from the internet.
+	 *
+	 * @return array{content: string, mimeType: string}|null null when unavailable
+	 */
+	public function getLogoImage(): ?array {
+		if ($this->themeExist('getLogoImage')) {
+			return $this->theme->getLogoImage();
+		}
+
+		$content = @file_get_contents(\OC::$SERVERROOT . '/core/img/logo/logo.png');
+		if ($content === false) {
+			return null;
+		}
+		return ['content' => $content, 'mimeType' => 'image/png'];
 	}
 
 	public function getTextColorPrimary() {

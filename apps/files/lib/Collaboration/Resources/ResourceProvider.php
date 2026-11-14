@@ -3,27 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2018 Joas Schilling <coding@schilljs.com>
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files\Collaboration\Resources;
 
 use OCP\Collaboration\Resources\IProvider;
@@ -38,32 +21,24 @@ use OCP\IUser;
 class ResourceProvider implements IProvider {
 	public const RESOURCE_TYPE = 'file';
 
-	/** @var IRootFolder */
-	protected $rootFolder;
-	/** @var IPreview */
-	private $preview;
-	/** @var IURLGenerator */
-	private $urlGenerator;
+	/** @var array<int, Node> $nodes */
+	protected array $nodes = [];
 
-	/** @var array */
-	protected $nodes = [];
-
-	public function __construct(IRootFolder $rootFolder,
-								IPreview $preview,
-								IURLGenerator $urlGenerator) {
-		$this->rootFolder = $rootFolder;
-		$this->preview = $preview;
-		$this->urlGenerator = $urlGenerator;
+	public function __construct(
+		protected IRootFolder $rootFolder,
+		private IPreview $preview,
+		private IURLGenerator $urlGenerator,
+	) {
 	}
 
 	private function getNode(IResource $resource): ?Node {
-		if (isset($this->nodes[(int) $resource->getId()])) {
-			return $this->nodes[(int) $resource->getId()];
+		if (isset($this->nodes[(int)$resource->getId()])) {
+			return $this->nodes[(int)$resource->getId()];
 		}
-		$nodes = $this->rootFolder->getById((int) $resource->getId());
-		if (!empty($nodes)) {
-			$this->nodes[(int) $resource->getId()] = array_shift($nodes);
-			return $this->nodes[(int) $resource->getId()];
+		$node = $this->rootFolder->getFirstNodeById((int)$resource->getId());
+		if ($node) {
+			$this->nodes[(int)$resource->getId()] = $node;
+			return $this->nodes[(int)$resource->getId()];
 		}
 		return null;
 	}
@@ -73,9 +48,10 @@ class ResourceProvider implements IProvider {
 	 * @return array
 	 * @since 16.0.0
 	 */
+	#[\Override]
 	public function getResourceRichObject(IResource $resource): array {
-		if (isset($this->nodes[(int) $resource->getId()])) {
-			$node = $this->nodes[(int) $resource->getId()]->getPath();
+		if (isset($this->nodes[(int)$resource->getId()])) {
+			$node = $this->nodes[(int)$resource->getId()]->getPath();
 		} else {
 			$node = $this->getNode($resource);
 		}
@@ -107,16 +83,17 @@ class ResourceProvider implements IProvider {
 	 * @return bool
 	 * @since 16.0.0
 	 */
-	public function canAccessResource(IResource $resource, IUser $user = null): bool {
+	#[\Override]
+	public function canAccessResource(IResource $resource, ?IUser $user = null): bool {
 		if (!$user instanceof IUser) {
 			return false;
 		}
 
 		$userFolder = $this->rootFolder->getUserFolder($user->getUID());
-		$nodes = $userFolder->getById((int) $resource->getId());
+		$node = $userFolder->getFirstNodeById((int)$resource->getId());
 
-		if (!empty($nodes)) {
-			$this->nodes[(int) $resource->getId()] = array_shift($nodes);
+		if ($node !== null) {
+			$this->nodes[(int)$resource->getId()] = $node;
 			return true;
 		}
 
@@ -129,6 +106,7 @@ class ResourceProvider implements IProvider {
 	 * @return string
 	 * @since 16.0.0
 	 */
+	#[\Override]
 	public function getType(): string {
 		return self::RESOURCE_TYPE;
 	}

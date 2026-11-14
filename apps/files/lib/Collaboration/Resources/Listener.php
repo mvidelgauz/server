@@ -3,44 +3,38 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2019 Joas Schilling <coding@schilljs.com>
- *
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files\Collaboration\Resources;
 
 use OCP\Collaboration\Resources\IManager;
-use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use OCP\EventDispatcher\Event;
+use OCP\EventDispatcher\IEventListener;
+use OCP\Share\Events\ShareCreatedEvent;
+use OCP\Share\Events\ShareDeletedEvent;
+use OCP\Share\Events\ShareDeletedFromSelfEvent;
+use Override;
 
-class Listener {
-	public static function register(EventDispatcherInterface $dispatcher): void {
-		$dispatcher->addListener('OCP\Share::postShare', [self::class, 'shareModification']);
-		$dispatcher->addListener('OCP\Share::postUnshare', [self::class, 'shareModification']);
-		$dispatcher->addListener('OCP\Share::postUnshareFromSelf', [self::class, 'shareModification']);
+/**
+ * @template-implements IEventListener<ShareCreatedEvent|ShareDeletedEvent|ShareDeletedFromSelfEvent>
+ */
+class Listener implements IEventListener {
+	public function __construct(
+		protected readonly IManager $resourceManager,
+		protected readonly ResourceProvider $resourceProvider,
+	) {
 	}
 
-	public static function shareModification(): void {
-		/** @var IManager $resourceManager */
-		$resourceManager = \OC::$server->query(IManager::class);
-		/** @var ResourceProvider $resourceProvider */
-		$resourceProvider = \OC::$server->query(ResourceProvider::class);
+	#[Override]
+	public function handle(Event $event): void {
+		if ($event instanceof ShareDeletedFromSelfEvent || $event instanceof ShareDeletedEvent || $event instanceof ShareCreatedEvent) {
+			$this->shareModification();
+		}
+	}
 
-		$resourceManager->invalidateAccessCacheForProvider($resourceProvider);
+	public function shareModification(): void {
+		$this->resourceManager->invalidateAccessCacheForProvider($this->resourceProvider);
 	}
 }

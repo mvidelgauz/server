@@ -3,30 +3,11 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Core\Command\User;
 
 use OC\Files\View;
@@ -41,18 +22,14 @@ use Symfony\Component\Console\Output\OutputInterface;
 class Report extends Command {
 	public const DEFAULT_COUNT_DIRS_MAX_USERS = 500;
 
-	/** @var IUserManager */
-	protected $userManager;
-	/** @var IConfig */
-	private $config;
-
-	public function __construct(IUserManager $userManager,
-								IConfig $config) {
-		$this->userManager = $userManager;
-		$this->config = $config;
+	public function __construct(
+		protected IUserManager $userManager,
+		private IConfig $config,
+	) {
 		parent::__construct();
 	}
 
+	#[\Override]
 	protected function configure(): void {
 		$this
 			->setName('user:report')
@@ -66,9 +43,10 @@ class Report extends Command {
 		;
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$table = new Table($output);
-		$table->setHeaders(['User Report', '']);
+		$table->setHeaders(['Account Report', '']);
 		$userCountArray = $this->countUsers();
 		$total = 0;
 		if (!empty($userCountArray)) {

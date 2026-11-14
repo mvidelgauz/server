@@ -1,37 +1,17 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright 2018, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Anna Larch <anna@nextcloud.com>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Marius David Wieschollek <git.public@mdns.eu>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\AppFramework\Db;
 
+use Generator;
 use OCP\DB\Exception;
 use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\DB\Types;
 use OCP\IDBConnection;
 
 /**
@@ -43,7 +23,6 @@ use OCP\IDBConnection;
  * @template T of Entity
  */
 abstract class QBMapper {
-
 	/** @var string */
 	protected $tableName;
 
@@ -56,12 +35,11 @@ abstract class QBMapper {
 	/**
 	 * @param IDBConnection $db Instance of the Db abstraction layer
 	 * @param string $tableName the name of the table. set this to allow entity
-	 * @param string|null $entityClass the name of the entity that the sql should be
-	 * @psalm-param class-string<T>|null $entityClass the name of the entity that the sql should be
-	 * mapped to queries without using sql
+	 * @param class-string<T>|null $entityClass the name of the entity that the sql should be
+	 *                                          mapped to queries without using sql
 	 * @since 14.0.0
 	 */
-	public function __construct(IDBConnection $db, string $tableName, string $entityClass = null) {
+	public function __construct(IDBConnection $db, string $tableName, ?string $entityClass = null) {
 		$this->db = $db;
 		$this->tableName = $tableName;
 
@@ -74,7 +52,6 @@ abstract class QBMapper {
 		}
 	}
 
-
 	/**
 	 * @return string the table name
 	 * @since 14.0.0
@@ -82,7 +59,6 @@ abstract class QBMapper {
 	public function getTableName(): string {
 		return $this->tableName;
 	}
-
 
 	/**
 	 * Deletes an entity from the table
@@ -107,7 +83,6 @@ abstract class QBMapper {
 		return $entity;
 	}
 
-
 	/**
 	 * Creates a new entry in the db from an entity
 	 *
@@ -119,6 +94,11 @@ abstract class QBMapper {
 	 * @since 14.0.0
 	 */
 	public function insert(Entity $entity): Entity {
+		if ($entity instanceof SnowflakeAwareEntity) {
+			/** @psalm-suppress DocblockTypeContradiction */
+			$entity->generateId();
+		}
+
 		// get updated fields to save, fields have to be set using a setter to
 		// be saved
 		$properties = $entity->getUpdatedFields();
@@ -132,17 +112,20 @@ abstract class QBMapper {
 			$getter = 'get' . ucfirst($property);
 			$value = $entity->$getter();
 
+			if ($property === 'id' && $entity->id === null) {
+				continue;
+			}
 			$type = $this->getParameterTypeForProperty($entity, $property);
 			$qb->setValue($column, $qb->createNamedParameter($value, $type));
 		}
 
-		$qb->executeStatement();
-
 		if ($entity->id === null) {
+			$qb->executeStatement();
 			// When autoincrement is used id is always an int
 			$entity->setId($qb->getLastInsertId());
+		} else {
+			$qb->executeStatement();
 		}
-
 		return $entity;
 	}
 
@@ -168,6 +151,42 @@ abstract class QBMapper {
 			}
 			throw $ex;
 		}
+	}
+
+	/**
+	 * Creates a new entry in the db from an entity, ignoring conflicts on
+	 * unique constraints
+	 *
+	 * @param Entity $entity the entity that should be created
+	 * @psalm-param T $entity the entity that should be created
+	 * @return int number of inserted rows (0 if a conflicting row already exists)
+	 * @throws Exception
+	 * @since 36.0.0
+	 */
+	public function insertIgnoreConflict(Entity $entity): int {
+		if ($entity instanceof SnowflakeAwareEntity) {
+			/** @psalm-suppress DocblockTypeContradiction */
+			$entity->generateId();
+		}
+
+		// get updated fields to save, fields have to be set using a setter to
+		// be saved
+		$properties = $entity->getUpdatedFields();
+
+		$values = [];
+
+		// build the fields
+		foreach ($properties as $property => $updated) {
+			if ($property === 'id' && $entity->id === null) {
+				continue;
+			}
+
+			$column = $entity->propertyToColumn($property);
+			$getter = 'get' . ucfirst($property);
+			$values[$column] = $entity->$getter();
+		}
+
+		return $this->db->insertIgnoreConflict($this->tableName, $values);
 	}
 
 	/**
@@ -227,7 +246,7 @@ abstract class QBMapper {
 	 * Returns the type parameter for the QueryBuilder for a specific property
 	 * of the $entity
 	 *
-	 * @param Entity $entity   The entity to get the types from
+	 * @param Entity $entity The entity to get the types from
 	 * @psalm-param T $entity
 	 * @param string $property The property of $entity to get the type for
 	 * @return int|string
@@ -242,24 +261,41 @@ abstract class QBMapper {
 
 		switch ($types[ $property ]) {
 			case 'int':
-			case 'integer':
+			case Types::INTEGER:
+			case Types::SMALLINT:
 				return IQueryBuilder::PARAM_INT;
-			case 'string':
+			case Types::STRING:
 				return IQueryBuilder::PARAM_STR;
 			case 'bool':
-			case 'boolean':
+			case Types::BOOLEAN:
 				return IQueryBuilder::PARAM_BOOL;
-			case 'blob':
+			case Types::BLOB:
 				return IQueryBuilder::PARAM_LOB;
-			case 'datetime':
-				return IQueryBuilder::PARAM_DATE;
+			case Types::DATE:
+				return IQueryBuilder::PARAM_DATETIME_MUTABLE;
+			case Types::DATETIME:
+				return IQueryBuilder::PARAM_DATETIME_MUTABLE;
+			case Types::DATETIME_TZ:
+				return IQueryBuilder::PARAM_DATETIME_TZ_MUTABLE;
+			case Types::DATE_IMMUTABLE:
+				return IQueryBuilder::PARAM_DATE_IMMUTABLE;
+			case Types::DATETIME_IMMUTABLE:
+				return IQueryBuilder::PARAM_DATETIME_IMMUTABLE;
+			case Types::DATETIME_TZ_IMMUTABLE:
+				return IQueryBuilder::PARAM_DATETIME_TZ_IMMUTABLE;
+			case Types::TIME:
+				return IQueryBuilder::PARAM_TIME_MUTABLE;
+			case Types::TIME_IMMUTABLE:
+				return IQueryBuilder::PARAM_TIME_IMMUTABLE;
+			case Types::JSON:
+				return IQueryBuilder::PARAM_JSON;
 		}
 
 		return IQueryBuilder::PARAM_STR;
 	}
 
 	/**
-	 * Returns an db result and throws exceptions when there are more or less
+	 * Returns a db result and throws exceptions when there are more or less
 	 * results
 	 *
 	 * @param IQueryBuilder $query
@@ -274,7 +310,7 @@ abstract class QBMapper {
 	protected function findOneQuery(IQueryBuilder $query): array {
 		$result = $query->executeQuery();
 
-		$row = $result->fetch();
+		$row = $result->fetchAssociative();
 		if ($row === false) {
 			$result->closeCursor();
 			$msg = $this->buildDebugMessage(
@@ -283,7 +319,7 @@ abstract class QBMapper {
 			throw new DoesNotExistException($msg);
 		}
 
-		$row2 = $result->fetch();
+		$row2 = $result->fetchAssociative();
 		$result->closeCursor();
 		if ($row2 !== false) {
 			$msg = $this->buildDebugMessage(
@@ -302,10 +338,9 @@ abstract class QBMapper {
 	 * @since 14.0.0
 	 */
 	private function buildDebugMessage(string $msg, IQueryBuilder $sql): string {
-		return $msg .
-			': query "' . $sql->getSQL() . '"; ';
+		return $msg
+			. ': query "' . $sql->getSQL() . '"; ';
 	}
-
 
 	/**
 	 * Creates an entity from a row. Automatically determines the entity class
@@ -317,33 +352,51 @@ abstract class QBMapper {
 	 * @since 14.0.0
 	 */
 	protected function mapRowToEntity(array $row): Entity {
-		return \call_user_func($this->entityClass .'::fromRow', $row);
+		unset($row['DOCTRINE_ROWNUM']); // remove doctrine/dbal helper column
+		return \call_user_func($this->entityClass . '::fromRow', $row);
 	}
-
 
 	/**
 	 * Runs a sql query and returns an array of entities
 	 *
 	 * @param IQueryBuilder $query
-	 * @return Entity[] all fetched entities
-	 * @psalm-return T[] all fetched entities
+	 * @return list<Entity> all fetched entities
+	 * @psalm-return list<T> all fetched entities
 	 * @throws Exception
 	 * @since 14.0.0
 	 */
 	protected function findEntities(IQueryBuilder $query): array {
 		$result = $query->executeQuery();
-
-		$entities = [];
-
-		while ($row = $result->fetch()) {
-			$entities[] = $this->mapRowToEntity($row);
+		try {
+			$entities = [];
+			while ($row = $result->fetchAssociative()) {
+				$entities[] = $this->mapRowToEntity($row);
+			}
+			return $entities;
+		} finally {
+			$result->closeCursor();
 		}
-
-		$result->closeCursor();
-
-		return $entities;
 	}
 
+	/**
+	 * Runs a sql query and yields each resulting entity to obtain database entries in a memory-efficient way
+	 *
+	 * @param IQueryBuilder $query
+	 * @return Generator Generator of fetched entities
+	 * @psalm-return Generator<T> Generator of fetched entities
+	 * @throws Exception
+	 * @since 30.0.0
+	 */
+	protected function yieldEntities(IQueryBuilder $query): Generator {
+		$result = $query->executeQuery();
+		try {
+			while ($row = $result->fetchAssociative()) {
+				yield $this->mapRowToEntity($row);
+			}
+		} finally {
+			$result->closeCursor();
+		}
+	}
 
 	/**
 	 * Returns an db result and throws exceptions when there are more or less

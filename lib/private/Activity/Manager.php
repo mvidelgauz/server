@@ -1,64 +1,40 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- * @copyright Copyright (c) 2016 Joas Schilling <coding@schilljs.com>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Activity;
 
 use OCP\Activity\ActivitySettings;
+use OCP\Activity\Exceptions\FilterNotFoundException;
+use OCP\Activity\Exceptions\IncompleteActivityException;
+use OCP\Activity\Exceptions\SettingNotFoundException;
+use OCP\Activity\IBulkConsumer;
 use OCP\Activity\IConsumer;
 use OCP\Activity\IEvent;
 use OCP\Activity\IFilter;
 use OCP\Activity\IManager;
 use OCP\Activity\IProvider;
 use OCP\Activity\ISetting;
+use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\IConfig;
 use OCP\IL10N;
 use OCP\IRequest;
 use OCP\IUser;
 use OCP\IUserSession;
+use OCP\RichObjectStrings\IRichTextFormatter;
 use OCP\RichObjectStrings\IValidator;
+use OCP\Server;
 
 class Manager implements IManager {
-	/** @var IRequest */
-	protected $request;
-
-	/** @var IUserSession */
-	protected $session;
-
-	/** @var IConfig */
-	protected $config;
-
-	/** @var IValidator */
-	protected $validator;
 
 	/** @var string */
 	protected $formattingObjectType;
 
-	/** @var int */
+	/** @var int|string */
 	protected $formattingObjectId;
 
 	/** @var bool */
@@ -67,20 +43,15 @@ class Manager implements IManager {
 	/** @var string */
 	protected $currentUserId;
 
-	protected $l10n;
-
 	public function __construct(
-			IRequest $request,
-			IUserSession $session,
-			IConfig $config,
-			IValidator $validator,
-			IL10N $l10n
+		protected IRequest $request,
+		protected IUserSession $session,
+		protected IConfig $config,
+		protected IValidator $validator,
+		protected IRichTextFormatter $richTextFormatter,
+		protected IL10N $l10n,
+		protected ITimeFactory $timeFactory,
 	) {
-		$this->request = $request;
-		$this->session = $session;
-		$this->config = $config;
-		$this->validator = $validator;
-		$this->l10n = $l10n;
 	}
 
 	/** @var \Closure[] */
@@ -90,7 +61,7 @@ class Manager implements IManager {
 	private $consumers = [];
 
 	/**
-	 * @return \OCP\Activity\IConsumer[]
+	 * @return IConsumer[]
 	 */
 	protected function getConsumers(): array {
 		if (!empty($this->consumers)) {
@@ -122,39 +93,63 @@ class Manager implements IManager {
 	 *
 	 * @return IEvent
 	 */
+	#[\Override]
 	public function generateEvent(): IEvent {
-		return new Event($this->validator);
+		return new Event($this->validator, $this->richTextFormatter);
 	}
 
 	/**
-	 * Publish an event to the activity consumers
-	 *
-	 * Make sure to call at least the following methods before sending an Event:
-	 *  - setApp()
-	 *  - setType()
-	 *  - setAffectedUser()
-	 *  - setSubject()
-	 *
-	 * @param IEvent $event
-	 * @throws \BadMethodCallException if required values have not been set
+	 * {@inheritDoc}
 	 */
+	#[\Override]
 	public function publish(IEvent $event): void {
-		if ($event->getAuthor() === '') {
-			if ($this->session->getUser() instanceof IUser) {
-				$event->setAuthor($this->session->getUser()->getUID());
-			}
+		if ($event->getAuthor() === '' && $this->session->getUser() instanceof IUser) {
+			$event->setAuthor($this->session->getUser()->getUID());
 		}
 
 		if (!$event->getTimestamp()) {
-			$event->setTimestamp(time());
+			$event->setTimestamp($this->timeFactory->getTime());
 		}
 
-		if (!$event->isValid()) {
-			throw new \BadMethodCallException('The given event is invalid');
+		if ($event->getAffectedUser() === '' || !$event->isValid()) {
+			throw new IncompleteActivityException('The given event is invalid');
 		}
 
 		foreach ($this->getConsumers() as $c) {
 			$c->receive($event);
+		}
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
+	#[\Override]
+	public function bulkPublish(IEvent $event, array $affectedUserIds, ISetting $setting): void {
+		if (empty($affectedUserIds)) {
+			throw new IncompleteActivityException('The given event is invalid');
+		}
+
+		if (($event->getAuthor() === '') && $this->session->getUser() instanceof IUser) {
+			$event->setAuthor($this->session->getUser()->getUID());
+		}
+
+		if (!$event->getTimestamp()) {
+			$event->setTimestamp($this->timeFactory->getTime());
+		}
+
+		if (!$event->isValid()) {
+			throw new IncompleteActivityException('The given event is invalid');
+		}
+
+		foreach ($this->getConsumers() as $c) {
+			if ($c instanceof IBulkConsumer) {
+				$c->bulkReceive($event, $affectedUserIds, $setting);
+				continue;
+			}
+			foreach ($affectedUserIds as $affectedUserId) {
+				$event->setAffectedUser($affectedUserId);
+				$c->receive($event);
+			}
 		}
 	}
 
@@ -166,6 +161,7 @@ class Manager implements IManager {
 	 *
 	 * @param \Closure $callable
 	 */
+	#[\Override]
 	public function registerConsumer(\Closure $callable): void {
 		$this->consumersClosures[] = $callable;
 		$this->consumers = [];
@@ -181,6 +177,7 @@ class Manager implements IManager {
 	 * @param string $filter Class must implement OCA\Activity\IFilter
 	 * @return void
 	 */
+	#[\Override]
 	public function registerFilter(string $filter): void {
 		$this->filterClasses[$filter] = false;
 	}
@@ -189,10 +186,11 @@ class Manager implements IManager {
 	 * @return IFilter[]
 	 * @throws \InvalidArgumentException
 	 */
+	#[\Override]
 	public function getFilters(): array {
 		foreach ($this->filterClasses as $class => $false) {
 			/** @var IFilter $filter */
-			$filter = \OC::$server->query($class);
+			$filter = Server::get($class);
 
 			if (!$filter instanceof IFilter) {
 				throw new \InvalidArgumentException('Invalid activity filter registered');
@@ -206,11 +204,9 @@ class Manager implements IManager {
 	}
 
 	/**
-	 * @param string $id
-	 * @return IFilter
-	 * @throws \InvalidArgumentException when the filter was not found
-	 * @since 11.0.0
+	 * {@inheritDoc}
 	 */
+	#[\Override]
 	public function getFilterById(string $id): IFilter {
 		$filters = $this->getFilters();
 
@@ -218,7 +214,7 @@ class Manager implements IManager {
 			return $filters[$id];
 		}
 
-		throw new \InvalidArgumentException('Requested filter does not exist');
+		throw new FilterNotFoundException($id);
 	}
 
 	/** @var string[] */
@@ -231,6 +227,7 @@ class Manager implements IManager {
 	 * @param string $provider Class must implement OCA\Activity\IProvider
 	 * @return void
 	 */
+	#[\Override]
 	public function registerProvider(string $provider): void {
 		$this->providerClasses[$provider] = false;
 	}
@@ -239,10 +236,11 @@ class Manager implements IManager {
 	 * @return IProvider[]
 	 * @throws \InvalidArgumentException
 	 */
+	#[\Override]
 	public function getProviders(): array {
 		foreach ($this->providerClasses as $class => $false) {
 			/** @var IProvider $provider */
-			$provider = \OC::$server->query($class);
+			$provider = Server::get($class);
 
 			if (!$provider instanceof IProvider) {
 				throw new \InvalidArgumentException('Invalid activity provider registered');
@@ -265,6 +263,7 @@ class Manager implements IManager {
 	 * @param string $setting Class must implement OCA\Activity\ISetting
 	 * @return void
 	 */
+	#[\Override]
 	public function registerSetting(string $setting): void {
 		$this->settingsClasses[$setting] = false;
 	}
@@ -273,10 +272,11 @@ class Manager implements IManager {
 	 * @return ActivitySettings[]
 	 * @throws \InvalidArgumentException
 	 */
+	#[\Override]
 	public function getSettings(): array {
 		foreach ($this->settingsClasses as $class => $false) {
 			/** @var ISetting $setting */
-			$setting = \OC::$server->query($class);
+			$setting = Server::get($class);
 
 			if ($setting instanceof ISetting) {
 				if (!$setting instanceof ActivitySettings) {
@@ -294,11 +294,9 @@ class Manager implements IManager {
 	}
 
 	/**
-	 * @param string $id
-	 * @return ActivitySettings
-	 * @throws \InvalidArgumentException when the setting was not found
-	 * @since 11.0.0
+	 * {@inheritDoc}
 	 */
+	#[\Override]
 	public function getSettingById(string $id): ActivitySettings {
 		$settings = $this->getSettings();
 
@@ -306,15 +304,15 @@ class Manager implements IManager {
 			return $settings[$id];
 		}
 
-		throw new \InvalidArgumentException('Requested setting does not exist');
+		throw new SettingNotFoundException($id);
 	}
-
 
 	/**
 	 * @param string $type
-	 * @param int $id
+	 * @param int|numeric-string $id
 	 */
-	public function setFormattingObject(string $type, int $id): void {
+	#[\Override]
+	public function setFormattingObject(string $type, int|string $id): void {
 		$this->formattingObjectType = $type;
 		$this->formattingObjectId = $id;
 	}
@@ -322,15 +320,17 @@ class Manager implements IManager {
 	/**
 	 * @return bool
 	 */
+	#[\Override]
 	public function isFormattingFilteredObject(): bool {
 		return $this->formattingObjectType !== null && $this->formattingObjectId !== null
 			&& $this->formattingObjectType === $this->request->getParam('object_type')
-			&& $this->formattingObjectId === (int) $this->request->getParam('object_id');
+			&& $this->formattingObjectId === (int)$this->request->getParam('object_id');
 	}
 
 	/**
 	 * @param bool $status Set to true, when parsing events should not use SVG icons
 	 */
+	#[\Override]
 	public function setRequirePNG(bool $status): void {
 		$this->requirePNG = $status;
 	}
@@ -338,6 +338,7 @@ class Manager implements IManager {
 	/**
 	 * @return bool
 	 */
+	#[\Override]
 	public function getRequirePNG(): bool {
 		return $this->requirePNG;
 	}
@@ -346,12 +347,9 @@ class Manager implements IManager {
 	 * Set the user we need to use
 	 *
 	 * @param string|null $currentUserId
-	 * @throws \UnexpectedValueException If the user is invalid
 	 */
-	public function setCurrentUserId(string $currentUserId = null): void {
-		if (!is_string($currentUserId) && $currentUserId !== null) {
-			throw new \UnexpectedValueException('The given current user is invalid');
-		}
+	#[\Override]
+	public function setCurrentUserId(?string $currentUserId = null): void {
 		$this->currentUserId = $currentUserId;
 	}
 
@@ -363,6 +361,7 @@ class Manager implements IManager {
 	 * @return string
 	 * @throws \UnexpectedValueException If the token is invalid, does not exist or is not unique
 	 */
+	#[\Override]
 	public function getCurrentUserId(): string {
 		if ($this->currentUserId !== null) {
 			return $this->currentUserId;
@@ -382,7 +381,7 @@ class Manager implements IManager {
 	 * @throws \UnexpectedValueException If the token is invalid, does not exist or is not unique
 	 */
 	protected function getUserFromToken(): string {
-		$token = (string) $this->request->getParam('token', '');
+		$token = (string)$this->request->getParam('token', '');
 		if (strlen($token) !== 30) {
 			throw new \UnexpectedValueException('The token is invalid');
 		}

@@ -1,73 +1,79 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright 2017 Christoph Wurst <christoph@winzerhof-wurst.at>
- * @copyright 2017 Lukas Reschke <lukas@statuscode.ch>
- *
- * @author 2017 Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author 2017 Lukas Reschke <lukas@statuscode.ch>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-namespace Tests\Contacts\ContactsMenu;
+namespace Test\Contacts\ContactsMenu;
 
 use OC\Contacts\ContactsMenu\ContactsStore;
 use OC\KnownUser\KnownUserService;
+use OC\Profile\ProfileManager;
+use OC\Share20\ShareDisableChecker;
+use OCA\UserStatus\Db\UserStatus;
+use OCA\UserStatus\Service\StatusService;
 use OCP\Contacts\IManager;
 use OCP\IConfig;
 use OCP\IGroupManager;
+use OCP\IURLGenerator;
 use OCP\IUser;
 use OCP\IUserManager;
+use OCP\L10N\IFactory as IL10NFactory;
 use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class ContactsStoreTest extends TestCase {
-	/** @var ContactsStore */
-	private $contactsStore;
-	/** @var IManager|\PHPUnit\Framework\MockObject\MockObject */
+	private ContactsStore $contactsStore;
+	private StatusService|MockObject $statusService;
+	/** @var IManager|MockObject */
 	private $contactsManager;
-	/** @var IUserManager|\PHPUnit\Framework\MockObject\MockObject */
+	/** @var ProfileManager */
+	private $profileManager;
+	/** @var IUserManager|MockObject */
 	private $userManager;
-	/** @var IGroupManager|\PHPUnit\Framework\MockObject\MockObject */
+	/** @var IURLGenerator */
+	private $urlGenerator;
+	/** @var IGroupManager|MockObject */
 	private $groupManager;
-	/** @var IConfig|\PHPUnit\Framework\MockObject\MockObject */
+	/** @var IConfig|MockObject */
 	private $config;
 	/** @var KnownUserService|MockObject */
 	private $knownUserService;
+	/** @var IL10NFactory */
+	private $l10nFactory;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
 		$this->contactsManager = $this->createMock(IManager::class);
+		$this->statusService = $this->createMock(StatusService::class);
 		$this->userManager = $this->createMock(IUserManager::class);
+		$this->profileManager = $this->createMock(ProfileManager::class);
+		$this->urlGenerator = $this->createMock(IURLGenerator::class);
 		$this->groupManager = $this->createMock(IGroupManager::class);
 		$this->config = $this->createMock(IConfig::class);
 		$this->knownUserService = $this->createMock(KnownUserService::class);
+		$this->l10nFactory = $this->createMock(IL10NFactory::class);
 		$this->contactsStore = new ContactsStore(
 			$this->contactsManager,
+			$this->statusService,
 			$this->config,
+			$this->profileManager,
 			$this->userManager,
+			$this->urlGenerator,
 			$this->groupManager,
-			$this->knownUserService
+			$this->knownUserService,
+			$this->l10nFactory,
+			new ShareDisableChecker($this->config, $this->userManager, $this->groupManager),
 		);
 	}
 
-	public function testGetContactsWithoutFilter() {
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
+	public function testGetContactsWithoutFilter(): void {
+		/** @var IUser|MockObject $user */
 		$user = $this->createMock(IUser::class);
 		$this->contactsManager->expects($this->once())
 			->method('search')
@@ -84,7 +90,7 @@ class ContactsStoreTest extends TestCase {
 					],
 				],
 			]);
-		$user->expects($this->once())
+		$user->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user123');
 
@@ -96,8 +102,8 @@ class ContactsStoreTest extends TestCase {
 		], $entries[1]->getEMailAddresses());
 	}
 
-	public function testGetContactsHidesOwnEntry() {
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
+	public function testGetContactsHidesOwnEntry(): void {
+		/** @var IUser|MockObject $user */
 		$user = $this->createMock(IUser::class);
 		$this->contactsManager->expects($this->once())
 			->method('search')
@@ -114,7 +120,7 @@ class ContactsStoreTest extends TestCase {
 					],
 				],
 			]);
-		$user->expects($this->once())
+		$user->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user123');
 
@@ -123,9 +129,13 @@ class ContactsStoreTest extends TestCase {
 		$this->assertCount(1, $entries);
 	}
 
-	public function testGetContactsWithoutBinaryImage() {
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
+	public function testGetContactsWithoutBinaryImage(): void {
+		/** @var IUser|MockObject $user */
 		$user = $this->createMock(IUser::class);
+		$this->urlGenerator->expects($this->any())
+			->method('linkToRouteAbsolute')
+			->with('core.GuestAvatar.getAvatar', $this->anything())
+			->willReturn('https://urlToNcAvatar.test');
 		$this->contactsManager->expects($this->once())
 			->method('search')
 			->with($this->equalTo(''), $this->equalTo(['FN', 'EMAIL']))
@@ -142,18 +152,18 @@ class ContactsStoreTest extends TestCase {
 					'PHOTO' => base64_encode('photophotophoto'),
 				],
 			]);
-		$user->expects($this->once())
+		$user->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user123');
 
 		$entries = $this->contactsStore->getContacts($user, '');
 
 		$this->assertCount(2, $entries);
-		$this->assertNull($entries[1]->getAvatar());
+		$this->assertSame('https://urlToNcAvatar.test', $entries[1]->getAvatar());
 	}
 
-	public function testGetContactsWithoutAvatarURI() {
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
+	public function testGetContactsWithoutAvatarURI(): void {
+		/** @var IUser|MockObject $user */
 		$user = $this->createMock(IUser::class);
 		$this->contactsManager->expects($this->once())
 			->method('search')
@@ -171,7 +181,7 @@ class ContactsStoreTest extends TestCase {
 					'PHOTO' => 'VALUE=uri:https://photo',
 				],
 			]);
-		$user->expects($this->once())
+		$user->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user123');
 
@@ -181,29 +191,73 @@ class ContactsStoreTest extends TestCase {
 		$this->assertEquals('https://photo', $entries[1]->getAvatar());
 	}
 
-	public function testGetContactsWhenUserIsInExcludeGroups() {
+	public static function dataGetContactsWhenUserIsInExcludeGroups(): array {
+		return [
+			['yes', '[]', [], ['user123', 'user12345']],
+			['yes', '["excludedGroup1"]', [], ['user123', 'user12345']],
+			['yes', '["excludedGroup1"]', ['anotherGroup1'], ['user123', 'user12345']],
+			['yes', '["excludedGroup1"]', ['anotherGroup1', 'anotherGroup2', 'anotherGroup3'], ['user123', 'user12345']],
+			['yes', '["excludedGroup1"]', ['excludedGroup1'], []],
+			['yes', '["excludedGroup1"]', ['anotherGroup1', 'excludedGroup1'], []],
+			['yes', '["excludedGroup1"]', ['excludedGroup1', 'anotherGroup1', 'anotherGroup2', 'anotherGroup3'], []],
+			['yes', '["excludedGroup1", "excludedGroup2", "excludedGroup3"]', [], ['user123', 'user12345']],
+			['yes', '["excludedGroup1", "excludedGroup2", "excludedGroup3"]', ['anotherGroup1'], ['user123', 'user12345']],
+			['yes', '["excludedGroup1", "excludedGroup2", "excludedGroup3"]', ['anotherGroup1', 'anotherGroup2', 'anotherGroup3'], ['user123', 'user12345']],
+			['yes', '["excludedGroup1", "excludedGroup2", "excludedGroup3"]', ['excludedGroup1'], []],
+			['yes', '["excludedGroup1", "excludedGroup2", "excludedGroup3"]', ['excludedGroup2'], []],
+			['yes', '["excludedGroup1", "excludedGroup2", "excludedGroup3"]', ['excludedGroup3'], []],
+			['yes', '["excludedGroup1", "excludedGroup2", "excludedGroup3"]', ['excludedGroup1', 'excludedGroup2', 'excludedGroup3'], []],
+			['yes', '["excludedGroup1", "excludedGroup2", "excludedGroup3"]', ['anotherGroup1', 'excludedGroup1'], []],
+			['yes', '["excludedGroup1", "excludedGroup2", "excludedGroup3"]', ['anotherGroup1', 'excludedGroup2', 'anotherGroup2', 'anotherGroup3'], []],
+			['yes', '["excludedGroup1", "excludedGroup2", "excludedGroup3"]', ['excludedGroup3', 'anotherGroup1', 'anotherGroup2', 'anotherGroup3'], []],
+			['allow', '[]', [], []],
+			['allow', '["allowedGroup1"]', [], []],
+			['allow', '["allowedGroup1"]', ['anotherGroup1'], []],
+			['allow', '["allowedGroup1"]', ['anotherGroup1', 'anotherGroup2', 'anotherGroup3'], []],
+			['allow', '["allowedGroup1"]', ['allowedGroup1'], ['user123', 'user12345']],
+			['allow', '["allowedGroup1"]', ['anotherGroup1', 'allowedGroup1'], ['user123', 'user12345']],
+			['allow', '["allowedGroup1"]', ['allowedGroup1', 'anotherGroup1', 'anotherGroup2', 'anotherGroup3'], ['user123', 'user12345']],
+			['allow', '["allowedGroup1", "allowedGroup2", "allowedGroup3"]', [], []],
+			['allow', '["allowedGroup1", "allowedGroup2", "allowedGroup3"]', ['anotherGroup1'], []],
+			['allow', '["allowedGroup1", "allowedGroup2", "allowedGroup3"]', ['anotherGroup1', 'anotherGroup2', 'anotherGroup3'], []],
+			['allow', '["allowedGroup1", "allowedGroup2", "allowedGroup3"]', ['allowedGroup1'], ['user123', 'user12345']],
+			['allow', '["allowedGroup1", "allowedGroup2", "allowedGroup3"]', ['allowedGroup2'], ['user123', 'user12345']],
+			['allow', '["allowedGroup1", "allowedGroup2", "allowedGroup3"]', ['allowedGroup3'], ['user123', 'user12345']],
+			['allow', '["allowedGroup1", "allowedGroup2", "allowedGroup3"]', ['allowedGroup1', 'allowedGroup2', 'allowedGroup3'], ['user123', 'user12345']],
+			['allow', '["allowedGroup1", "allowedGroup2", "allowedGroup3"]', ['anotherGroup1', 'allowedGroup1'], ['user123', 'user12345']],
+			['allow', '["allowedGroup1", "allowedGroup2", "allowedGroup3"]', ['anotherGroup1', 'allowedGroup2', 'anotherGroup2', 'anotherGroup3'], ['user123', 'user12345']],
+			['allow', '["allowedGroup1", "allowedGroup2", "allowedGroup3"]', ['allowedGroup3', 'anotherGroup1', 'anotherGroup2', 'anotherGroup3'], ['user123', 'user12345']],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataGetContactsWhenUserIsInExcludeGroups')]
+	public function testGetContactsWhenUserIsInExcludeGroups(string $excludeGroups, string $excludeGroupsList, array $currentUserGroupIds, array $expectedUids): void {
 		$this->config
 			->method('getAppValue')
 			->willReturnMap([
 				['core', 'shareapi_allow_share_dialog_user_enumeration', 'yes', 'yes'],
 				['core', 'shareapi_restrict_user_enumeration_to_group', 'no', 'no'],
 				['core', 'shareapi_restrict_user_enumeration_to_phone', 'no', 'no'],
-				['core', 'shareapi_exclude_groups', 'no', 'yes'],
-				['core', 'shareapi_only_share_with_group_members', 'no', 'yes'],
-				['core', 'shareapi_exclude_groups_list', '', '["group1", "group5", "group6"]'],
+				['core', 'shareapi_exclude_groups', 'no', $excludeGroups],
+				['core', 'shareapi_only_share_with_group_members', 'no', 'no'],
+				['core', 'shareapi_exclude_groups_list', '', $excludeGroupsList],
+				['core', 'shareapi_only_share_with_group_members_exclude_group_list', '', '[]'],
 			]);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $currentUser */
+		/** @var IUser|MockObject $currentUser */
 		$currentUser = $this->createMock(IUser::class);
-		$currentUser->expects($this->once())
+		$currentUser->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user001');
 
-		$this->groupManager->expects($this->once())
+		$this->userManager->method('get')
+			->with('user001')
+			->willReturn($currentUser);
+
+		$this->groupManager->expects($this->exactly(2))
 			->method('getUserGroupIds')
 			->with($this->equalTo($currentUser))
-			->willReturn(['group1', 'group2', 'group3']);
-
+			->willReturn($currentUserGroupIds);
 
 		$this->contactsManager->expects($this->once())
 			->method('search')
@@ -219,13 +273,62 @@ class ContactsStoreTest extends TestCase {
 				],
 			]);
 
+		$entries = $this->contactsStore->getContacts($currentUser, '');
+
+		$this->assertCount(count($expectedUids), $entries);
+		for ($i = 0; $i < count($expectedUids); $i++) {
+			$this->assertEquals($expectedUids[$i], $entries[$i]->getProperty('UID'));
+		}
+	}
+
+	public function testGetContactsOnlyShareIfInTheSameGroupWhenUserIsInExcludeGroups(): void {
+		$this->config
+			->method('getAppValue')
+			->willReturnMap([
+				['core', 'shareapi_allow_share_dialog_user_enumeration', 'yes', 'yes'],
+				['core', 'shareapi_restrict_user_enumeration_to_group', 'no', 'no'],
+				['core', 'shareapi_restrict_user_enumeration_to_phone', 'no', 'no'],
+				['core', 'shareapi_exclude_groups', 'no', 'yes'],
+				['core', 'shareapi_only_share_with_group_members', 'no', 'yes'],
+				['core', 'shareapi_exclude_groups_list', '', '["group1", "group5", "group6"]'],
+				['core', 'shareapi_only_share_with_group_members_exclude_group_list', '', '[]'],
+			]);
+
+		/** @var IUser|MockObject $currentUser */
+		$currentUser = $this->createMock(IUser::class);
+		$currentUser->expects($this->exactly(3))
+			->method('getUID')
+			->willReturn('user001');
+
+		$this->userManager->method('get')
+			->with('user001')
+			->willReturn($currentUser);
+
+		$this->groupManager->expects($this->exactly(2))
+			->method('getUserGroupIds')
+			->with($this->equalTo($currentUser))
+			->willReturn(['group1', 'group2', 'group3']);
+
+		$this->contactsManager->expects($this->once())
+			->method('search')
+			->with($this->equalTo(''), $this->equalTo(['FN', 'EMAIL']))
+			->willReturn([
+				[
+					'UID' => 'user123',
+					'isLocalSystemBook' => true
+				],
+				[
+					'UID' => 'user12345',
+					'isLocalSystemBook' => true
+				],
+			]);
 
 		$entries = $this->contactsStore->getContacts($currentUser, '');
 
 		$this->assertCount(0, $entries);
 	}
 
-	public function testGetContactsOnlyShareIfInTheSameGroup() {
+	public function testGetContactsOnlyShareIfInTheSameGroup(): void {
 		$this->config
 			->method('getAppValue')
 			->willReturnMap([
@@ -234,46 +337,40 @@ class ContactsStoreTest extends TestCase {
 				['core', 'shareapi_restrict_user_enumeration_to_phone', 'no', 'no'],
 				['core', 'shareapi_exclude_groups', 'no', 'no'],
 				['core', 'shareapi_only_share_with_group_members', 'no', 'yes'],
+				['core', 'shareapi_only_share_with_group_members_exclude_group_list', '', '[]'],
 			]);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $currentUser */
+		/** @var IUser|MockObject $currentUser */
 		$currentUser = $this->createMock(IUser::class);
-		$currentUser->expects($this->once())
+		$currentUser->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user001');
 
-		$this->groupManager->expects($this->at(0))
-			->method('getUserGroupIds')
-			->with($this->equalTo($currentUser))
-			->willReturn(['group1', 'group2', 'group3']);
-
 		$user1 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(0))
-			->method('get')
-			->with('user1')
-			->willReturn($user1);
-		$this->groupManager->expects($this->at(1))
-			->method('getUserGroupIds')
-			->with($this->equalTo($user1))
-			->willReturn(['group1']);
 		$user2 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(1))
-			->method('get')
-			->with('user2')
-			->willReturn($user2);
-		$this->groupManager->expects($this->at(2))
-			->method('getUserGroupIds')
-			->with($this->equalTo($user2))
-			->willReturn(['group2', 'group3']);
 		$user3 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(2))
-			->method('get')
-			->with('user3')
-			->willReturn($user3);
-		$this->groupManager->expects($this->at(3))
+
+		$calls = [
+			[[$currentUser], ['group1', 'group2', 'group3']],
+			[[$user1], ['group1']],
+			[[$user2], ['group2', 'group3']],
+			[[$user3], ['group8', 'group9']],
+		];
+		$this->groupManager->expects($this->exactly(4))
 			->method('getUserGroupIds')
-			->with($this->equalTo($user3))
-			->willReturn(['group8', 'group9']);
+			->willReturnCallback(function () use (&$calls): array {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected[0], func_get_args());
+				return $expected[1];
+			});
+
+		$this->userManager->expects($this->exactly(3))
+			->method('get')
+			->willReturnMap([
+				['user1', $user1],
+				['user2', $user2],
+				['user3', $user3],
+			]);
 
 		$this->contactsManager->expects($this->once())
 			->method('search')
@@ -304,7 +401,7 @@ class ContactsStoreTest extends TestCase {
 		$this->assertEquals('contact', $entries[2]->getProperty('UID'));
 	}
 
-	public function testGetContactsOnlyEnumerateIfInTheSameGroup() {
+	public function testGetContactsOnlyEnumerateIfInTheSameGroup(): void {
 		$this->config
 			->method('getAppValue')
 			->willReturnMap([
@@ -313,46 +410,40 @@ class ContactsStoreTest extends TestCase {
 				['core', 'shareapi_restrict_user_enumeration_to_phone', 'no', 'no'],
 				['core', 'shareapi_exclude_groups', 'no', 'no'],
 				['core', 'shareapi_only_share_with_group_members', 'no', 'yes'],
+				['core', 'shareapi_only_share_with_group_members_exclude_group_list', '', '[]'],
 			]);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $currentUser */
+		/** @var IUser|MockObject $currentUser */
 		$currentUser = $this->createMock(IUser::class);
-		$currentUser->expects($this->once())
+		$currentUser->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user001');
 
-		$this->groupManager->expects($this->at(0))
-			->method('getUserGroupIds')
-			->with($this->equalTo($currentUser))
-			->willReturn(['group1', 'group2', 'group3']);
-
 		$user1 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(0))
-			->method('get')
-			->with('user1')
-			->willReturn($user1);
-		$this->groupManager->expects($this->at(1))
-			->method('getUserGroupIds')
-			->with($this->equalTo($user1))
-			->willReturn(['group1']);
 		$user2 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(1))
-			->method('get')
-			->with('user2')
-			->willReturn($user2);
-		$this->groupManager->expects($this->at(2))
-			->method('getUserGroupIds')
-			->with($this->equalTo($user2))
-			->willReturn(['group2', 'group3']);
 		$user3 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(2))
-			->method('get')
-			->with('user3')
-			->willReturn($user3);
-		$this->groupManager->expects($this->at(3))
+
+		$calls = [
+			[[$currentUser], ['group1', 'group2', 'group3']],
+			[[$user1], ['group1']],
+			[[$user2], ['group2', 'group3']],
+			[[$user3], ['group8', 'group9']],
+		];
+		$this->groupManager->expects($this->exactly(4))
 			->method('getUserGroupIds')
-			->with($this->equalTo($user3))
-			->willReturn(['group8', 'group9']);
+			->willReturnCallback(function () use (&$calls): array {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected[0], func_get_args());
+				return $expected[1];
+			});
+
+		$this->userManager->expects($this->exactly(3))
+			->method('get')
+			->willReturnMap([
+				['user1', $user1],
+				['user2', $user2],
+				['user3', $user3],
+			]);
 
 		$this->contactsManager->expects($this->once())
 			->method('search')
@@ -383,7 +474,7 @@ class ContactsStoreTest extends TestCase {
 		$this->assertEquals('contact', $entries[2]->getProperty('UID'));
 	}
 
-	public function testGetContactsOnlyEnumerateIfPhoneBookMatch() {
+	public function testGetContactsOnlyEnumerateIfPhoneBookMatch(): void {
 		$this->config
 			->method('getAppValue')
 			->willReturnMap([
@@ -394,13 +485,13 @@ class ContactsStoreTest extends TestCase {
 				['core', 'shareapi_only_share_with_group_members', 'no', 'no'],
 			]);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $currentUser */
+		/** @var IUser|MockObject $currentUser */
 		$currentUser = $this->createMock(IUser::class);
-		$currentUser->expects($this->once())
+		$currentUser->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user001');
 
-		$this->groupManager->expects($this->at(0))
+		$this->groupManager->expects($this->once())
 			->method('getUserGroupIds')
 			->with($this->equalTo($currentUser))
 			->willReturn(['group1', 'group2', 'group3']);
@@ -441,7 +532,7 @@ class ContactsStoreTest extends TestCase {
 		$this->assertEquals('contact', $entries[2]->getProperty('UID'));
 	}
 
-	public function testGetContactsOnlyEnumerateIfPhoneBookMatchWithOwnGroupsOnly() {
+	public function testGetContactsOnlyEnumerateIfPhoneBookMatchWithOwnGroupsOnly(): void {
 		$this->config
 			->method('getAppValue')
 			->willReturnMap([
@@ -450,46 +541,40 @@ class ContactsStoreTest extends TestCase {
 				['core', 'shareapi_restrict_user_enumeration_to_phone', 'no', 'yes'],
 				['core', 'shareapi_exclude_groups', 'no', 'no'],
 				['core', 'shareapi_only_share_with_group_members', 'no', 'yes'],
+				['core', 'shareapi_only_share_with_group_members_exclude_group_list', '', '[]'],
 			]);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $currentUser */
+		/** @var IUser|MockObject $currentUser */
 		$currentUser = $this->createMock(IUser::class);
-		$currentUser->expects($this->once())
+		$currentUser->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user001');
 
-		$this->groupManager->expects($this->at(0))
-			->method('getUserGroupIds')
-			->with($this->equalTo($currentUser))
-			->willReturn(['group1', 'group2', 'group3']);
-
 		$user1 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(0))
-			->method('get')
-			->with('user1')
-			->willReturn($user1);
-		$this->groupManager->expects($this->at(1))
-			->method('getUserGroupIds')
-			->with($this->equalTo($user1))
-			->willReturn(['group1']);
 		$user2 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(1))
-			->method('get')
-			->with('user2')
-			->willReturn($user2);
-		$this->groupManager->expects($this->at(2))
-			->method('getUserGroupIds')
-			->with($this->equalTo($user2))
-			->willReturn(['group2', 'group3']);
 		$user3 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(2))
-			->method('get')
-			->with('user3')
-			->willReturn($user3);
-		$this->groupManager->expects($this->at(3))
+
+		$calls = [
+			[[$currentUser], ['group1', 'group2', 'group3']],
+			[[$user1], ['group1']],
+			[[$user2], ['group2', 'group3']],
+			[[$user3], ['group8', 'group9']],
+		];
+		$this->groupManager->expects($this->exactly(4))
 			->method('getUserGroupIds')
-			->with($this->equalTo($user3))
-			->willReturn(['group8', 'group9']);
+			->willReturnCallback(function () use (&$calls): array {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected[0], func_get_args());
+				return $expected[1];
+			});
+
+		$this->userManager->expects($this->exactly(3))
+			->method('get')
+			->willReturnMap([
+				['user1', $user1],
+				['user2', $user2],
+				['user3', $user3],
+			]);
 
 		$this->knownUserService->method('isKnownToUser')
 			->willReturnMap([
@@ -527,7 +612,7 @@ class ContactsStoreTest extends TestCase {
 		$this->assertEquals('contact', $entries[2]->getProperty('UID'));
 	}
 
-	public function testGetContactsOnlyEnumerateIfPhoneBookOrSameGroup() {
+	public function testGetContactsOnlyEnumerateIfPhoneBookOrSameGroup(): void {
 		$this->config
 			->method('getAppValue')
 			->willReturnMap([
@@ -538,26 +623,30 @@ class ContactsStoreTest extends TestCase {
 				['core', 'shareapi_only_share_with_group_members', 'no', 'no'],
 			]);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $currentUser */
+		/** @var IUser|MockObject $currentUser */
 		$currentUser = $this->createMock(IUser::class);
-		$currentUser->expects($this->once())
+		$currentUser->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user001');
 
-		$this->groupManager->expects($this->at(0))
-			->method('getUserGroupIds')
-			->with($this->equalTo($currentUser))
-			->willReturn(['group1', 'group2', 'group3']);
-
 		$user1 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(0))
+
+		$calls = [
+			[[$currentUser], ['group1', 'group2', 'group3']],
+			[[$user1], ['group1']],
+		];
+		$this->groupManager->expects($this->exactly(2))
+			->method('getUserGroupIds')
+			->willReturnCallback(function () use (&$calls): array {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected[0], func_get_args());
+				return $expected[1];
+			});
+
+		$this->userManager->expects($this->once())
 			->method('get')
 			->with('user1')
 			->willReturn($user1);
-		$this->groupManager->expects($this->at(1))
-			->method('getUserGroupIds')
-			->with($this->equalTo($user1))
-			->willReturn(['group1']);
 
 		$this->knownUserService->method('isKnownToUser')
 			->willReturnMap([
@@ -596,7 +685,7 @@ class ContactsStoreTest extends TestCase {
 		$this->assertEquals('contact', $entries[3]->getProperty('UID'));
 	}
 
-	public function testGetContactsOnlyEnumerateIfPhoneBookOrSameGroupInOwnGroupsOnly() {
+	public function testGetContactsOnlyEnumerateIfPhoneBookOrSameGroupInOwnGroupsOnly(): void {
 		$this->config
 			->method('getAppValue')
 			->willReturnMap([
@@ -605,46 +694,40 @@ class ContactsStoreTest extends TestCase {
 				['core', 'shareapi_restrict_user_enumeration_to_phone', 'no', 'yes'],
 				['core', 'shareapi_exclude_groups', 'no', 'no'],
 				['core', 'shareapi_only_share_with_group_members', 'no', 'yes'],
+				['core', 'shareapi_only_share_with_group_members_exclude_group_list', '', '[]'],
 			]);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $currentUser */
+		/** @var IUser|MockObject $currentUser */
 		$currentUser = $this->createMock(IUser::class);
-		$currentUser->expects($this->once())
+		$currentUser->expects($this->exactly(3))
 			->method('getUID')
 			->willReturn('user001');
 
-		$this->groupManager->expects($this->at(0))
-			->method('getUserGroupIds')
-			->with($this->equalTo($currentUser))
-			->willReturn(['group1', 'group2', 'group3']);
-
 		$user1 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(0))
-			->method('get')
-			->with('user1')
-			->willReturn($user1);
-		$this->groupManager->expects($this->at(1))
-			->method('getUserGroupIds')
-			->with($this->equalTo($user1))
-			->willReturn(['group1']);
 		$user2 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(1))
-			->method('get')
-			->with('user2')
-			->willReturn($user2);
-		$this->groupManager->expects($this->at(2))
-			->method('getUserGroupIds')
-			->with($this->equalTo($user2))
-			->willReturn(['group2', 'group3']);
 		$user3 = $this->createMock(IUser::class);
-		$this->userManager->expects($this->at(2))
-			->method('get')
-			->with('user3')
-			->willReturn($user3);
-		$this->groupManager->expects($this->at(3))
+
+		$calls = [
+			[[$currentUser], ['group1', 'group2', 'group3']],
+			[[$user1], ['group1']],
+			[[$user2], ['group2', 'group3']],
+			[[$user3], ['group8', 'group9']],
+		];
+		$this->groupManager->expects($this->exactly(4))
 			->method('getUserGroupIds')
-			->with($this->equalTo($user3))
-			->willReturn(['group8', 'group9']);
+			->willReturnCallback(function () use (&$calls): array {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected[0], func_get_args());
+				return $expected[1];
+			});
+
+		$this->userManager->expects($this->exactly(3))
+			->method('get')
+			->willReturnMap([
+				['user1', $user1],
+				['user2', $user2],
+				['user3', $user3],
+			]);
 
 		$this->knownUserService->method('isKnownToUser')
 			->willReturnMap([
@@ -682,7 +765,7 @@ class ContactsStoreTest extends TestCase {
 		$this->assertEquals('contact', $entries[2]->getProperty('UID'));
 	}
 
-	public function testGetContactsWithFilter() {
+	public function testGetContactsWithFilter(): void {
 		$this->config
 			->method('getAppValue')
 			->willReturnMap([
@@ -690,7 +773,7 @@ class ContactsStoreTest extends TestCase {
 				['core', 'shareapi_restrict_user_enumeration_full_match', 'yes', 'yes'],
 			]);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
+		/** @var IUser|MockObject $user */
 		$user = $this->createMock(IUser::class);
 		$this->contactsManager->expects($this->any())
 			->method('search')
@@ -769,7 +852,7 @@ class ContactsStoreTest extends TestCase {
 		], $entry[0]->getEMailAddresses());
 	}
 
-	public function testGetContactsWithFilterWithoutFullMatch() {
+	public function testGetContactsWithFilterWithoutFullMatch(): void {
 		$this->config
 			->method('getAppValue')
 			->willReturnMap([
@@ -777,7 +860,7 @@ class ContactsStoreTest extends TestCase {
 				['core', 'shareapi_restrict_user_enumeration_full_match', 'yes', 'no'],
 			]);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
+		/** @var IUser|MockObject $user */
 		$user = $this->createMock(IUser::class);
 		$this->contactsManager->expects($this->any())
 			->method('search')
@@ -853,12 +936,20 @@ class ContactsStoreTest extends TestCase {
 		], $entry[0]->getEMailAddresses());
 	}
 
-	public function testFindOneUser() {
-		$this->config->expects($this->at(0))->method('getAppValue')
-			->with($this->equalTo('core'), $this->equalTo('shareapi_allow_share_dialog_user_enumeration'), $this->equalTo('yes'))
-			->willReturn('yes');
+	public function testFindOneUser(): void {
+		$this->config
+			->method('getAppValue')
+			->willReturnMap([
+				['core', 'shareapi_allow_share_dialog_user_enumeration', 'yes', 'yes'],
+				['core', 'shareapi_restrict_user_enumeration_to_group', 'no', 'no'],
+				['core', 'shareapi_restrict_user_enumeration_to_phone', 'no', 'no'],
+				['core', 'shareapi_restrict_user_enumeration_full_match', 'yes', 'yes'],
+				['core', 'shareapi_exclude_groups', 'no', 'yes'],
+				['core', 'shareapi_exclude_groups_list', '', ''],
+				['core', 'shareapi_only_share_with_group_members', 'no', 'no'],
+			]);
 
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
+		/** @var IUser|MockObject $user */
 		$user = $this->createMock(IUser::class);
 		$this->contactsManager->expects($this->once())
 			->method('search')
@@ -888,8 +979,8 @@ class ContactsStoreTest extends TestCase {
 		], $entry->getEMailAddresses());
 	}
 
-	public function testFindOneEMail() {
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
+	public function testFindOneEMail(): void {
+		/** @var IUser|MockObject $user */
 		$user = $this->createMock(IUser::class);
 		$this->contactsManager->expects($this->once())
 			->method('search')
@@ -919,8 +1010,8 @@ class ContactsStoreTest extends TestCase {
 		], $entry->getEMailAddresses());
 	}
 
-	public function testFindOneNotSupportedType() {
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
+	public function testFindOneNotSupportedType(): void {
+		/** @var IUser|MockObject $user */
 		$user = $this->createMock(IUser::class);
 
 		$entry = $this->contactsStore->findOne($user, 42, 'darren@roner.au');
@@ -928,8 +1019,8 @@ class ContactsStoreTest extends TestCase {
 		$this->assertEquals(null, $entry);
 	}
 
-	public function testFindOneNoMatches() {
-		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
+	public function testFindOneNoMatches(): void {
+		/** @var IUser|MockObject $user */
 		$user = $this->createMock(IUser::class);
 		$this->contactsManager->expects($this->once())
 			->method('search')
@@ -948,12 +1039,125 @@ class ContactsStoreTest extends TestCase {
 					'isLocalSystemBook' => false
 				],
 			]);
-		$user->expects($this->once())
-			->method('getUID')
-			->willReturn('user123');
+		$user->expects($this->never())
+			->method('getUID');
 
 		$entry = $this->contactsStore->findOne($user, 0, 'a567');
 
 		$this->assertEquals(null, $entry);
+	}
+
+	public function testGetRecentStatusFirst(): void {
+		$user = $this->createMock(IUser::class);
+		$status1 = new UserStatus();
+		$status1->setUserId('user1');
+		$status2 = new UserStatus();
+		$status2->setUserId('user2');
+		$this->statusService->expects(self::once())
+			->method('findAllRecentStatusChanges')
+			->willReturn([
+				$status1,
+				$status2,
+			]);
+		$user1 = $this->createMock(IUser::class);
+		$user1->method('getCloudId')->willReturn('user1@localcloud');
+		$user2 = $this->createMock(IUser::class);
+		$user2->method('getCloudId')->willReturn('user2@localcloud');
+		$this->userManager->expects(self::exactly(2))
+			->method('get')
+			->willReturnCallback(function ($uid) use ($user1, $user2) {
+				return match ($uid) {
+					'user1' => $user1,
+					'user2' => $user2,
+				};
+			});
+		$this->contactsManager
+			->expects(self::exactly(3))
+			->method('search')
+			->willReturnCallback(function ($uid, $searchProps, $options) {
+				return match ([$uid, $options['limit'] ?? null]) {
+					['user1@localcloud', 1] => [
+						[
+							'UID' => 'user1',
+							'URI' => 'user1.vcf',
+						],
+					],
+					['user2@localcloud' => [], 1], // Simulate not found
+					['', 4] => [
+						[
+							'UID' => 'contact1',
+							'URI' => 'contact1.vcf',
+						],
+						[
+							'UID' => 'contact2',
+							'URI' => 'contact2.vcf',
+						],
+					],
+					default => [],
+				};
+			});
+
+		$contacts = $this->contactsStore->getContacts(
+			$user,
+			null,
+			5,
+		);
+
+		self::assertCount(3, $contacts);
+		self::assertEquals('user1', $contacts[0]->getProperty('UID'));
+		self::assertEquals('contact1', $contacts[1]->getProperty('UID'));
+		self::assertEquals('contact2', $contacts[2]->getProperty('UID'));
+	}
+
+	public function testPaginateRecentStatus(): void {
+		$user = $this->createMock(IUser::class);
+		$status1 = new UserStatus();
+		$status1->setUserId('user1');
+		$status2 = new UserStatus();
+		$status2->setUserId('user2');
+		$status3 = new UserStatus();
+		$status3->setUserId('user3');
+		$this->statusService->expects(self::never())
+			->method('findAllRecentStatusChanges');
+		$this->contactsManager
+			->expects(self::exactly(2))
+			->method('search')
+			->willReturnCallback(function ($uid, $searchProps, $options) {
+				return match ([$uid, $options['limit'] ?? null, $options['offset'] ?? null]) {
+					['', 2, 0] => [
+						[
+							'UID' => 'contact1',
+							'URI' => 'contact1.vcf',
+						],
+						[
+							'UID' => 'contact2',
+							'URI' => 'contact2.vcf',
+						],
+					],
+					['', 2, 3] => [
+						[
+							'UID' => 'contact3',
+							'URI' => 'contact3.vcf',
+						],
+					],
+					default => [],
+				};
+			});
+
+		$page1 = $this->contactsStore->getContacts(
+			$user,
+			null,
+			2,
+			0,
+		);
+		$page2 = $this->contactsStore->getContacts(
+			$user,
+			null,
+			2,
+			3,
+		);
+
+		self::assertCount(2, $page1);
+		self::assertCount(1, $page2);
 	}
 }

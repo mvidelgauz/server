@@ -3,58 +3,41 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2020 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Morris Jobke <hey@morrisjobke.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\AppFramework\Bootstrap;
 
-use OCP\AppFramework\IAppContainer;
-use OCP\IServerContainer;
+use OCP\AppFramework\Attribute\Consumable;
 use Psr\Container\ContainerExceptionInterface;
+use Psr\Container\ContainerInterface;
 use Throwable;
 
 /**
  * @since 20.0.0
  */
+#[Consumable(since: '20.0.0')]
 interface IBootContext {
-
 	/**
 	 * Get hold of the app's container
 	 *
 	 * Useful to register and query app-specific services
 	 *
-	 * @return IAppContainer
 	 * @since 20.0.0
+	 * @since 35.0.0 Typed as returning a ContainerInterface instead of the deprecated IAppContainer
 	 */
-	public function getAppContainer(): IAppContainer;
+	public function getAppContainer(): ContainerInterface;
 
 	/**
 	 * Get hold of the server DI container
 	 *
 	 * Useful to register and query system-wide services
 	 *
-	 * @return IServerContainer
 	 * @since 20.0.0
+	 * @since 35.0.0 Typed as returning a ContainerInterface instead of the deprecated IServerContainer
 	 */
-	public function getServerContainer(): IServerContainer;
+	public function getServerContainer(): ContainerInterface;
 
 	/**
 	 * Invoke the given callable and inject all parameters based on their types

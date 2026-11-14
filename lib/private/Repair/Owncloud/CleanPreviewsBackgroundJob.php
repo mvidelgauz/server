@@ -1,76 +1,38 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright 2016 Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Julius Härtl <jus@bitgrid.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Repair\Owncloud;
 
-use OC\BackgroundJob\QueuedJob;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
+use OCP\BackgroundJob\QueuedJob;
 use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\Files\NotFoundException;
 use OCP\Files\NotPermittedException;
-use OCP\ILogger;
 use OCP\IUserManager;
+use Psr\Log\LoggerInterface;
 
 class CleanPreviewsBackgroundJob extends QueuedJob {
-	/** @var IRootFolder */
-	private $rootFolder;
-
-	/** @var ILogger */
-	private $logger;
-
-	/** @var IJobList */
-	private $jobList;
-
-	/** @var ITimeFactory */
-	private $timeFactory;
-
-	/** @var IUserManager */
-	private $userManager;
-
-	/**
-	 * CleanPreviewsBackgroundJob constructor.
-	 *
-	 * @param IRootFolder $rootFolder
-	 * @param ILogger $logger
-	 * @param IJobList $jobList
-	 * @param ITimeFactory $timeFactory
-	 * @param IUserManager $userManager
-	 */
-	public function __construct(IRootFolder $rootFolder,
-								ILogger $logger,
-								IJobList $jobList,
-								ITimeFactory $timeFactory,
-								IUserManager $userManager) {
-		$this->rootFolder = $rootFolder;
-		$this->logger = $logger;
-		$this->jobList = $jobList;
-		$this->timeFactory = $timeFactory;
-		$this->userManager = $userManager;
+	public function __construct(
+		private IRootFolder $rootFolder,
+		private LoggerInterface $logger,
+		private IJobList $jobList,
+		ITimeFactory $timeFactory,
+		private IUserManager $userManager,
+	) {
+		parent::__construct($timeFactory);
 	}
 
-	public function run($arguments) {
-		$uid = $arguments['uid'];
+	#[\Override]
+	public function run($argument): void {
+		$uid = $argument['uid'];
 		if (!$this->userManager->userExists($uid)) {
 			$this->logger->info('User no longer exists, skip user ' . $uid);
 			return;
@@ -87,10 +49,9 @@ class CleanPreviewsBackgroundJob extends QueuedJob {
 	}
 
 	/**
-	 * @param $uid
-	 * @return bool
+	 * @param string $uid
 	 */
-	private function cleanupPreviews($uid) {
+	private function cleanupPreviews($uid): bool {
 		try {
 			$userFolder = $this->rootFolder->getUserFolder($uid);
 		} catch (NotFoundException $e) {
@@ -108,7 +69,7 @@ class CleanPreviewsBackgroundJob extends QueuedJob {
 
 		$thumbnails = $thumbnailFolder->getDirectoryListing();
 
-		$start = $this->timeFactory->getTime();
+		$start = $this->time->getTime();
 		foreach ($thumbnails as $thumbnail) {
 			try {
 				$thumbnail->delete();
@@ -116,7 +77,7 @@ class CleanPreviewsBackgroundJob extends QueuedJob {
 				// Ignore
 			}
 
-			if (($this->timeFactory->getTime() - $start) > 15) {
+			if (($this->time->getTime() - $start) > 15) {
 				return false;
 			}
 		}

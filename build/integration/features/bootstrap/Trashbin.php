@@ -1,42 +1,26 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017, ownCloud GmbH.
- *
- * @author Daniel Calviño Sánchez <danxuliu@gmail.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2017 ownCloud GmbH
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
+use Behat\Step\Then;
+use Behat\Step\When;
 use PHPUnit\Framework\Assert;
 
-require __DIR__ . '/../../vendor/autoload.php';
+require __DIR__ . '/autoload.php';
 
 /**
  * Trashbin functions
  */
 trait Trashbin {
-
 	// WebDav trait is expected to be used in the class that uses this trait.
-
 	/**
-	 * @When User :user empties trashbin
 	 * @param string $user user
 	 */
+	#[When('User :user empties trashbin')]
 	public function emptyTrashbin($user) {
 		$client = $this->getSabreClient($user);
 		$response = $client->request('DELETE', $this->makeSabrePath($user, 'trash', 'trashbin'));
@@ -99,11 +83,11 @@ trait Trashbin {
 	}
 
 	/**
-	 * @Then /^user "([^"]*)" in trash folder "([^"]*)" should have the following elements$/
 	 * @param string $user
 	 * @param string $folder
 	 * @param \Behat\Gherkin\Node\TableNode|null $expectedElements
 	 */
+	#[Then('/^user "([^"]*)" in trash folder "([^"]*)" should have the following elements$/')]
 	public function checkTrashContents($user, $folder, $expectedElements) {
 		$elementList = $this->listTrashbinFolder($user, $folder);
 		$trashContent = array_filter(array_map(function (array $item) {
@@ -114,19 +98,19 @@ trait Trashbin {
 			$elementsSimplified = $this->simplifyArray($elementRows);
 			foreach ($elementsSimplified as $expectedElement) {
 				$expectedElement = ltrim($expectedElement, '/');
-				if (array_search($expectedElement, $trashContent) === false) {
-					Assert::fail("$expectedElement" . " is not in trash listing");
+				if (array_search($expectedElement, $trashContent, true) === false) {
+					Assert::fail("$expectedElement" . ' is not in trash listing');
 				}
 			}
 		}
 	}
 
 	/**
-	 * @Then /^as "([^"]*)" the (file|folder) "([^"]*)" exists in trash$/
 	 * @param string $user
 	 * @param string $type
 	 * @param string $file
 	 */
+	#[Then('/^as "([^"]*)" the (file|folder) "([^"]*)" exists in trash$/')]
 	public function checkTrashContains($user, $type, $file) {
 		$parent = dirname($file);
 		if ($parent === '.') {
@@ -138,25 +122,27 @@ trait Trashbin {
 			return $item['{http://nextcloud.org/ns}trashbin-filename'];
 		}, $elementList));
 
-		Assert::assertArraySubset([$name], array_values($trashContent));
+		if (array_search($name, array_values($trashContent), true) === false) {
+			Assert::fail("$name" . ' is not in trash listing');
+		}
 	}
 
 	/**
-	 * @Then /^user "([^"]*)" in trash folder "([^"]*)" should have (\d+) elements?$/
 	 * @param string $user
 	 * @param string $folder
 	 * @param \Behat\Gherkin\Node\TableNode|null $expectedElements
 	 */
+	#[Then('/^user "([^"]*)" in trash folder "([^"]*)" should have (\d+) elements?$/')]
 	public function checkTrashSize($user, $folder, $expectedCount) {
 		$elementList = $this->listTrashbinFolder($user, $folder);
 		Assert::assertEquals($expectedCount, count($elementList));
 	}
 
 	/**
-	 * @When /^user "([^"]*)" in restores "([^"]*)" from trash$/
 	 * @param string $user
 	 * @param string $file
 	 */
+	#[When('/^user "([^"]*)" in restores "([^"]*)" from trash$/')]
 	public function restoreFromTrash($user, $file) {
 		$file = $this->getFullTrashPath($user, $file);
 		$url = $this->makeSabrePath($user, 'trash' . $file, 'trashbin');

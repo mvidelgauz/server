@@ -1,46 +1,26 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Andreas Fischer <bantu@owncloud.com>
- * @author Bart Visscher <bartv@thisnet.nl>
- * @author Bernhard Ostertag <bernieo.code@gmx.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Łukasz Buśko <busko.lukasz@pm.me>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Sander Ruitenbeek <sander@grids.be>
- * @author Simon Spannagel <simonspa@kth.se>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Core\Command\Db;
 
 use Doctrine\DBAL\Exception;
 use Doctrine\DBAL\Schema\AbstractAsset;
 use Doctrine\DBAL\Schema\Table;
-use OCP\DB\Types;
+use Doctrine\DBAL\Types\Type;
 use OC\DB\Connection;
 use OC\DB\ConnectionFactory;
 use OC\DB\MigrationService;
+use OC\DB\PgSqlTools;
+use OCP\App\IAppManager;
 use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\DB\Types;
 use OCP\IConfig;
+use OCP\Server;
 use Stecman\Component\Symfony\Console\BashCompletion\Completion\CompletionAwareInterface;
 use Stecman\Component\Symfony\Console\BashCompletion\CompletionContext;
 use Symfony\Component\Console\Command\Command;
@@ -56,29 +36,17 @@ use function preg_match;
 use function preg_quote;
 
 class ConvertType extends Command implements CompletionAwareInterface {
-	/**
-	 * @var \OCP\IConfig
-	 */
-	protected $config;
+	protected array $columnTypes = [];
 
-	/**
-	 * @var \OC\DB\ConnectionFactory
-	 */
-	protected $connectionFactory;
-
-	/** @var array */
-	protected $columnTypes;
-
-	/**
-	 * @param \OCP\IConfig $config
-	 * @param \OC\DB\ConnectionFactory $connectionFactory
-	 */
-	public function __construct(IConfig $config, ConnectionFactory $connectionFactory) {
-		$this->config = $config;
-		$this->connectionFactory = $connectionFactory;
+	public function __construct(
+		protected IConfig $config,
+		protected ConnectionFactory $connectionFactory,
+		protected IAppManager $appManager,
+	) {
 		parent::__construct();
 	}
 
+	#[\Override]
 	protected function configure() {
 		$this
 			->setName('db:convert-type')
@@ -181,21 +149,25 @@ class ConvertType extends Command implements CompletionAwareInterface {
 		if ($input->isInteractive()) {
 			/** @var QuestionHelper $helper */
 			$helper = $this->getHelper('question');
-			$question = new Question('What is the database password?');
+			$question = new Question('What is the database password (press <enter> for none)? ');
 			$question->setHidden(true);
 			$question->setHiddenFallback(false);
 			$password = $helper->ask($input, $output, $question);
+			if ($password === null) {
+				$password = ''; // possibly unnecessary
+			}
 			$input->setOption('password', $password);
 			return;
 		}
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$this->validateInput($input, $output);
 		$this->readPassword($input, $output);
 
 		/** @var Connection $fromDB */
-		$fromDB = \OC::$server->get(Connection::class);
+		$fromDB = Server::get(Connection::class);
 		$toDB = $this->getToDBConnection($input, $output);
 
 		if ($input->getOption('clear-schema')) {
@@ -213,7 +185,7 @@ class ConvertType extends Command implements CompletionAwareInterface {
 			$output->writeln('<comment>The following tables will not be converted:</comment>');
 			$output->writeln($extraFromTables);
 			if (!$input->getOption('all-apps')) {
-				$output->writeln('<comment>Please note that tables belonging to available but currently not installed apps</comment>');
+				$output->writeln('<comment>Please note that tables belonging to disabled (but not removed) apps</comment>');
 				$output->writeln('<comment>can be included by specifying the --all-apps option.</comment>');
 			}
 
@@ -242,11 +214,13 @@ class ConvertType extends Command implements CompletionAwareInterface {
 			$toMS->migrate($currentMigration);
 		}
 
-		$apps = $input->getOption('all-apps') ? \OC_App::getAllApps() : \OC_App::getEnabledApps();
+		$apps = $input->getOption('all-apps')
+			? $this->appManager->getAllAppsInAppsFolders()
+			: $this->appManager->getEnabledApps();
 		foreach ($apps as $app) {
-			$output->writeln('<info> - '.$app.'</info>');
+			$output->writeln('<info> - ' . $app . '</info>');
 			// Make sure autoloading works...
-			\OC_App::loadApp($app);
+			$this->appManager->loadApp($app);
 			$fromMS = new MigrationService($app, $fromDB);
 			$currentMigration = $fromMS->getMigration('current');
 			if ($currentMigration !== '0') {
@@ -258,16 +232,31 @@ class ConvertType extends Command implements CompletionAwareInterface {
 
 	protected function getToDBConnection(InputInterface $input, OutputInterface $output) {
 		$type = $input->getArgument('type');
-		$connectionParams = $this->connectionFactory->createConnectionParams();
+		$connectionParams = $this->connectionFactory->createConnectionParams(type: $type);
 		$connectionParams = array_merge($connectionParams, [
 			'host' => $input->getArgument('hostname'),
 			'user' => $input->getArgument('username'),
 			'password' => $input->getOption('password'),
 			'dbname' => $input->getArgument('database'),
 		]);
+
+		// parse port
 		if ($input->getOption('port')) {
 			$connectionParams['port'] = $input->getOption('port');
 		}
+
+		// parse hostname for unix socket
+		if (preg_match('/^(.+)(:(\d+|[^:]+))?$/', $input->getArgument('hostname'), $matches)) {
+			$connectionParams['host'] = $matches[1];
+			if (isset($matches[3])) {
+				if (is_numeric($matches[3])) {
+					$connectionParams['port'] = $matches[3];
+				} else {
+					$connectionParams['unix_socket'] = $matches[3];
+				}
+			}
+		}
+
 		return $this->connectionFactory->getConnection($type, $connectionParams);
 	}
 
@@ -277,7 +266,7 @@ class ConvertType extends Command implements CompletionAwareInterface {
 			$output->writeln('<info>Clearing schema in new database</info>');
 		}
 		foreach ($toTables as $table) {
-			$db->getSchemaManager()->dropTable($table);
+			$db->createSchemaManager()->dropTable($table);
 		}
 	}
 
@@ -290,7 +279,7 @@ class ConvertType extends Command implements CompletionAwareInterface {
 			}
 			return preg_match($filterExpression, $asset) !== false;
 		});
-		return $db->getSchemaManager()->listTableNames();
+		return $db->createSchemaManager()->listTableNames();
 	}
 
 	/**
@@ -312,7 +301,7 @@ class ConvertType extends Command implements CompletionAwareInterface {
 		$query->automaticTablePrefix(false);
 		$query->select($query->func()->count('*', 'num_entries'))
 			->from($table->getName());
-		$result = $query->execute();
+		$result = $query->executeQuery();
 		$count = $result->fetchOne();
 		$result->closeCursor();
 
@@ -351,29 +340,39 @@ class ConvertType extends Command implements CompletionAwareInterface {
 		for ($chunk = 0; $chunk < $numChunks; $chunk++) {
 			$query->setFirstResult($chunk * $chunkSize);
 
-			$result = $query->execute();
+			$result = $query->executeQuery();
 
-			while ($row = $result->fetch()) {
-				$progress->advance();
-				if (!$parametersCreated) {
+			try {
+				$toDB->beginTransaction();
+
+				foreach ($result->iterateAssociative() as $row) {
+					$progress->advance();
+					if (!$parametersCreated) {
+						foreach ($row as $key => $value) {
+							$insertQuery->setValue($key, $insertQuery->createParameter($key));
+						}
+						$parametersCreated = true;
+					}
+
 					foreach ($row as $key => $value) {
-						$insertQuery->setValue($key, $insertQuery->createParameter($key));
+						$type = $this->getColumnType($table, $key);
+						if ($type !== false) {
+							$insertQuery->setParameter($key, $value, $type);
+						} else {
+							$insertQuery->setParameter($key, $value);
+						}
 					}
-					$parametersCreated = true;
+					$insertQuery->executeStatement();
 				}
+				$result->closeCursor();
 
-				foreach ($row as $key => $value) {
-					$type = $this->getColumnType($table, $key);
-					if ($type !== false) {
-						$insertQuery->setParameter($key, $value, $type);
-					} else {
-						$insertQuery->setParameter($key, $value);
-					}
-				}
-				$insertQuery->execute();
+				$toDB->commit();
+			} catch (\Throwable $e) {
+				$toDB->rollBack();
+				throw $e;
 			}
-			$result->closeCursor();
 		}
+
 		$progress->finish();
 		$output->writeln('');
 	}
@@ -384,7 +383,7 @@ class ConvertType extends Command implements CompletionAwareInterface {
 			return $this->columnTypes[$tableName][$columnName];
 		}
 
-		$type = $table->getColumn($columnName)->getType()->getName();
+		$type = Type::lookupName($table->getColumn($columnName)->getType());
 
 		switch ($type) {
 			case Types::BLOB:
@@ -408,11 +407,11 @@ class ConvertType extends Command implements CompletionAwareInterface {
 		try {
 			// copy table rows
 			foreach ($tables as $table) {
-				$output->writeln('<info> - '.$table.'</info>');
+				$output->writeln('<info> - ' . $table . '</info>');
 				$this->copyTable($fromDB, $toDB, $schema->getTable($table), $input, $output);
 			}
 			if ($input->getArgument('type') === 'pgsql') {
-				$tools = new \OC\DB\PgSqlTools($this->config);
+				$tools = new PgSqlTools($this->config);
 				$tools->resynchronizeDatabaseSequences($toDB);
 			}
 			// save new database config
@@ -431,7 +430,7 @@ class ConvertType extends Command implements CompletionAwareInterface {
 		$dbName = $input->getArgument('database');
 		$password = $input->getOption('password');
 		if ($input->getOption('port')) {
-			$dbHost .= ':'.$input->getOption('port');
+			$dbHost .= ':' . $input->getOption('port');
 		}
 
 		$this->config->setSystemValues([
@@ -450,6 +449,7 @@ class ConvertType extends Command implements CompletionAwareInterface {
 	 * @param CompletionContext $context
 	 * @return string[]
 	 */
+	#[\Override]
 	public function completeOptionValues($optionName, CompletionContext $context) {
 		return [];
 	}
@@ -461,6 +461,7 @@ class ConvertType extends Command implements CompletionAwareInterface {
 	 * @param CompletionContext $context
 	 * @return string[]
 	 */
+	#[\Override]
 	public function completeArgumentValues($argumentName, CompletionContext $context) {
 		if ($argumentName === 'type') {
 			return ['mysql', 'oci', 'pgsql'];

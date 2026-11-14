@@ -1,77 +1,64 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files\Tests\Command;
 
+use OC\Files\Storage\Temporary;
 use OC\Files\View;
 use OCA\Files\Command\DeleteOrphanedFiles;
+use OCP\Console\IOutput;
+use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\Files\Cache\ICacheEntry;
+use OCP\Files\IRootFolder;
+use OCP\Files\NotFoundException;
 use OCP\Files\StorageNotAvailableException;
-use Symfony\Component\Console\Input\InputInterface;
-use Symfony\Component\Console\Output\OutputInterface;
+use OCP\FilesMetadata\IFilesMetadataManager;
+use OCP\IDBConnection;
+use OCP\IUserManager;
+use OCP\Server;
 use Test\TestCase;
 
 /**
  * Class DeleteOrphanedFilesTest
  *
- * @group DB
  *
  * @package OCA\Files\Tests\Command
  */
+#[\PHPUnit\Framework\Attributes\Group(name: 'DB')]
 class DeleteOrphanedFilesTest extends TestCase {
 
-	/**
-	 * @var DeleteOrphanedFiles
-	 */
-	private $command;
-
-	/**
-	 * @var \OCP\IDBConnection
-	 */
-	private $connection;
-
-	/**
-	 * @var string
-	 */
-	private $user1;
+	private DeleteOrphanedFiles $command;
+	private IDBConnection $connection;
+	private string $user1;
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->connection = \OC::$server->getDatabaseConnection();
+		$this->connection = Server::get(IDBConnection::class);
 
 		$this->user1 = $this->getUniqueID('user1_');
 
-		$userManager = \OC::$server->getUserManager();
+		$userManager = Server::get(IUserManager::class);
 		$userManager->createUser($this->user1, 'pass');
 
 		$this->command = new DeleteOrphanedFiles($this->connection);
 	}
 
 	protected function tearDown(): void {
-		$userManager = \OC::$server->getUserManager();
+		// since we deleted the storage it might throw a (valid) StorageNotAvailableException
+		try {
+			$view = new View('/' . $this->user1 . '/files');
+			$view->unlink('test');
+		} catch (StorageNotAvailableException|NotFoundException $e) {
+		}
+
+		$userManager = Server::get(IUserManager::class);
 		$user1 = $userManager->get($this->user1);
 		if ($user1) {
 			$user1->delete();
@@ -82,74 +69,150 @@ class DeleteOrphanedFilesTest extends TestCase {
 		parent::tearDown();
 	}
 
-	protected function getFile($fileId) {
-		$stmt = $this->connection->executeQuery('SELECT * FROM `*PREFIX*filecache` WHERE `fileid` = ?', [$fileId]);
-		return $stmt->fetchAll();
+	protected function getFile(int $fileId): array {
+		$query = $this->connection->getQueryBuilder();
+		$query->select('*')
+			->from('filecache')
+			->where($query->expr()->eq('fileid', $query->createNamedParameter($fileId)));
+		return $query->executeQuery()->fetchAllAssociative();
 	}
 
-	protected function getMounts($storageId) {
-		$stmt = $this->connection->executeQuery('SELECT * FROM `*PREFIX*mounts` WHERE `storage_id` = ?', [$storageId]);
-		return $stmt->fetchAll();
+	protected function getMountsCount(int $storageId): int {
+		$query = $this->connection->getQueryBuilder();
+		$query->select($query->func()->count())
+			->from('mounts')
+			->where($query->expr()->eq('storage_id', $query->createNamedParameter($storageId)));
+		return (int)$query->executeQuery()->fetchOne();
+	}
+
+	/**
+	 * @param list<int> $fileIds
+	 */
+	protected function countRows(string $table, string $column, array $fileIds): int {
+		// selecting rows instead of COUNT(*), which a sharded query answers once per shard
+		$query = $this->connection->getQueryBuilder();
+		$query->select($column)
+			->from($table)
+			->where($query->expr()->in($column, $query->createNamedParameter($fileIds, IQueryBuilder::PARAM_INT_ARRAY)));
+		return count($query->executeQuery()->fetchFirstColumn());
+	}
+
+	/**
+	 * @param list<string> $calls
+	 */
+	protected function expectOutput(IOutput&\PHPUnit\Framework\MockObject\MockObject $output, array $calls): void {
+		$output
+			->expects($this->exactly(count($calls)))
+			->method('writeln')
+			->willReturnCallback(function (string $message) use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertSame($expected, $message);
+			});
 	}
 
 	/**
 	 * Test clearing orphaned files
 	 */
-	public function testClearFiles() {
-		$input = $this->getMockBuilder(InputInterface::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$output = $this->getMockBuilder(OutputInterface::class)
-			->disableOriginalConstructor()
-			->getMock();
+	public function testClearFiles(): void {
+		$output = $this->createMock(IOutput::class);
+
+		$rootFolder = Server::get(IRootFolder::class);
 
 		// scan home storage so that mounts are properly setup
-		\OC::$server->getRootFolder()->getUserFolder($this->user1)->getStorage()->getScanner()->scan('');
+		$rootFolder->getUserFolder($this->user1)->getStorage()->getScanner()->scan('');
 
 		$this->loginAsUser($this->user1);
 
+		$view = new View('/' . $this->user1 . '/files');
+		$view->mkdir('test');
 
-		$view = new View('/' . $this->user1 . '/');
-		$view->mkdir('files/test');
-
-		$fileInfo = $view->getFileInfo('files/test');
+		$fileInfo = $view->getFileInfo('test');
 
 		$storageId = $fileInfo->getStorage()->getId();
-		$numericStorageId = $fileInfo->getStorage()->getStorageCache()->getNumericId();
+		$numericStorageId = $fileInfo->getStorage()->getCache()->getNumericStorageId();
 
 		$this->assertCount(1, $this->getFile($fileInfo->getId()), 'Asserts that file is available');
-		$this->assertCount(1, $this->getMounts($numericStorageId), 'Asserts that mount is available');
+		$this->assertEquals(1, $this->getMountsCount($numericStorageId), 'Asserts that mount is available');
 
-		$this->command->execute($input, $output);
+		($this->command)($output);
 
 		$this->assertCount(1, $this->getFile($fileInfo->getId()), 'Asserts that file is still available');
-		$this->assertCount(1, $this->getMounts($numericStorageId), 'Asserts that mount is still available');
+		$this->assertEquals(1, $this->getMountsCount($numericStorageId), 'Asserts that mount is still available');
 
+		$qb = $this->connection->getQueryBuilder();
+		$storageFileIds = array_map('intval', $qb->select('fileid')
+			->from('filecache')
+			->where($qb->expr()->eq('storage', $qb->createNamedParameter($numericStorageId, IQueryBuilder::PARAM_INT)))
+			->executeQuery()
+			->fetchFirstColumn());
+		$extendedEntries = $this->countRows('filecache_extended', 'fileid', $storageFileIds);
+		$metadataEntries = $this->countRows('files_metadata', 'file_id', $storageFileIds);
+		$metadataIndexEntries = $this->countRows('files_metadata_index', 'file_id', $storageFileIds);
 
-		$deletedRows = $this->connection->executeUpdate('DELETE FROM `*PREFIX*storages` WHERE `id` = ?', [$storageId]);
+		$qb = $this->connection->getQueryBuilder();
+		$deletedRows = $qb->delete('storages')
+			->where($qb->expr()->eq('id', $qb->createNamedParameter($storageId)))
+			->executeStatement();
 		$this->assertNotNull($deletedRows, 'Asserts that storage got deleted');
 		$this->assertSame(1, $deletedRows, 'Asserts that storage got deleted');
 
 		// parent folder, `files`, ´test` and `welcome.txt` => 4 elements
-		$output
-			->expects($this->at(0))
-			->method('writeln')
-			->with('3 orphaned file cache entries deleted');
+		$this->expectOutput($output, [
+			'3 orphaned file cache entries deleted',
+			"$extendedEntries orphaned file cache extended entries deleted",
+			"$metadataEntries orphaned file metadata entries deleted",
+			"$metadataIndexEntries orphaned file metadata index entries deleted",
+			'1 orphaned mount entries deleted',
+		]);
 
-		$output
-			->expects($this->at(1))
-			->method('writeln')
-			->with('1 orphaned mount entries deleted');
-
-		$this->command->execute($input, $output);
+		($this->command)($output);
 
 		$this->assertCount(0, $this->getFile($fileInfo->getId()), 'Asserts that file gets cleaned up');
-		$this->assertCount(0, $this->getMounts($numericStorageId), 'Asserts that mount gets cleaned up');
+		$this->assertEquals(0, $this->getMountsCount($numericStorageId), 'Asserts that mount gets cleaned up');
+	}
 
-		// since we deleted the storage it might throw a (valid) StorageNotAvailableException
-		try {
-			$view->unlink('files/test');
-		} catch (StorageNotAvailableException $e) {
+	public function testClearEntriesWithoutFileCacheEntry(): void {
+		// remove orphans left behind by other tests so that the counts below only cover this test
+		($this->command)($this->createMock(IOutput::class));
+
+		$storage = new Temporary([]);
+		$cache = $storage->getCache();
+		$cache->put('', ['size' => 0, 'mtime' => 0, 'mimetype' => ICacheEntry::DIRECTORY_MIMETYPE]);
+		$data = ['size' => 1, 'mtime' => 1, 'mimetype' => 'text/plain', 'upload_time' => 25];
+		$orphanId = $cache->put('orphan.txt', $data);
+		$keptId = $cache->put('kept.txt', $data);
+
+		$metadataManager = Server::get(IFilesMetadataManager::class);
+		foreach ([$orphanId, $keptId] as $fileId) {
+			$metadata = $metadataManager->getMetadata($fileId, true);
+			$metadata->setString('test-key', 'value', true);
+			$metadataManager->saveMetadata($metadata);
 		}
+
+		$qb = $this->connection->getQueryBuilder();
+		$qb->delete('filecache')
+			->where($qb->expr()->eq('fileid', $qb->createNamedParameter($orphanId, IQueryBuilder::PARAM_INT)))
+			->executeStatement();
+
+		$output = $this->createMock(IOutput::class);
+		$this->expectOutput($output, [
+			'0 orphaned file cache entries deleted',
+			'1 orphaned file cache extended entries deleted',
+			'1 orphaned file metadata entries deleted',
+			'1 orphaned file metadata index entries deleted',
+			'0 orphaned mount entries deleted',
+		]);
+
+		($this->command)($output);
+
+		$this->assertSame(0, $this->countRows('filecache_extended', 'fileid', [$orphanId]));
+		$this->assertSame(0, $this->countRows('files_metadata', 'file_id', [$orphanId]));
+		$this->assertSame(0, $this->countRows('files_metadata_index', 'file_id', [$orphanId]));
+
+		$this->assertSame(1, $this->countRows('filecache_extended', 'fileid', [$keptId]));
+		$this->assertSame(1, $this->countRows('files_metadata', 'file_id', [$keptId]));
+		$this->assertSame(1, $this->countRows('files_metadata_index', 'file_id', [$keptId]));
+
+		$cache->clear();
 	}
 }

@@ -1,255 +1,217 @@
 <!--
-  - @copyright 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
-  -
-  - @author 2019 Christoph Wurst <christoph@winzerhof-wurst.at>
-  -
-  - @license GNU AGPL version 3 or any later version
-  -
-  - This program is free software: you can redistribute it and/or modify
-  - it under the terms of the GNU Affero General Public License as
-  - published by the Free Software Foundation, either version 3 of the
-  - License, or (at your option) any later version.
-  -
-  - This program is distributed in the hope that it will be useful,
-  - but WITHOUT ANY WARRANTY; without even the implied warranty of
-  - MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  - GNU Affero General Public License for more details.
-  -
-  - You should have received a copy of the GNU Affero General Public License
-  - along with this program.  If not, see <http://www.gnu.org/licenses/>.
-  -->
+  - SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 
-<template>
-	<div>
-		<h3>{{ t('files', 'Transfer ownership of a file or folder') }} </h3>
-		<form @submit.prevent="submit">
-			<p class="transfer-select-row">
-				<span>{{ readableDirectory }}</span>
-				<button v-if="directory === undefined" @click.prevent="start">
-					{{ t('files', 'Choose file or folder to transfer') }}
-				</button>
-				<button v-else @click.prevent="start">
-					{{ t('files', 'Change') }}
-				</button>
-				<span class="error">{{ directoryPickerError }}</span>
-			</p>
-			<p class="new-owner-row">
-				<label for="targetUser">
-					<span>{{ t('files', 'New owner') }}</span>
-				</label>
-				<Multiselect
-					id="targetUser"
-					v-model="selectedUser"
-					:options="formatedUserSuggestions"
-					:multiple="false"
-					:searchable="true"
-					:placeholder="t('files', 'Search users')"
-					:preselect-first="true"
-					:preserve-search="true"
-					:loading="loadingUsers"
-					track-by="user"
-					label="displayName"
-					:internal-search="false"
-					:clear-on-select="false"
-					:user-select="true"
-					class="middle-align"
-					@search-change="findUserDebounced" />
-			</p>
-			<p>
-				<input type="submit"
-					class="primary"
-					:value="submitButtonText"
-					:disabled="!canSubmit">
-				<span class="error">{{ submitError }}</span>
-			</p>
-		</form>
-	</div>
-</template>
+<script setup lang="ts">
+import type { INode } from '@nextcloud/files'
+import type { OCSResponse } from '@nextcloud/typings/ocs'
+import type { NcSelectUsersModel } from '@nextcloud/vue/components/NcSelectUsers'
 
-<script>
-import axios from '@nextcloud/axios'
-import debounce from 'debounce'
+import { mdiFolderOutline } from '@mdi/js'
+import { getCurrentUser } from '@nextcloud/auth'
+import axios, { isAxiosError } from '@nextcloud/axios'
+import { getCapabilities } from '@nextcloud/capabilities'
+import { FilePickerClosed, getFilePickerBuilder, showError, showSuccess } from '@nextcloud/dialogs'
+import { t } from '@nextcloud/l10n'
 import { generateOcsUrl } from '@nextcloud/router'
-import { getFilePickerBuilder, showSuccess } from '@nextcloud/dialogs'
-import Multiselect from '@nextcloud/vue/dist/Components/Multiselect'
-import Vue from 'vue'
+import { useDebounceFn } from '@vueuse/core'
+import { computed, onBeforeMount, ref } from 'vue'
+import NcButton from '@nextcloud/vue/components/NcButton'
+import NcFormBox from '@nextcloud/vue/components/NcFormBox'
+import NcFormBoxButton from '@nextcloud/vue/components/NcFormBoxButton'
+import NcFormGroup from '@nextcloud/vue/components/NcFormGroup'
+import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
+import NcSelectUsers from '@nextcloud/vue/components/NcSelectUsers'
+import { logger } from '../utils/logger.ts'
 
-import logger from '../logger'
-
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const minSearchStringLength = (getCapabilities() as any).files_sharing.sharee.minSearchStringLength
 const picker = getFilePickerBuilder(t('files', 'Choose a file or folder to transfer'))
-	.setMultiSelect(false)
-	.setModal(true)
-	.setType(1)
 	.allowDirectories()
+	.setMultiSelect(false)
+	.setButtonFactory(([node]) => {
+		const canPick = !!node?.path && node.owner === getCurrentUser()!.uid
+		return [{
+			label: canPick
+				? t('files', 'Transfer "{path}"', { path: node.displayname })
+				: t('files', 'Select file or folder'),
+			callback: () => {},
+			disabled: !canPick,
+			variant: 'primary',
+		}]
+	})
 	.build()
 
-export default {
-	name: 'TransferOwnershipDialogue',
-	components: {
-		Multiselect,
-	},
-	data() {
-		return {
-			directory: undefined,
-			directoryPickerError: undefined,
-			submitError: undefined,
-			loadingUsers: false,
-			selectedUser: null,
-			userSuggestions: {},
-			config: {
-				minSearchStringLength: parseInt(OC.config['sharing.minSearchStringLength'], 10) || 0,
-			},
+const nodeForTransfer = ref<INode>()
+const loadingUsers = ref(false)
+const selectedUser = ref<NcSelectUsersModel>()
+const userSuggestions = ref<NcSelectUsersModel[]>([])
+
+const canSubmit = computed(() => !!nodeForTransfer.value && !!selectedUser.value)
+
+const submitButtonText = computed(() => {
+	if (!nodeForTransfer.value || !selectedUser.value) {
+		return t('files', 'Transfer')
+	}
+	return t('files', 'Transfer {path} to {userid}', { path: nodeForTransfer.value!.displayname, userid: selectedUser.value!.displayName })
+})
+
+onBeforeMount(() => searchUsers(''))
+
+/**
+ * Open the file picker to choose a file or folder for which the ownership should be transferred.
+ */
+async function chooseNodeForTransfer() {
+	try {
+		const [node] = await picker.pickNodes()
+		nodeForTransfer.value = node
+	} catch (error) {
+		if (error instanceof FilePickerClosed) {
+			logger.debug('Selecting object for transfer aborted', { error })
+			return
 		}
-	},
-	computed: {
-		canSubmit() {
-			return !!this.directory && !!this.selectedUser
-		},
-		formatedUserSuggestions() {
-			return Object.keys(this.userSuggestions).map((uid) => {
-				const user = this.userSuggestions[uid]
-				return {
-					user: user.uid,
-					displayName: user.displayName,
-					icon: 'icon-user',
-				}
-			})
-		},
-		submitButtonText() {
-			if (!this.canSubmit) {
-				return t('files', 'Transfer')
-			}
-			const components = this.readableDirectory.split('/')
-			return t('files', 'Transfer {path} to {userid}', { path: components[components.length - 1], userid: this.selectedUser.displayName })
-		},
-		readableDirectory() {
-			if (!this.directory) {
-				return ''
-			}
-			return this.directory.substring(1)
-		},
-	},
-	created() {
-		this.findUserDebounced = debounce(this.findUser, 300)
-		this.findUser('')
-	},
-	methods: {
-		start() {
-			this.directoryPickerError = undefined
 
-			picker.pick()
-				.then(dir => dir === '' ? '/' : dir)
-				.then(dir => {
-					logger.debug(`path ${dir} selected for transferring ownership`)
-					if (!dir.startsWith('/')) {
-						throw new Error(t('files', 'Invalid path selected'))
-					}
-					// /ocs/v2.php/apps/files/api/v1/transferownership
-					// /ocs/v2.php/apps/files/api/v1/transferownership
-					this.directory = dir
-				}).catch(error => {
-					logger.error(`Selecting object for transfer aborted: ${error.message || 'Unknown error'}`, { error })
+		nodeForTransfer.value = undefined
+		logger.error('Error while opening file picker for transfer ownership', { error })
+		showError(t('files', 'Error while opening file picker for transfer ownership'))
+		return
+	}
+}
 
-					this.directoryPickerError = error.message || t('files', 'Unknown error')
-				})
-		},
-		async findUser(query) {
-			this.query = query.trim()
+const searchUsersDebounced = useDebounceFn(searchUsers, 500)
 
-			if (query.length < this.config.minSearchStringLength) {
-				return
-			}
+/**
+ * Handle the user search input and fetch matching users from the server.
+ *
+ * @param query - The search string entered by the user
+ */
+async function searchUsers(query: string) {
+	query = query.trim()
+	if (query.length < minSearchStringLength) {
+		return
+	}
 
-			this.loadingUsers = true
-			try {
-				const response = await axios.get(generateOcsUrl('apps/files_sharing/api/v1/sharees'), {
-					params: {
-						format: 'json',
-						itemType: 'file',
-						search: query,
-						perPage: 20,
-						lookup: false,
-					},
-				})
+	loadingUsers.value = true
+	try {
+		const response = await axios.get<OCSResponse>(generateOcsUrl('apps/files_sharing/api/v1/sharees'), {
+			params: {
+				format: 'json',
+				itemType: 'file',
+				search: query,
+				perPage: 20,
+				lookup: false,
+			},
+		})
 
-				this.userSuggestions = {}
-				response.data.ocs.data.exact.users.concat(response.data.ocs.data.users).forEach(user => {
-					Vue.set(this.userSuggestions, user.value.shareWith, {
-						uid: user.value.shareWith,
-						displayName: user.label,
-					})
-				})
-			} catch (error) {
-				logger.error('could not fetch users', { error })
-			} finally {
-				this.loadingUsers = false
-			}
-		},
-		submit() {
-			if (!this.canSubmit) {
-				logger.warn('ignoring form submit')
-			}
+		const data = [...response.data.ocs.data.exact.users, ...response.data.ocs.data.users]
+		userSuggestions.value = data.map((user) => ({
+			displayName: user.label,
+			id: user.value.shareWith,
+			user: user.value.shareWith,
+			subname: user.shareWithDisplayNameUnique,
+		} as NcSelectUsersModel))
+	} catch (error) {
+		logger.error('could not fetch users', { error })
+		showError(t('files', 'Error while searching for users'))
+	} finally {
+		loadingUsers.value = false
+	}
+}
 
-			this.submitError = undefined
-			const data = {
-				path: this.directory,
-				recipient: this.selectedUser.user,
-			}
-			logger.debug('submit transfer ownership form', data)
+/**
+ * Handle submit of the ownership transfer.
+ */
+async function submit() {
+	if (!canSubmit.value) {
+		logger.warn('ignoring form submit')
+	}
 
-			const url = generateOcsUrl('apps/files/api/v1/transferownership')
+	const requestParameters = {
+		path: nodeForTransfer.value?.path,
+		recipient: selectedUser.value?.user,
+	}
+	logger.debug('submit transfer ownership form', { requestParameters })
 
-			axios.post(url, data)
-				.then(resp => resp.data)
-				.then(data => {
-					logger.info('Transfer ownership request sent', { data })
+	try {
+		const url = generateOcsUrl('apps/files/api/v1/transferownership')
+		const { data } = await axios.post(url, requestParameters)
+		logger.info('Transfer ownership request sent', { data })
 
-					this.directory = undefined
-					this.selectedUser = null
-					showSuccess(t('files', 'Ownership transfer request sent'))
-				})
-				.catch(error => {
-					logger.error('Could not send ownership transfer request', { error })
+		nodeForTransfer.value = undefined
+		selectedUser.value = undefined
+		showSuccess(t('files', 'Ownership transfer request sent'))
+	} catch (error) {
+		logger.error('Could not send ownership transfer request', { error })
 
-					if (error?.response?.status === 403) {
-						this.submitError = t('files', 'Cannot transfer ownership of a file or folder you don\'t own')
-					} else {
-						this.submitError = error.message || t('files', 'Unknown error')
-					}
-				})
-		},
-	},
+		if (isAxiosError(error) && error.response?.status === 403) {
+			showError(t('files', 'Cannot transfer ownership of a file or folder you do not own'))
+		} else {
+			showError(t('files', 'Error while sending ownership transfer request'))
+		}
+	}
 }
 </script>
 
-<style scoped lang="scss">
-.middle-align {
-	vertical-align: middle;
-}
-p {
-	margin-top: 12px;
-	margin-bottom: 12px;
-}
-.new-owner-row {
-	display: flex;
+<template>
+	<form @submit.prevent="submit">
+		<NcFormGroup
+			:class="$style.transferOwnership__group"
+			:label="t('files', 'Transfer ownership of a file or folder')">
+			<NcFormBox v-slot="{ itemClass }">
+				<NcFormBoxButton
+					invertedAccent
+					:label="t('files', 'File or folder to transfer')"
+					:description="nodeForTransfer?.displayname ?? t('files', 'No file or folder selected')"
+					@click="chooseNodeForTransfer">
+					<template #icon>
+						<NcIconSvgWrapper :path="mdiFolderOutline" />
+					</template>
+				</NcFormBoxButton>
 
-	label {
-		display: flex;
-		align-items: center;
+				<div :class="[itemClass, $style.transferOwnership__newOwner]">
+					<NcSelectUsers
+						v-model="selectedUser"
+						:class="$style.transferOwnership__newOwnerSelect"
+						:inputLabel="t('files', 'New owner')"
+						:loading="loadingUsers"
+						:options="userSuggestions"
+						@search="searchUsersDebounced" />
+				</div>
 
-		span {
-			margin-right: 8px;
-		}
-	}
+				<NcButton
+					:disabled="!canSubmit"
+					type="submit"
+					variant="primary"
+					wide>
+					{{ submitButtonText }}
+				</NcButton>
+			</NcFormBox>
 
-	.multiselect {
-		flex-grow: 1;
-		max-width: 280px;
-	}
+			<p class="hidden-visually" aria-live="polite">
+				<span v-if="!nodeForTransfer">{{ t('files', 'You need to select a file or folder to transfer ownership.') }}</span>
+				<span v-if="!selectedUser">{{ t('files', 'You need to select a new owner for the file or folder.') }}</span>
+			</p>
+		</NcFormGroup>
+	</form>
+</template>
+
+<style module>
+.transferOwnership__group {
+	max-width: 512px;
 }
-.transfer-select-row {
-	span {
-		margin-right: 8px;
-	}
+
+.transferOwnership__newOwner {
+	background-color: var(--color-primary-element-light);
+	padding-block: var(--default-grid-baseline);
+	padding-inline: calc(var(--border-radius-element) + var(--default-grid-baseline));
+}
+
+.transferOwnership__newOwnerSelect {
+	width: 100%;
+}
+
+.transferOwnership__newOwner :global(.vs--open .vs__dropdown-toggle) {
+	background-color: var(--color-main-background);
 }
 </style>

@@ -1,98 +1,42 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Clark Tomlinson <fallen013@gmail.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Encryption;
 
 use OC\Files\View;
 use OCA\Encryption\Crypto\Crypt;
+use OCP\Config\IUserConfig;
 use OCP\Encryption\IFile;
-use OCP\IConfig;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\IAppConfig;
 use OCP\IUser;
 use OCP\IUserSession;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
 use OCP\PreConditionNotMetException;
 
 class Recovery {
+	protected ?IUser $user;
 
-
-	/**
-	 * @var null|IUser
-	 */
-	protected $user;
-	/**
-	 * @var Crypt
-	 */
-	protected $crypt;
-	/**
-	 * @var KeyManager
-	 */
-	private $keyManager;
-	/**
-	 * @var IConfig
-	 */
-	private $config;
-	/**
-	 * @var View
-	 */
-	private $view;
-	/**
-	 * @var IFile
-	 */
-	private $file;
-
-	/**
-	 * @param IUserSession $userSession
-	 * @param Crypt $crypt
-	 * @param KeyManager $keyManager
-	 * @param IConfig $config
-	 * @param IFile $file
-	 * @param View $view
-	 */
-	public function __construct(IUserSession $userSession,
-								Crypt $crypt,
-								KeyManager $keyManager,
-								IConfig $config,
-								IFile $file,
-								View $view) {
-		$this->user = ($userSession && $userSession->isLoggedIn()) ? $userSession->getUser() : false;
-		$this->crypt = $crypt;
-		$this->keyManager = $keyManager;
-		$this->config = $config;
-		$this->view = $view;
-		$this->file = $file;
+	public function __construct(
+		IUserSession $userSession,
+		protected Crypt $crypt,
+		private KeyManager $keyManager,
+		private IAppConfig $appConfig,
+		private IUserConfig $userConfig,
+		private IFile $file,
+		private View $view,
+		private IEventDispatcher $eventDispatcher,
+	) {
+		$this->user = ($userSession->isLoggedIn()) ? $userSession->getUser() : null;
 	}
 
-	/**
-	 * @param string $password
-	 * @return bool
-	 */
-	public function enableAdminRecovery($password) {
-		$appConfig = $this->config;
-		$keyManager = $this->keyManager;
-
-		if (!$keyManager->recoveryKeyExists()) {
+	public function enableAdminRecovery(string $password): bool {
+		if (!$this->keyManager->recoveryKeyExists()) {
 			$keyPair = $this->crypt->createKeyPair();
 			if (!is_array($keyPair)) {
 				return false;
@@ -101,8 +45,14 @@ class Recovery {
 			$this->keyManager->setRecoveryKey($password, $keyPair);
 		}
 
-		if ($keyManager->checkRecoveryPassword($password)) {
-			$appConfig->setAppValue('encryption', 'recoveryAdminEnabled', 1);
+		if ($this->keyManager->checkRecoveryPassword($password)) {
+			$this->appConfig->setValueBool('encryption', 'recoveryAdminEnabled', true);
+			$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+				'Recovery key was enabled',
+				[],
+				false,
+				'encryption.recovery_key.enabled',
+			));
 			return true;
 		}
 
@@ -111,12 +61,8 @@ class Recovery {
 
 	/**
 	 * change recovery key id
-	 *
-	 * @param string $newPassword
-	 * @param string $oldPassword
-	 * @return bool
 	 */
-	public function changeRecoveryKeyPassword($newPassword, $oldPassword) {
+	public function changeRecoveryKeyPassword(string $newPassword, string $oldPassword): bool {
 		$recoveryKey = $this->keyManager->getSystemPrivateKey($this->keyManager->getRecoveryKeyId());
 		$decryptedRecoveryKey = $this->crypt->decryptPrivateKey($recoveryKey, $oldPassword);
 		if ($decryptedRecoveryKey === false) {
@@ -124,23 +70,31 @@ class Recovery {
 		}
 		$encryptedRecoveryKey = $this->crypt->encryptPrivateKey($decryptedRecoveryKey, $newPassword);
 		$header = $this->crypt->generateHeader();
-		if ($encryptedRecoveryKey) {
+		if ($encryptedRecoveryKey !== false) {
 			$this->keyManager->setSystemPrivateKey($this->keyManager->getRecoveryKeyId(), $header . $encryptedRecoveryKey);
+			$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+				'Recovery key password was changed',
+				[],
+				false,
+				'encryption.recovery_key.password_changed',
+			));
 			return true;
 		}
 		return false;
 	}
 
-	/**
-	 * @param string $recoveryPassword
-	 * @return bool
-	 */
-	public function disableAdminRecovery($recoveryPassword) {
+	public function disableAdminRecovery(string $recoveryPassword): bool {
 		$keyManager = $this->keyManager;
 
 		if ($keyManager->checkRecoveryPassword($recoveryPassword)) {
 			// Set recoveryAdmin as disabled
-			$this->config->setAppValue('encryption', 'recoveryAdminEnabled', 0);
+			$this->appConfig->setValueBool('encryption', 'recoveryAdminEnabled', false);
+			$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+				'Recovery key was disabled',
+				[],
+				false,
+				'encryption.recovery_key.disabled',
+			));
 			return true;
 		}
 		return false;
@@ -150,46 +104,37 @@ class Recovery {
 	 * check if recovery is enabled for user
 	 *
 	 * @param string $user if no user is given we check the current logged-in user
-	 *
-	 * @return bool
 	 */
-	public function isRecoveryEnabledForUser($user = '') {
+	public function isRecoveryEnabledForUser(string $user = ''): bool {
 		$uid = $user === '' ? $this->user->getUID() : $user;
-		$recoveryMode = $this->config->getUserValue($uid,
-			'encryption',
-			'recoveryEnabled',
-			0);
-
-		return ($recoveryMode === '1');
+		return $this->userConfig->getValueBool($uid, 'encryption', 'recoveryEnabled');
 	}
 
 	/**
 	 * check if recovery is key is enabled by the administrator
-	 *
-	 * @return bool
 	 */
-	public function isRecoveryKeyEnabled() {
-		$enabled = $this->config->getAppValue('encryption', 'recoveryAdminEnabled', 0);
-
-		return ($enabled === '1');
+	public function isRecoveryKeyEnabled(): bool {
+		return $this->appConfig->getValueBool('encryption', 'recoveryAdminEnabled');
 	}
 
-	/**
-	 * @param string $value
-	 * @return bool
-	 */
-	public function setRecoveryForUser($value) {
+	public function setRecoveryForUser(bool $value): bool {
 		try {
-			$this->config->setUserValue($this->user->getUID(),
-				'encryption',
-				'recoveryEnabled',
-				$value);
+			$this->userConfig->setValueBool($this->user->getUID(), 'encryption', 'recoveryEnabled', $value);
 
-			if ($value === '1') {
+			if ($value) {
 				$this->addRecoveryKeys('/' . $this->user->getUID() . '/files/');
 			} else {
 				$this->removeRecoveryKeys('/' . $this->user->getUID() . '/files/');
 			}
+			$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+				'Recovery key access for the files of user "%s" was %s',
+				[
+					'userId' => $this->user->getUID(),
+					'status' => $value ? 'enabled' : 'disabled',
+				],
+				false,
+				'encryption.user_recovery.updated',
+			));
 
 			return true;
 		} catch (PreConditionNotMetException $e) {
@@ -199,16 +144,15 @@ class Recovery {
 
 	/**
 	 * add recovery key to all encrypted files
-	 * @param string $path
 	 */
-	private function addRecoveryKeys($path) {
+	private function addRecoveryKeys(string $path): void {
 		$dirContent = $this->view->getDirectoryContent($path);
 		foreach ($dirContent as $item) {
 			$filePath = $item->getPath();
 			if ($item['type'] === 'dir') {
 				$this->addRecoveryKeys($filePath . '/');
 			} else {
-				$fileKey = $this->keyManager->getFileKey($filePath, $this->user->getUID());
+				$fileKey = $this->keyManager->getFileKey($filePath, null);
 				if (!empty($fileKey)) {
 					$accessList = $this->file->getAccessList($filePath);
 					$publicKeys = [];
@@ -218,8 +162,11 @@ class Recovery {
 
 					$publicKeys = $this->keyManager->addSystemKeys($accessList, $publicKeys, $this->user->getUID());
 
-					$encryptedKeyfiles = $this->crypt->multiKeyEncrypt($fileKey, $publicKeys);
-					$this->keyManager->setAllFileKeys($filePath, $encryptedKeyfiles);
+					$shareKeys = $this->crypt->multiKeyEncrypt($fileKey, $publicKeys);
+					$this->keyManager->deleteLegacyFileKey($filePath);
+					foreach ($shareKeys as $uid => $keyFile) {
+						$this->keyManager->setShareKey($filePath, $uid, $keyFile);
+					}
 				}
 			}
 		}
@@ -227,9 +174,8 @@ class Recovery {
 
 	/**
 	 * remove recovery key to all encrypted files
-	 * @param string $path
 	 */
-	private function removeRecoveryKeys($path) {
+	private function removeRecoveryKeys(string $path): void {
 		$dirContent = $this->view->getDirectoryContent($path);
 		foreach ($dirContent as $item) {
 			$filePath = $item->getPath();
@@ -243,27 +189,26 @@ class Recovery {
 
 	/**
 	 * recover users files with the recovery key
-	 *
-	 * @param string $recoveryPassword
-	 * @param string $user
 	 */
-	public function recoverUsersFiles($recoveryPassword, $user) {
+	public function recoverUsersFiles(string $recoveryPassword, string $user): void {
 		$encryptedKey = $this->keyManager->getSystemPrivateKey($this->keyManager->getRecoveryKeyId());
 
 		$privateKey = $this->crypt->decryptPrivateKey($encryptedKey, $recoveryPassword);
 		if ($privateKey !== false) {
 			$this->recoverAllFiles('/' . $user . '/files/', $privateKey, $user);
+			$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+				'Files of user "%s" were recovered with the recovery key',
+				['userId' => $user],
+				false,
+				'encryption.user_files.recovered',
+			));
 		}
 	}
 
 	/**
 	 * recover users files
-	 *
-	 * @param string $path
-	 * @param string $privateKey
-	 * @param string $uid
 	 */
-	private function recoverAllFiles($path, $privateKey, $uid) {
+	private function recoverAllFiles(string $path, string $privateKey, string $uid): void {
 		$dirContent = $this->view->getDirectoryContent($path);
 
 		foreach ($dirContent as $item) {
@@ -279,19 +224,17 @@ class Recovery {
 
 	/**
 	 * recover file
-	 *
-	 * @param string $path
-	 * @param string $privateKey
-	 * @param string $uid
 	 */
-	private function recoverFile($path, $privateKey, $uid) {
+	private function recoverFile(string $path, string $privateKey, string $uid): void {
 		$encryptedFileKey = $this->keyManager->getEncryptedFileKey($path);
 		$shareKey = $this->keyManager->getShareKey($path, $this->keyManager->getRecoveryKeyId());
 
 		if ($encryptedFileKey && $shareKey && $privateKey) {
-			$fileKey = $this->crypt->multiKeyDecrypt($encryptedFileKey,
+			$fileKey = $this->crypt->multiKeyDecryptLegacy($encryptedFileKey,
 				$shareKey,
 				$privateKey);
+		} elseif ($shareKey && $privateKey) {
+			$fileKey = $this->crypt->multiKeyDecrypt($shareKey, $privateKey);
 		}
 
 		if (!empty($fileKey)) {
@@ -303,8 +246,11 @@ class Recovery {
 
 			$publicKeys = $this->keyManager->addSystemKeys($accessList, $publicKeys, $uid);
 
-			$encryptedKeyfiles = $this->crypt->multiKeyEncrypt($fileKey, $publicKeys);
-			$this->keyManager->setAllFileKeys($path, $encryptedKeyfiles);
+			$shareKeys = $this->crypt->multiKeyEncrypt($fileKey, $publicKeys);
+			$this->keyManager->deleteLegacyFileKey($path);
+			foreach ($shareKeys as $uid => $keyFile) {
+				$this->keyManager->setShareKey($path, $uid, $keyFile);
+			}
 		}
 	}
 }

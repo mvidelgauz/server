@@ -1,63 +1,30 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Tests\unit\Connector\Sabre;
 
-use OC\Log;
 use OC\SystemConfig;
 use OCA\DAV\Connector\Sabre\Exception\InvalidPath;
-use OCA\DAV\Connector\Sabre\ExceptionLoggerPlugin as PluginToTest;
+use OCA\DAV\Connector\Sabre\ExceptionLoggerPlugin;
+use OCA\DAV\Exception\ServerMaintenanceMode;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 use Sabre\DAV\Exception\NotFound;
-use Sabre\DAV\Exception\ServiceUnavailable;
 use Sabre\DAV\Server;
 use Test\TestCase;
 
-class TestLogger extends Log {
-	public $message;
-	public $level;
-
-	public function writeLog(string $app, $entry, int $level) {
-		$this->level = $level;
-		$this->message = $entry;
-	}
-}
-
 class ExceptionLoggerPluginTest extends TestCase {
+	private Server $server;
+	private ExceptionLoggerPlugin $plugin;
+	private LoggerInterface&MockObject $logger;
 
-	/** @var Server */
-	private $server;
-
-	/** @var PluginToTest */
-	private $plugin;
-
-	/** @var TestLogger | \PHPUnit\Framework\MockObject\MockObject */
-	private $logger;
-
-	private function init() {
+	private function init(): void {
 		$config = $this->createMock(SystemConfig::class);
 		$config->expects($this->any())
 			->method('getValue')
@@ -71,29 +38,30 @@ class ExceptionLoggerPluginTest extends TestCase {
 			});
 
 		$this->server = new Server();
-		$this->logger = new TestLogger(new Log\File(\OC::$SERVERROOT.'/data/nextcloud.log', '', $config), $config);
-		$this->plugin = new PluginToTest('unit-test', $this->logger);
+		$this->logger = $this->createMock(LoggerInterface::class);
+		$this->plugin = new ExceptionLoggerPlugin('unit-test', $this->logger);
 		$this->plugin->initialize($this->server);
 	}
 
-	/**
-	 * @dataProvider providesExceptions
-	 */
-	public function testLogging($expectedLogLevel, $expectedMessage, $exception) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'providesExceptions')]
+	public function testLogging(string $expectedLogLevel, \Throwable $e): void {
 		$this->init();
-		$this->plugin->logException($exception);
 
-		$this->assertEquals($expectedLogLevel, $this->logger->level);
-		$this->assertEquals(get_class($exception), $this->logger->message['Exception']);
-		$this->assertEquals($expectedMessage, $this->logger->message['Message']);
+		$this->logger->expects($this->once())
+			->method($expectedLogLevel)
+			->with($e->getMessage(), ['app' => 'unit-test','exception' => $e]);
+
+		$this->plugin->logException($e);
 	}
 
-	public function providesExceptions() {
+	public static function providesExceptions(): array {
 		return [
-			[0, '', new NotFound()],
-			[0, 'System in maintenance mode.', new ServiceUnavailable('System in maintenance mode.')],
-			[4, 'Upgrade needed', new ServiceUnavailable('Upgrade needed')],
-			[4, 'This path leads to nowhere', new InvalidPath('This path leads to nowhere')]
+			['debug', new NotFound()],
+			['debug', new ServerMaintenanceMode('System is in maintenance mode.')],
+			// Faking a translation
+			['debug', new ServerMaintenanceMode('Syst3m 1s 1n m41nt3n4nc3 m0d3.')],
+			['debug', new ServerMaintenanceMode('Upgrade needed')],
+			['critical', new InvalidPath('This path leads to nowhere')]
 		];
 	}
 }

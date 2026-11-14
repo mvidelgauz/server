@@ -1,136 +1,106 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Administrator "Administrator@WINDOWS-2012"
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Bart Visscher <bartv@thisnet.nl>
- * @author Bernhard Posselt <dev@bernhard-posselt.com>
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Brice Maron <brice@bmaron.net>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Dan Callahan <dan.callahan@gmail.com>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author François Kubler <francois@kubler.org>
- * @author Frank Isemann <frank@isemann.name>
- * @author Jakob Sack <mail@jakobsack.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author KB7777 <k.burkowski@gmail.com>
- * @author Kevin Lanni <therealklanni@gmail.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author MichaIng <28480705+MichaIng@users.noreply.github.com>
- * @author MichaIng <micha@dietpi.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Sean Comeau <sean@ftlnetworks.ca>
- * @author Serge Martin <edb@sigluy.net>
- * @author Simounet <contact@simounet.net>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Valdnet <47037905+Valdnet@users.noreply.github.com>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC;
 
 use bantu\IniGetWrapper\IniGetWrapper;
 use Exception;
 use InvalidArgumentException;
-use OC\App\AppStore\Bundles\BundleFetcher;
-use OC\Authentication\Token\DefaultTokenCleanupJob;
-use OC\Authentication\Token\DefaultTokenProvider;
+use OC\AppFramework\Bootstrap\Coordinator;
+use OC\Authentication\Token\PublicKeyTokenProvider;
+use OC\Authentication\Token\TokenCleanupJob;
+use OC\Core\BackgroundJobs\CheckCodeIntegrityJob;
+use OC\Core\BackgroundJobs\CleanupBackgroundJobsJob;
+use OC\Core\BackgroundJobs\ExpirePreviewsJob;
+use OC\Core\BackgroundJobs\GenerateMetadataJob;
 use OC\Log\Rotate;
 use OC\Preview\BackgroundCleanupJob;
+use OC\Setup\AbstractDatabase;
+use OC\Setup\MySQL;
+use OC\Setup\OCI;
+use OC\Setup\PostgreSQL;
+use OC\Setup\Sqlite;
+use OC\TextProcessing\RemoveOldTasksBackgroundJob;
+use OC\User\BackgroundJobs\CleanupDeletedUsers;
+use OC\User\BackgroundJobs\CleanupLoginTokens;
+use OC\User\Session;
+use OCP\AppFramework\QueryException;
 use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\BackgroundJob\IJobList;
 use OCP\Defaults;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\HintException;
+use OCP\Http\Client\IClientService;
+use OCP\IAppConfig;
+use OCP\IConfig;
 use OCP\IGroup;
+use OCP\IGroupManager;
 use OCP\IL10N;
+use OCP\Install\Events\InstallationCompletedEvent;
+use OCP\IRequest;
+use OCP\IURLGenerator;
+use OCP\IUserManager;
+use OCP\IUserSession;
+use OCP\L10N\IFactory as IL10NFactory;
+use OCP\Migration\IOutput;
 use OCP\Security\ISecureRandom;
+use OCP\Server;
+use OCP\ServerVersion;
+use OCP\Util;
 use Psr\Log\LoggerInterface;
 
 class Setup {
-	/** @var SystemConfig */
-	protected $config;
-	/** @var IniGetWrapper */
-	protected $iniWrapper;
-	/** @var IL10N */
-	protected $l10n;
-	/** @var Defaults */
-	protected $defaults;
-	/** @var LoggerInterface */
-	protected $logger;
-	/** @var ISecureRandom */
-	protected $random;
-	/** @var Installer */
-	protected $installer;
+	public const MIN_PASSWORD_SALT_LENGTH = 32;
+	public const MIN_SECRET_LENGTH = 48;
+
+	protected IL10N $l10n;
 
 	public function __construct(
-		SystemConfig $config,
-		IniGetWrapper $iniWrapper,
-		IL10N $l10n,
-		Defaults $defaults,
-		LoggerInterface $logger,
-		ISecureRandom $random,
-		Installer $installer
+		protected SystemConfig $config,
+		protected IniGetWrapper $iniWrapper,
+		IL10NFactory $l10nFactory,
+		protected Defaults $defaults,
+		protected LoggerInterface $logger,
+		protected ISecureRandom $random,
+		protected Installer $installer,
+		protected IEventDispatcher $eventDispatcher,
 	) {
-		$this->config = $config;
-		$this->iniWrapper = $iniWrapper;
-		$this->l10n = $l10n;
-		$this->defaults = $defaults;
-		$this->logger = $logger;
-		$this->random = $random;
-		$this->installer = $installer;
+		$this->l10n = $l10nFactory->get('lib');
 	}
 
-	protected static $dbSetupClasses = [
-		'mysql' => \OC\Setup\MySQL::class,
-		'pgsql' => \OC\Setup\PostgreSQL::class,
-		'oci' => \OC\Setup\OCI::class,
-		'sqlite' => \OC\Setup\Sqlite::class,
-		'sqlite3' => \OC\Setup\Sqlite::class,
+	private const array DB_SETUP_CLASSES = [
+		'mysql' => MySQL::class,
+		'pgsql' => PostgreSQL::class,
+		'oci' => OCI::class,
+		'sqlite' => Sqlite::class,
+		'sqlite3' => Sqlite::class,
 	];
 
 	/**
 	 * Wrapper around the "class_exists" PHP function to be able to mock it
-	 *
-	 * @param string $name
-	 * @return bool
 	 */
-	protected function class_exists($name) {
+	protected function class_exists(string $name): bool {
 		return class_exists($name);
 	}
 
 	/**
 	 * Wrapper around the "is_callable" PHP function to be able to mock it
-	 *
-	 * @param string $name
-	 * @return bool
 	 */
-	protected function is_callable($name) {
+	protected function is_callable(string $name): bool {
 		return is_callable($name);
 	}
 
 	/**
 	 * Wrapper around \PDO::getAvailableDrivers
-	 *
-	 * @return array
 	 */
-	protected function getAvailableDbDriversForPdo() {
+	protected function getAvailableDbDriversForPdo(): array {
 		if (class_exists(\PDO::class)) {
 			return \PDO::getAvailableDrivers();
 		}
@@ -140,11 +110,10 @@ class Setup {
 	/**
 	 * Get the available and supported databases of this instance
 	 *
-	 * @param bool $allowAllDatabases
 	 * @return array
 	 * @throws Exception
 	 */
-	public function getSupportedDatabases($allowAllDatabases = false) {
+	public function getSupportedDatabases(bool $allowAllDatabases = false): array {
 		$availableDatabases = [
 			'sqlite' => [
 				'type' => 'pdo',
@@ -204,9 +173,9 @@ class Setup {
 	 * a few system checks.
 	 *
 	 * @return array of system info, including an "errors" value
-	 * in case of errors/warnings
+	 *               in case of errors/warnings
 	 */
-	public function getSystemInfo($allowAllDatabases = false) {
+	public function getSystemInfo(bool $allowAllDatabases = false): array {
 		$databases = $this->getSupportedDatabases($allowAllDatabases);
 
 		$dataDir = $this->config->getValue('datadirectory', \OC::$SERVERROOT . '/data');
@@ -225,9 +194,8 @@ class Setup {
 			self::protectDataDirectory();
 
 			try {
-				$util = new \OC_Util();
-				$htAccessWorking = $util->isHtaccessWorking(\OC::$server->getConfig());
-			} catch (\OCP\HintException $e) {
+				$htAccessWorking = $this->isHtaccessWorking($dataDir);
+			} catch (HintException $e) {
 				$errors[] = [
 					'error' => $e->getMessage(),
 					'exception' => $e,
@@ -237,11 +205,11 @@ class Setup {
 			}
 		}
 
-		if (\OC_Util::runningOnMac()) {
+		// Check if running directly on macOS (note: Linux containers on macOS will not trigger this)
+		if (!getenv('CI') && PHP_OS_FAMILY === 'Darwin') {
 			$errors[] = [
 				'error' => $this->l10n->t(
-					'Mac OS X is not supported and %s will not work properly on this platform. ' .
-					'Use it at your own risk! ',
+					'macOS is not supported and %s will not work properly on this platform.',
 					[$this->defaults->getProductName()]
 				),
 				'hint' => $this->l10n->t('For the best results, please consider using a GNU/Linux server instead.'),
@@ -251,8 +219,8 @@ class Setup {
 		if ($this->iniWrapper->getString('open_basedir') !== '' && PHP_INT_SIZE === 4) {
 			$errors[] = [
 				'error' => $this->l10n->t(
-					'It seems that this %s instance is running on a 32-bit PHP environment and the open_basedir has been configured in php.ini. ' .
-					'This will lead to problems with files over 4 GB and is highly discouraged.',
+					'It seems that this %s instance is running on a 32-bit PHP environment and the open_basedir has been configured in php.ini. '
+					. 'This will lead to problems with files over 4 GB and is highly discouraged.',
 					[$this->defaults->getProductName()]
 				),
 				'hint' => $this->l10n->t('Please remove the open_basedir setting within your php.ini or switch to 64-bit PHP.'),
@@ -260,10 +228,6 @@ class Setup {
 		}
 
 		return [
-			'hasSQLite' => isset($databases['sqlite']),
-			'hasMySQL' => isset($databases['mysql']),
-			'hasPostgreSQL' => isset($databases['pgsql']),
-			'hasOracle' => isset($databases['oci']),
 			'databases' => $databases,
 			'directory' => $dataDir,
 			'htaccessWorking' => $htAccessWorking,
@@ -271,49 +235,133 @@ class Setup {
 		];
 	}
 
+	public function createHtaccessTestFile(string $dataDir): string|false {
+		// php dev server does not support htaccess
+		if (php_sapi_name() === 'cli-server') {
+			return false;
+		}
+
+		// testdata
+		$fileName = '/htaccesstest.txt';
+		$testContent = 'This is used for testing whether htaccess is properly enabled to disallow access from the outside. This file can be safely removed.';
+
+		// creating a test file
+		$testFile = $dataDir . '/' . $fileName;
+
+		if (file_exists($testFile)) {// already running this test, possible recursive call
+			return false;
+		}
+
+		$fp = @fopen($testFile, 'w');
+		if (!$fp) {
+			throw new HintException('Can\'t create test file to check for working .htaccess file.',
+				'Make sure it is possible for the web server to write to ' . $testFile);
+		}
+		fwrite($fp, $testContent);
+		fclose($fp);
+
+		return $testContent;
+	}
+
 	/**
-	 * @param $options
-	 * @return array
+	 * Check if the .htaccess file is working
+	 *
+	 * @throws Exception
+	 * @throws HintException If the test file can't get written.
 	 */
-	public function install($options) {
+	public function isHtaccessWorking(string $dataDir): bool {
+		$config = Server::get(IConfig::class);
+
+		if (\OC::$CLI || !$config->getSystemValueBool('check_for_working_htaccess', true)) {
+			return true;
+		}
+
+		$testContent = $this->createHtaccessTestFile($dataDir);
+		if ($testContent === false) {
+			return false;
+		}
+
+		$fileName = '/htaccesstest.txt';
+		$testFile = $dataDir . '/' . $fileName;
+
+		// accessing the file via http
+		$url = Server::get(IURLGenerator::class)->getAbsoluteURL(\OC::$WEBROOT . '/data' . $fileName);
+		try {
+			$content = Server::get(IClientService::class)->newClient()->get($url)->getBody();
+		} catch (\Exception $e) {
+			$content = false;
+		}
+
+		if (str_starts_with($url, 'https:')) {
+			$url = 'http:' . substr($url, 6);
+		} else {
+			$url = 'https:' . substr($url, 5);
+		}
+
+		try {
+			$fallbackContent = Server::get(IClientService::class)->newClient()->get($url)->getBody();
+		} catch (\Exception $e) {
+			$fallbackContent = false;
+		}
+
+		// cleanup
+		@unlink($testFile);
+
+		/*
+		 * If the content is not equal to test content our .htaccess
+		 * is working as required
+		 */
+		return $content !== $testContent && $fallbackContent !== $testContent;
+	}
+
+	/**
+	 * @return array<string|array> errors
+	 */
+	public function install(
+		#[\SensitiveParameter]
+		array $options,
+		?IOutput $output = null,
+	): array {
 		$l = $this->l10n;
 
 		$error = [];
 		$dbType = $options['dbtype'];
 
-		if (empty($options['adminlogin'])) {
-			$error[] = $l->t('Set an admin username.');
-		}
-		if (empty($options['adminpass'])) {
-			$error[] = $l->t('Set an admin password.');
+		$disableAdminUser = (bool)($options['admindisable'] ?? false);
+
+		if (!$disableAdminUser) {
+			if (empty($options['adminlogin'])) {
+				$error[] = $l->t('Set an admin Login.');
+			}
+			if (empty($options['adminpass'])) {
+				$error[] = $l->t('Set an admin password.');
+			}
 		}
 		if (empty($options['directory'])) {
-			$options['directory'] = \OC::$SERVERROOT . "/data";
+			$options['directory'] = \OC::$SERVERROOT . '/data';
 		}
 
-		if (!isset(self::$dbSetupClasses[$dbType])) {
+		if (!isset(self::DB_SETUP_CLASSES[$dbType])) {
 			$dbType = 'sqlite';
 		}
 
-		$username = htmlspecialchars_decode($options['adminlogin']);
-		$password = htmlspecialchars_decode($options['adminpass']);
 		$dataDir = htmlspecialchars_decode($options['directory']);
 
-		$class = self::$dbSetupClasses[$dbType];
-		/** @var \OC\Setup\AbstractDatabase $dbSetup */
+		$class = self::DB_SETUP_CLASSES[$dbType];
+		/** @var AbstractDatabase $dbSetup */
 		$dbSetup = new $class($l, $this->config, $this->logger, $this->random);
 		$error = array_merge($error, $dbSetup->validate($options));
 
 		// validate the data directory
 		if ((!is_dir($dataDir) && !mkdir($dataDir)) || !is_writable($dataDir)) {
-			$error[] = $l->t("Cannot create or write into the data directory %s", [$dataDir]);
+			$error[] = $l->t('Cannot create or write into the data directory %s', [$dataDir]);
 		}
 
 		if (!empty($error)) {
 			return $error;
 		}
 
-		$request = \OC::$server->getRequest();
+		$request = Server::get(IRequest::class);
 
 		//no errors, good
 		if (isset($options['trusted_domains'])
@@ -328,10 +376,8 @@ class Setup {
 			$dbType = 'sqlite3';
 		}
 
-		//generate a random salt that is used to salt the local user passwords
-		$salt = $this->random->generate(30);
-		// generate a secret
-		$secret = $this->random->generate(48);
+		$salt = $options['passwordsalt'] ?: $this->random->generate(self::MIN_PASSWORD_SALT_LENGTH);
+		$secret = $options['secret'] ?: $this->random->generate(self::MIN_SECRET_LENGTH);
 
 		//write the config file
 		$newConfigValues = [
@@ -340,7 +386,7 @@ class Setup {
 			'trusted_domains' => $trustedDomains,
 			'datadirectory' => $dataDir,
 			'dbtype' => $dbType,
-			'version' => implode('.', \OCP\Util::getVersion()),
+			'version' => implode('.', Util::getVersion()),
 		];
 
 		if ($this->config->getValue('overwrite.cli.url', null) === null) {
@@ -349,10 +395,14 @@ class Setup {
 
 		$this->config->setValues($newConfigValues);
 
+		// Ensure instanceid is generated during the installation.
+		\OC_Util::getInstanceId();
+
+		$this->outputDebug($output, 'Configuring database');
 		$dbSetup->initialize($options);
 		try {
-			$dbSetup->setupDatabase($username);
-		} catch (\OC\DatabaseSetupException $e) {
+			$dbSetup->setupDatabase();
+		} catch (DatabaseSetupException $e) {
 			$error[] = [
 				'error' => $e->getMessage(),
 				'exception' => $e,
@@ -361,15 +411,17 @@ class Setup {
 			return $error;
 		} catch (Exception $e) {
 			$error[] = [
-				'error' => 'Error while trying to create admin user: ' . $e->getMessage(),
+				'error' => 'Error while trying to create admin account: ' . $e->getMessage(),
 				'exception' => $e,
 				'hint' => '',
 			];
 			return $error;
 		}
+
+		$this->outputDebug($output, 'Run server migrations');
 		try {
 			// apply necessary migrations
-			$dbSetup->runMigrations();
+			$dbSetup->runMigrations($output);
 		} catch (Exception $e) {
 			$error[] = [
 				'error' => 'Error while trying to initialise the database: ' . $e->getMessage(),
@@ -379,63 +431,86 @@ class Setup {
 			return $error;
 		}
 
-		//create the user and group
 		$user = null;
-		try {
-			$user = \OC::$server->getUserManager()->createUser($username, $password);
-			if (!$user) {
-				$error[] = "User <$username> could not be created.";
+		if (!$disableAdminUser) {
+			$username = htmlspecialchars_decode($options['adminlogin']);
+			$password = htmlspecialchars_decode($options['adminpass']);
+			$this->outputDebug($output, 'Create admin account');
+
+			try {
+				$user = Server::get(IUserManager::class)->createUser($username, $password);
+				if (!$user) {
+					$error[] = "Account <$username> could not be created.";
+					return $error;
+				}
+			} catch (Exception $exception) {
+				$error[] = $exception->getMessage();
+				return $error;
 			}
-		} catch (Exception $exception) {
-			$error[] = $exception->getMessage();
 		}
 
-		if (empty($error)) {
-			$config = \OC::$server->getConfig();
-			$config->setAppValue('core', 'installedat', microtime(true));
-			$config->setAppValue('core', 'lastupdatedat', microtime(true));
-			$config->setAppValue('core', 'vendor', $this->getVendor());
+		$config = Server::get(IConfig::class);
+		$config->setAppValue('core', 'installedat', (string)microtime(true));
+		$appConfig = Server::get(IAppConfig::class);
+		$appConfig->setValueInt('core', 'lastupdatedat', time());
 
-			$group = \OC::$server->getGroupManager()->createGroup('admin');
-			if ($group instanceof IGroup) {
-				$group->addUser($user);
-			}
+		$vendorData = $this->getVendorData();
+		$config->setAppValue('core', 'vendor', $vendorData['vendor']);
+		if ($vendorData['channel'] !== 'stable') {
+			$config->setSystemValue('updater.release.channel', $vendorData['channel']);
+		}
 
-			// Install shipped apps and specified app bundles
-			Installer::installShippedApps();
-			$bundleFetcher = new BundleFetcher(\OC::$server->getL10N('lib'));
-			$defaultInstallationBundles = $bundleFetcher->getDefaultInstallationBundle();
-			foreach ($defaultInstallationBundles as $bundle) {
-				try {
-					$this->installer->installAppBundle($bundle);
-				} catch (Exception $e) {
-				}
-			}
+		$group = Server::get(IGroupManager::class)->createGroup('admin');
+		if ($user !== null && $group instanceof IGroup) {
+			$group->addUser($user);
+		}
 
-			// create empty file in data dir, so we can later find
-			// out that this is indeed an ownCloud data directory
-			file_put_contents($config->getSystemValue('datadirectory', \OC::$SERVERROOT . '/data') . '/.ocdata', '');
+		// Install shipped apps and specified app bundles
+		$this->outputDebug($output, 'Install default apps');
+		$installer = Server::get(Installer::class);
+		$installer->installShippedApps(false, $output);
 
-			// Update .htaccess files
-			self::updateHtaccess();
-			self::protectDataDirectory();
+		// create empty file in data dir, so we can later find
+		// out that this is indeed a Nextcloud data directory
+		$this->outputDebug($output, 'Setup data directory');
+		file_put_contents(
+			$config->getSystemValueString('datadirectory', \OC::$SERVERROOT . '/data') . '/.ncdata',
+			"# Nextcloud data directory\n# Do not change this file",
+		);
 
-			self::installBackgroundJobs();
+		// Update .htaccess files
+		self::updateHtaccess();
+		self::protectDataDirectory();
 
-			//and we are done
-			$config->setSystemValue('installed', true);
+		$this->outputDebug($output, 'Install background jobs');
+		self::installBackgroundJobs();
 
+		//and we are done
+		$config->setSystemValue('installed', true);
+		if (self::shouldRemoveCanInstallFile()) {
+			unlink(\OC::$configDir . '/CAN_INSTALL');
+		}
+
+		$bootstrapCoordinator = Server::get(Coordinator::class);
+		$bootstrapCoordinator->runInitialRegistration();
+
+		if (!$disableAdminUser) {
 			// Create a session token for the newly created user
 			// The token provider requires a working db, so it's not injected on setup
-			/* @var $userSession User\Session */
-			$userSession = \OC::$server->getUserSession();
-			$defaultTokenProvider = \OC::$server->query(DefaultTokenProvider::class);
-			$userSession->setTokenProvider($defaultTokenProvider);
+			/** @var Session $userSession */
+			$userSession = Server::get(IUserSession::class);
+			$provider = Server::get(PublicKeyTokenProvider::class);
+			$userSession->setTokenProvider($provider);
 			$userSession->login($username, $password);
-			$userSession->createSessionToken($request, $userSession->getUser()->getUID(), $username, $password);
+			$user = $userSession->getUser();
+			if (!$user) {
+				$error[] = 'No account found in session.';
+				return $error;
+			}
+			$userSession->createSessionToken($request, $user->getUID(), $username, $password);
 
 			$session = $userSession->getSession();
-			$session->set('last-password-confirm', \OC::$server->query(ITimeFactory::class)->getTime());
+			$session->set('last-password-confirm', Server::get(ITimeFactory::class)->getTime());
 
 			// Set email for admin
 			if (!empty($options['adminemail'])) {
@@ -443,28 +518,40 @@ class Setup {
 			}
 		}
 
+		// Dispatch installation completed event
+		$adminUsername = !$disableAdminUser ? ($options['adminlogin'] ?? null) : null;
+		$adminEmail = !empty($options['adminemail']) ? $options['adminemail'] : null;
+		$this->eventDispatcher->dispatchTyped(
+			new InstallationCompletedEvent($dataDir, $adminUsername, $adminEmail)
+		);
+
 		return $error;
 	}
 
-	public static function installBackgroundJobs() {
-		$jobList = \OC::$server->getJobList();
-		$jobList->add(DefaultTokenCleanupJob::class);
+	public static function installBackgroundJobs(): void {
+		$jobList = Server::get(IJobList::class);
+		$jobList->add(TokenCleanupJob::class);
 		$jobList->add(Rotate::class);
 		$jobList->add(BackgroundCleanupJob::class);
+		$jobList->add(RemoveOldTasksBackgroundJob::class);
+		$jobList->add(CleanupDeletedUsers::class);
+		$jobList->add(CleanupLoginTokens::class);
+		$jobList->add(GenerateMetadataJob::class);
+		$jobList->add(ExpirePreviewsJob::class);
+		$jobList->add(CleanupBackgroundJobsJob::class);
+		$jobList->add(CheckCodeIntegrityJob::class);
 	}
 
 	/**
 	 * @return string Absolute path to htaccess
 	 */
-	private function pathToHtaccess() {
+	private function pathToHtaccess(): string {
 		return \OC::$SERVERROOT . '/.htaccess';
 	}
 
 	/**
 	 * Find webroot from config
 	 *
-	 * @param SystemConfig $config
-	 * @return string
 	 * @throws InvalidArgumentException when invalid value for overwrite.cli.url
 	 */
 	private static function findWebRoot(SystemConfig $config): string {
@@ -477,7 +564,7 @@ class Setup {
 			if (!filter_var($webRoot, FILTER_VALIDATE_URL)) {
 				throw new InvalidArgumentException('invalid value for overwrite.cli.url');
 			}
-			$webRoot = rtrim(parse_url($webRoot, PHP_URL_PATH), '/');
+			$webRoot = rtrim((parse_url($webRoot, PHP_URL_PATH) ?? ''), '/');
 		} else {
 			$webRoot = !empty(\OC::$WEBROOT) ? \OC::$WEBROOT : '/';
 		}
@@ -488,11 +575,10 @@ class Setup {
 	/**
 	 * Append the correct ErrorDocument path for Apache hosts
 	 *
-	 * @return bool True when success, False otherwise
-	 * @throws \OCP\AppFramework\QueryException
+	 * @throws QueryException
 	 */
-	public static function updateHtaccess() {
-		$config = \OC::$server->getSystemConfig();
+	public static function updateHtaccess(): bool {
+		$config = Server::get(SystemConfig::class);
 
 		try {
 			$webRoot = self::findWebRoot($config);
@@ -500,25 +586,30 @@ class Setup {
 			return false;
 		}
 
-		$setupHelper = new \OC\Setup(
-			$config,
-			\OC::$server->get(IniGetWrapper::class),
-			\OC::$server->getL10N('lib'),
-			\OC::$server->query(Defaults::class),
-			\OC::$server->get(LoggerInterface::class),
-			\OC::$server->getSecureRandom(),
-			\OC::$server->query(Installer::class)
-		);
+		$setupHelper = Server::get(Setup::class);
+
+		// Note: The .htaccess file also needs to exist, otherwise `is_writable()`
+		// will return false, even though the file could be written.
+		// This function writes the .htaccess file in that case.
+		if (!file_exists($setupHelper->pathToHtaccess())) {
+			if (!touch($setupHelper->pathToHtaccess())) {
+				return false;
+			}
+		}
+
+		if (!is_writable($setupHelper->pathToHtaccess())) {
+			return false;
+		}
 
 		$htaccessContent = file_get_contents($setupHelper->pathToHtaccess());
 		$content = "#### DO NOT CHANGE ANYTHING ABOVE THIS LINE ####\n";
 		$htaccessContent = explode($content, $htaccessContent, 2)[0];
 
 		//custom 403 error page
-		$content .= "\nErrorDocument 403 " . $webRoot . '/';
+		$content .= "\nErrorDocument 403 " . $webRoot . '/index.php/error/403';
 
 		//custom 404 error page
-		$content .= "\nErrorDocument 404 " . $webRoot . '/';
+		$content .= "\nErrorDocument 404 " . $webRoot . '/index.php/error/404';
 
 		// Add rewrite rules if the RewriteBase is configured
 		$rewriteBase = $config->getValue('htaccess.RewriteBase', '');
@@ -527,13 +618,13 @@ class Setup {
 			$content .= "\n  Options -MultiViews";
 			$content .= "\n  RewriteRule ^core/js/oc.js$ index.php [PT,E=PATH_INFO:$1]";
 			$content .= "\n  RewriteRule ^core/preview.png$ index.php [PT,E=PATH_INFO:$1]";
-			$content .= "\n  RewriteCond %{REQUEST_FILENAME} !\\.(css|js|svg|gif|png|html|ttf|woff2?|ico|jpg|jpeg|map|webm|mp4|mp3|ogg|wav)$";
+			$content .= "\n  RewriteCond %{REQUEST_FILENAME} !\\.(css|js|mjs|svg|gif|ico|jpg|jpeg|png|webp|html|otf|ttf|woff2?|map|webm|mp4|mp3|ogg|wav|flac|wasm|tflite)$";
 			$content .= "\n  RewriteCond %{REQUEST_FILENAME} !/core/ajax/update\\.php";
 			$content .= "\n  RewriteCond %{REQUEST_FILENAME} !/core/img/(favicon\\.ico|manifest\\.json)$";
 			$content .= "\n  RewriteCond %{REQUEST_FILENAME} !/(cron|public|remote|status)\\.php";
 			$content .= "\n  RewriteCond %{REQUEST_FILENAME} !/ocs/v(1|2)\\.php";
 			$content .= "\n  RewriteCond %{REQUEST_FILENAME} !/robots\\.txt";
-			$content .= "\n  RewriteCond %{REQUEST_FILENAME} !/(ocm-provider|ocs-provider|updater)/";
+			$content .= "\n  RewriteCond %{REQUEST_FILENAME} !/(ocs-provider|updater)/";
 			$content .= "\n  RewriteCond %{REQUEST_URI} !^/\\.well-known/(acme-challenge|pki-validation)/.*";
 			$content .= "\n  RewriteCond %{REQUEST_FILENAME} !/richdocumentscode(_arm64)?/proxy.php$";
 			$content .= "\n  RewriteRule . index.php [PT,E=PATH_INFO:$1]";
@@ -547,15 +638,19 @@ class Setup {
 			$content .= "\n</IfModule>";
 		}
 
-		if ($content !== '') {
-			//suppress errors in case we don't have permissions for it
-			return (bool)@file_put_contents($setupHelper->pathToHtaccess(), $htaccessContent . $content . "\n");
+		// Never write file back if disk space should be too low
+		if (function_exists('disk_free_space')) {
+			$df = disk_free_space(\OC::$SERVERROOT);
+			$size = strlen($content) + 10240;
+			if ($df !== false && $df < (float)$size) {
+				throw new \Exception(\OC::$SERVERROOT . ' does not have enough space for writing the htaccess file! Not writing it back!');
+			}
 		}
-
-		return false;
+		//suppress errors in case we don't have permissions for it
+		return (bool)@file_put_contents($setupHelper->pathToHtaccess(), $htaccessContent . $content . "\n");
 	}
 
-	public static function protectDataDirectory() {
+	public static function protectDataDirectory(): void {
 		//Require all denied
 		$now = date('Y-m-d H:i:s');
 		$content = "# Generated by Nextcloud on $now\n";
@@ -581,24 +676,35 @@ class Setup {
 		$content .= "# Section for Apache 2.2 to 2.6\n";
 		$content .= "<IfModule mod_autoindex.c>\n";
 		$content .= "  IndexIgnore *\n";
-		$content .= "</IfModule>";
+		$content .= '</IfModule>';
 
-		$baseDir = \OC::$server->getConfig()->getSystemValue('datadirectory', \OC::$SERVERROOT . '/data');
+		$baseDir = Server::get(IConfig::class)->getSystemValueString('datadirectory', \OC::$SERVERROOT . '/data');
 		file_put_contents($baseDir . '/.htaccess', $content);
 		file_put_contents($baseDir . '/index.html', '');
 	}
 
-	/**
-	 * Return vendor from which this version was published
-	 *
-	 * @return string Get the vendor
-	 *
-	 * Copy of \OC\Updater::getVendor()
-	 */
-	private function getVendor() {
+	private function getVendorData(): array {
 		// this should really be a JSON file
 		require \OC::$SERVERROOT . '/version.php';
-		/** @var string $vendor */
-		return (string)$vendor;
+		/** @var mixed $vendor */
+		/** @var mixed $OC_Channel */
+		return [
+			'vendor' => (string)$vendor,
+			'channel' => (string)$OC_Channel,
+		];
+	}
+
+	public function shouldRemoveCanInstallFile(): bool {
+		return Server::get(ServerVersion::class)->getChannel() !== 'git' && is_file(\OC::$configDir . '/CAN_INSTALL');
+	}
+
+	public function canInstallFileExists(): bool {
+		return is_file(\OC::$configDir . '/CAN_INSTALL');
+	}
+
+	protected function outputDebug(?IOutput $output, string $message): void {
+		if ($output instanceof IOutput) {
+			$output->debug($message);
+		}
 	}
 }

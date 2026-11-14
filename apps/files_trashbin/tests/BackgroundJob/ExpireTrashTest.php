@@ -1,44 +1,99 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Victor Dubiniuk <dubiniuk@owncloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_Trashbin\Tests\BackgroundJob;
 
+use OCA\Files_Trashbin\AppInfo\Application;
 use OCA\Files_Trashbin\BackgroundJob\ExpireTrash;
+use OCA\Files_Trashbin\Expiration;
+use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
+use OCP\Files\IRootFolder;
+use OCP\Files\ISetupManager;
+use OCP\IAppConfig;
 use OCP\IUserManager;
+use OCP\Lock\ILockingProvider;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
+use Test\TestCase;
 
-class ExpireTrashTest extends \Test\TestCase {
-	public function testConstructAndRun() {
-		$backgroundJob = new ExpireTrash(
-			$this->createMock(IUserManager::class),
-			$this->getMockBuilder('OCA\Files_Trashbin\Expiration')->disableOriginalConstructor()->getMock()
+class ExpireTrashTest extends TestCase {
+	private IAppConfig&MockObject $appConfig;
+	private IUserManager&MockObject $userManager;
+	private Expiration&MockObject $expiration;
+	private IJobList&MockObject $jobList;
+	private LoggerInterface&MockObject $logger;
+	private ITimeFactory&MockObject $time;
+	private ISetupManager&MockObject $setupManager;
+	private ILockingProvider&MockObject $lockingProvider;
+	private IRootFolder&MockObject $rootFolder;
+
+	protected function setUp(): void {
+		parent::setUp();
+
+		$this->appConfig = $this->createMock(IAppConfig::class);
+		$this->userManager = $this->createMock(IUserManager::class);
+		$this->expiration = $this->createMock(Expiration::class);
+		$this->jobList = $this->createMock(IJobList::class);
+		$this->logger = $this->createMock(LoggerInterface::class);
+		$this->setupManager = $this->createMock(ISetupManager::class);
+		$this->lockingProvider = $this->createMock(ILockingProvider::class);
+		$this->rootFolder = $this->createMock(IRootFolder::class);
+
+		$this->time = $this->createMock(ITimeFactory::class);
+		$this->time->method('getTime')
+			->willReturn(999999999);
+
+		$this->jobList->expects($this->once())
+			->method('setLastRun');
+		$this->jobList->expects($this->once())
+			->method('setExecutionTime');
+	}
+
+	public function testConstructAndRun(): void {
+		$this->appConfig->method('getValueBool')
+			->with(Application::APP_ID, ExpireTrash::TOGGLE_CONFIG_KEY_NAME, true)
+			->willReturn(true);
+		$this->appConfig->method('getValueInt')
+			->with(Application::APP_ID, ExpireTrash::OFFSET_CONFIG_KEY_NAME, 0)
+			->willReturn(0);
+
+		$job = new ExpireTrash(
+			$this->appConfig,
+			$this->userManager,
+			$this->expiration,
+			$this->logger,
+			$this->setupManager,
+			$this->lockingProvider,
+			$this->rootFolder,
+			$this->time,
 		);
+		$job->start($this->jobList);
+	}
 
-		$jobList = $this->createMock(IJobList::class);
+	public function testBackgroundJobDeactivated(): void {
+		$this->appConfig->method('getValueBool')
+			->with(Application::APP_ID, ExpireTrash::TOGGLE_CONFIG_KEY_NAME, true)
+			->willReturn(false);
+		$this->expiration->expects($this->never())
+			->method('getMaxAgeAsTimestamp');
 
-		/** @var \OC\BackgroundJob\JobList $jobList */
-		$backgroundJob->execute($jobList);
-		$this->addToAssertionCount(1);
+		$job = new ExpireTrash(
+			$this->appConfig,
+			$this->userManager,
+			$this->expiration,
+			$this->logger,
+			$this->setupManager,
+			$this->lockingProvider,
+			$this->rootFolder,
+			$this->time,
+		);
+		$job->start($this->jobList);
 	}
 }

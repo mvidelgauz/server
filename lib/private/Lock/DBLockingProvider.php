@@ -1,37 +1,17 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Individual IT Services <info@individual-it.net>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Ole Ostergaard <ole.c.ostergaard@gmail.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Lock;
 
 use OC\DB\QueryBuilder\Literal;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
-use OCP\ILogger;
 use OCP\Lock\ILockingProvider;
 use OCP\Lock\LockedException;
 
@@ -39,48 +19,30 @@ use OCP\Lock\LockedException;
  * Locking provider that stores the locks in the database
  */
 class DBLockingProvider extends AbstractLockingProvider {
-	/**
-	 * @var \OCP\IDBConnection
-	 */
-	private $connection;
+	private array $sharedLocks = [];
 
-	/**
-	 * @var \OCP\ILogger
-	 */
-	private $logger;
-
-	/**
-	 * @var \OCP\AppFramework\Utility\ITimeFactory
-	 */
-	private $timeFactory;
-
-	private $sharedLocks = [];
-
-	/**
-	 * @var bool
-	 */
-	private $cacheSharedLocks;
+	public function __construct(
+		private IDBConnection $connection,
+		private ITimeFactory $timeFactory,
+		int $ttl = 3600,
+		private bool $cacheSharedLocks = true,
+	) {
+		parent::__construct($ttl);
+	}
 
 	/**
 	 * Check if we have an open shared lock for a path
-	 *
-	 * @param string $path
-	 * @return bool
 	 */
 	protected function isLocallyLocked(string $path): bool {
 		return isset($this->sharedLocks[$path]) && $this->sharedLocks[$path];
 	}
 
-	/**
-	 * Mark a locally acquired lock
-	 *
-	 * @param string $path
-	 * @param int $type self::LOCK_SHARED or self::LOCK_EXCLUSIVE
-	 */
-	protected function markAcquire(string $path, int $type) {
-		parent::markAcquire($path, $type);
+	/** @inheritDoc */
+	#[\Override]
+	protected function markAcquire(string $path, int $targetType): void {
+		parent::markAcquire($path, $targetType);
 		if ($this->cacheSharedLocks) {
-			if ($type === self::LOCK_SHARED) {
+			if ($targetType === self::LOCK_SHARED) {
 				$this->sharedLocks[$path] = true;
 			}
 		}
@@ -88,11 +50,9 @@ class DBLockingProvider extends AbstractLockingProvider {
 
 	/**
 	 * Change the type of an existing tracked lock
-	 *
-	 * @param string $path
-	 * @param int $targetType self::LOCK_SHARED or self::LOCK_EXCLUSIVE
 	 */
-	protected function markChange(string $path, int $targetType) {
+	#[\Override]
+	protected function markChange(string $path, int $targetType): void {
 		parent::markChange($path, $targetType);
 		if ($this->cacheSharedLocks) {
 			if ($targetType === self::LOCK_SHARED) {
@@ -104,32 +64,7 @@ class DBLockingProvider extends AbstractLockingProvider {
 	}
 
 	/**
-	 * @param \OCP\IDBConnection $connection
-	 * @param \OCP\ILogger $logger
-	 * @param \OCP\AppFramework\Utility\ITimeFactory $timeFactory
-	 * @param int $ttl
-	 * @param bool $cacheSharedLocks
-	 */
-	public function __construct(
-		IDBConnection $connection,
-		ILogger $logger,
-		ITimeFactory $timeFactory,
-		int $ttl = 3600,
-		$cacheSharedLocks = true
-	) {
-		$this->connection = $connection;
-		$this->logger = $logger;
-		$this->timeFactory = $timeFactory;
-		$this->ttl = $ttl;
-		$this->cacheSharedLocks = $cacheSharedLocks;
-	}
-
-	/**
 	 * Insert a file locking row if it does not exists.
-	 *
-	 * @param string $path
-	 * @param int $lock
-	 * @return int number of inserted rows
 	 */
 	protected function initLockField(string $path, int $lock = 0): int {
 		$expire = $this->getExpireTime();
@@ -140,25 +75,22 @@ class DBLockingProvider extends AbstractLockingProvider {
 		]);
 	}
 
-	/**
-	 * @return int
-	 */
 	protected function getExpireTime(): int {
 		return $this->timeFactory->getTime() + $this->ttl;
 	}
 
-	/**
-	 * @param string $path
-	 * @param int $type self::LOCK_SHARED or self::LOCK_EXCLUSIVE
-	 * @return bool
-	 */
+	/** @inheritDoc */
+	#[\Override]
 	public function isLocked(string $path, int $type): bool {
 		if ($this->hasAcquiredLock($path, $type)) {
 			return true;
 		}
-		$query = $this->connection->prepare('SELECT `lock` from `*PREFIX*file_locks` WHERE `key` = ?');
-		$query->execute([$path]);
-		$lockValue = (int)$query->fetchOne();
+		$query = $this->connection->getQueryBuilder();
+		$query->select('lock')
+			->from('file_locks')
+			->where($query->expr()->eq('key', $query->createNamedParameter($path)));
+		$result = $query->executeQuery();
+		$lockValue = (int)$result->fetchOne();
 		if ($type === self::LOCK_SHARED) {
 			if ($this->isLocallyLocked($path)) {
 				// if we have a shared lock we kept open locally but it's released we always have at least 1 shared lock in the db
@@ -173,21 +105,21 @@ class DBLockingProvider extends AbstractLockingProvider {
 		}
 	}
 
-	/**
-	 * @param string $path
-	 * @param int $type self::LOCK_SHARED or self::LOCK_EXCLUSIVE
-	 * @throws \OCP\Lock\LockedException
-	 */
-	public function acquireLock(string $path, int $type, string $readablePath = null) {
+	/** @inheritDoc */
+	#[\Override]
+	public function acquireLock(string $path, int $type, ?string $readablePath = null): void {
 		$expire = $this->getExpireTime();
 		if ($type === self::LOCK_SHARED) {
 			if (!$this->isLocallyLocked($path)) {
 				$result = $this->initLockField($path, 1);
 				if ($result <= 0) {
-					$result = $this->connection->executeUpdate(
-						'UPDATE `*PREFIX*file_locks` SET `lock` = `lock` + 1, `ttl` = ? WHERE `key` = ? AND `lock` >= 0',
-						[$expire, $path]
-					);
+					$query = $this->connection->getQueryBuilder();
+					$query->update('file_locks')
+						->set('lock', $query->func()->add('lock', $query->createNamedParameter(1, IQueryBuilder::PARAM_INT)))
+						->set('ttl', $query->createNamedParameter($expire))
+						->where($query->expr()->eq('key', $query->createNamedParameter($path)))
+						->andWhere($query->expr()->gte('lock', $query->createNamedParameter(0, IQueryBuilder::PARAM_INT)));
+					$result = $query->executeStatement();
 				}
 			} else {
 				$result = 1;
@@ -199,10 +131,13 @@ class DBLockingProvider extends AbstractLockingProvider {
 			}
 			$result = $this->initLockField($path, -1);
 			if ($result <= 0) {
-				$result = $this->connection->executeUpdate(
-					'UPDATE `*PREFIX*file_locks` SET `lock` = -1, `ttl` = ? WHERE `key` = ? AND `lock` = ?',
-					[$expire, $path, $existing]
-				);
+				$query = $this->connection->getQueryBuilder();
+				$query->update('file_locks')
+					->set('lock', $query->createNamedParameter(-1, IQueryBuilder::PARAM_INT))
+					->set('ttl', $query->createNamedParameter($expire, IQueryBuilder::PARAM_INT))
+					->where($query->expr()->eq('key', $query->createNamedParameter($path)))
+					->andWhere($query->expr()->eq('lock', $query->createNamedParameter($existing)));
+				$result = $query->executeStatement();
 			}
 		}
 		if ($result !== 1) {
@@ -211,52 +146,55 @@ class DBLockingProvider extends AbstractLockingProvider {
 		$this->markAcquire($path, $type);
 	}
 
-	/**
-	 * @param string $path
-	 * @param int $type self::LOCK_SHARED or self::LOCK_EXCLUSIVE
-	 */
-	public function releaseLock(string $path, int $type) {
+	/** @inheritDoc */
+	#[\Override]
+	public function releaseLock(string $path, int $type): void {
 		$this->markRelease($path, $type);
 
 		// we keep shared locks till the end of the request so we can re-use them
 		if ($type === self::LOCK_EXCLUSIVE) {
-			$this->connection->executeUpdate(
-				'UPDATE `*PREFIX*file_locks` SET `lock` = 0 WHERE `key` = ? AND `lock` = -1',
-				[$path]
-			);
+			$qb = $this->connection->getQueryBuilder();
+			$qb->update('file_locks')
+				->set('lock', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT))
+				->where($qb->expr()->eq('key', $qb->createNamedParameter($path)))
+				->andWhere($qb->expr()->eq('lock', $qb->createNamedParameter(-1, IQueryBuilder::PARAM_INT)));
+			$qb->executeStatement();
 		} elseif (!$this->cacheSharedLocks) {
-			$query = $this->connection->getQueryBuilder();
-			$query->update('file_locks')
-				->set('lock', $query->func()->subtract('lock', $query->createNamedParameter(1)))
-				->where($query->expr()->eq('key', $query->createNamedParameter($path)))
-				->andWhere($query->expr()->gt('lock', $query->createNamedParameter(0)));
-			$query->execute();
+			$qb = $this->connection->getQueryBuilder();
+			$qb->update('file_locks')
+				->set('lock', $qb->func()->subtract('lock', $qb->createNamedParameter(1, IQueryBuilder::PARAM_INT)))
+				->where($qb->expr()->eq('key', $qb->createNamedParameter($path)))
+				->andWhere($qb->expr()->gt('lock', $qb->createNamedParameter(0, IQueryBuilder::PARAM_INT)));
+			$qb->executeStatement();
 		}
 	}
 
-	/**
-	 * Change the type of an existing lock
-	 *
-	 * @param string $path
-	 * @param int $targetType self::LOCK_SHARED or self::LOCK_EXCLUSIVE
-	 * @throws \OCP\Lock\LockedException
-	 */
-	public function changeLock(string $path, int $targetType) {
+	/** @inheritDoc */
+	#[\Override]
+	public function changeLock(string $path, int $targetType): void {
 		$expire = $this->getExpireTime();
 		if ($targetType === self::LOCK_SHARED) {
-			$result = $this->connection->executeUpdate(
-				'UPDATE `*PREFIX*file_locks` SET `lock` = 1, `ttl` = ? WHERE `key` = ? AND `lock` = -1',
-				[$expire, $path]
-			);
+			$qb = $this->connection->getQueryBuilder();
+			$result = $qb->update('file_locks')
+				->set('lock', $qb->createNamedParameter(1, IQueryBuilder::PARAM_INT))
+				->set('ttl', $qb->createNamedParameter($expire, IQueryBuilder::PARAM_INT))
+				->where($qb->expr()->andX(
+					$qb->expr()->eq('key', $qb->createNamedParameter($path)),
+					$qb->expr()->eq('lock', $qb->createNamedParameter(-1, IQueryBuilder::PARAM_INT))
+				))->executeStatement();
 		} else {
-			// since we only keep one shared lock in the db we need to check if we have more then one shared lock locally manually
+			// since we only keep one shared lock in the db we need to check if we have more than one shared lock locally manually
 			if (isset($this->acquiredLocks['shared'][$path]) && $this->acquiredLocks['shared'][$path] > 1) {
 				throw new LockedException($path);
 			}
-			$result = $this->connection->executeUpdate(
-				'UPDATE `*PREFIX*file_locks` SET `lock` = -1, `ttl` = ? WHERE `key` = ? AND `lock` = 1',
-				[$expire, $path]
-			);
+			$qb = $this->connection->getQueryBuilder();
+			$result = $qb->update('file_locks')
+				->set('lock', $qb->createNamedParameter(-1, IQueryBuilder::PARAM_INT))
+				->set('ttl', $qb->createNamedParameter($expire, IQueryBuilder::PARAM_INT))
+				->where($qb->expr()->andX(
+					$qb->expr()->eq('key', $qb->createNamedParameter($path)),
+					$qb->expr()->eq('lock', $qb->createNamedParameter(1, IQueryBuilder::PARAM_INT))
+				))->executeStatement();
 		}
 		if ($result !== 1) {
 			throw new LockedException($path);
@@ -264,16 +202,14 @@ class DBLockingProvider extends AbstractLockingProvider {
 		$this->markChange($path, $targetType);
 	}
 
-	/**
-	 * cleanup empty locks
-	 */
-	public function cleanExpiredLocks() {
+	/** @inheritDoc */
+	public function cleanExpiredLocks(): void {
 		$expire = $this->timeFactory->getTime();
 		try {
-			$this->connection->executeUpdate(
-				'DELETE FROM `*PREFIX*file_locks` WHERE `ttl` < ?',
-				[$expire]
-			);
+			$qb = $this->connection->getQueryBuilder();
+			$qb->delete('file_locks')
+				->where($qb->expr()->lt('ttl', $qb->createNamedParameter($expire, IQueryBuilder::PARAM_INT)))
+				->executeStatement();
 		} catch (\Exception $e) {
 			// If the table is missing, the clean up was successful
 			if ($this->connection->tableExists('file_locks')) {
@@ -282,10 +218,9 @@ class DBLockingProvider extends AbstractLockingProvider {
 		}
 	}
 
-	/**
-	 * release all lock acquired by this instance which were marked using the mark* methods
-	 */
-	public function releaseAll() {
+	/** @inheritDoc */
+	#[\Override]
+	public function releaseAll(): void {
 		parent::releaseAll();
 
 		if (!$this->cacheSharedLocks) {
@@ -299,15 +234,15 @@ class DBLockingProvider extends AbstractLockingProvider {
 
 		$chunkedPaths = array_chunk($lockedPaths, 100);
 
+		$qb = $this->connection->getQueryBuilder();
+		$qb->update('file_locks')
+			->set('lock', $qb->func()->subtract('lock', $qb->expr()->literal(1)))
+			->where($qb->expr()->in('key', $qb->createParameter('chunk')))
+			->andWhere($qb->expr()->gt('lock', new Literal(0)));
+
 		foreach ($chunkedPaths as $chunk) {
-			$builder = $this->connection->getQueryBuilder();
-
-			$query = $builder->update('file_locks')
-				->set('lock', $builder->func()->subtract('lock', $builder->expr()->literal(1)))
-				->where($builder->expr()->in('key', $builder->createNamedParameter($chunk, IQueryBuilder::PARAM_STR_ARRAY)))
-				->andWhere($builder->expr()->gt('lock', new Literal(0)));
-
-			$query->execute();
+			$qb->setParameter('chunk', $chunk, IQueryBuilder::PARAM_STR_ARRAY);
+			$qb->executeStatement();
 		}
 	}
 }

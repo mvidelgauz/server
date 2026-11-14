@@ -1,37 +1,17 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Roger Szabo <roger.szabo@web.de>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\User_LDAP\User;
 
-use OC\Cache\CappedMemoryCache;
 use OCA\User_LDAP\Access;
-use OCA\User_LDAP\FilesystemHelper;
-use OCA\User_LDAP\LogWrapper;
+use OCP\AppFramework\Services\IAppConfig;
+use OCP\Cache\CappedMemoryCache;
+use OCP\Config\IUserConfig;
 use OCP\IAvatarManager;
 use OCP\IConfig;
 use OCP\IDBConnection;
@@ -39,6 +19,7 @@ use OCP\Image;
 use OCP\IUserManager;
 use OCP\Notification\IManager as INotificationManager;
 use OCP\Share\IManager;
+use Psr\Log\LoggerInterface;
 
 /**
  * Manager
@@ -47,72 +28,33 @@ use OCP\Share\IManager;
  * cache
  */
 class Manager {
-	/** @var Access */
-	protected $access;
-
-	/** @var IConfig */
-	protected $ocConfig;
-
-	/** @var IDBConnection */
-	protected $db;
-
-	/** @var IUserManager */
-	protected $userManager;
-
-	/** @var INotificationManager */
-	protected $notificationManager;
-
-	/** @var FilesystemHelper */
-	protected $ocFilesystem;
-
-	/** @var LogWrapper */
-	protected $ocLog;
-
-	/** @var Image */
-	protected $image;
-
-	/** @param \OCP\IAvatarManager */
-	protected $avatarManager;
-
-	/**
-	 * @var CappedMemoryCache $usersByDN
-	 */
-	protected $usersByDN;
-	/**
-	 * @var CappedMemoryCache $usersByUid
-	 */
-	protected $usersByUid;
-	/** @var IManager */
-	private $shareManager;
+	protected ?Access $access = null;
+	protected IDBConnection $db;
+	/** @var CappedMemoryCache<User> $usersByDN */
+	protected CappedMemoryCache $usersByDN;
+	/** @var CappedMemoryCache<User> $usersByUid */
+	protected CappedMemoryCache $usersByUid;
 
 	public function __construct(
-		IConfig $ocConfig,
-		FilesystemHelper $ocFilesystem,
-		LogWrapper $ocLog,
-		IAvatarManager $avatarManager,
-		Image $image,
-		IUserManager $userManager,
-		INotificationManager $notificationManager,
-		IManager $shareManager
+		protected IConfig $ocConfig,
+		protected IUserConfig $userConfig,
+		protected IAppConfig $appConfig,
+		protected LoggerInterface $logger,
+		protected IAvatarManager $avatarManager,
+		protected Image $image,
+		protected IUserManager $userManager,
+		protected INotificationManager $notificationManager,
+		private IManager $shareManager,
 	) {
-		$this->ocConfig = $ocConfig;
-		$this->ocFilesystem = $ocFilesystem;
-		$this->ocLog = $ocLog;
-		$this->avatarManager = $avatarManager;
-		$this->image = $image;
-		$this->userManager = $userManager;
-		$this->notificationManager = $notificationManager;
 		$this->usersByDN = new CappedMemoryCache();
 		$this->usersByUid = new CappedMemoryCache();
-		$this->shareManager = $shareManager;
 	}
 
 	/**
 	 * Binds manager to an instance of Access.
 	 * It needs to be assigned first before the manager can be used.
-	 * @param Access
 	 */
-	public function setLdapAccess(Access $access) {
+	public function setLdapAccess(Access $access): void {
 		$this->access = $access;
 	}
 
@@ -121,12 +63,11 @@ class Manager {
 	 * property array
 	 * @param string $dn the DN of the user
 	 * @param string $uid the internal (owncloud) username
-	 * @return \OCA\User_LDAP\User\User
 	 */
-	private function createAndCache($dn, $uid) {
+	private function createAndCache(string $dn, string $uid): User {
 		$this->checkAccess();
-		$user = new User($uid, $dn, $this->access, $this->ocConfig,
-			$this->ocFilesystem, clone $this->image, $this->ocLog,
+		$user = new User($uid, $dn, $this->access, $this->ocConfig, $this->userConfig, $this->appConfig,
+			clone $this->image, $this->logger,
 			$this->avatarManager, $this->userManager,
 			$this->notificationManager);
 		$this->usersByDN[$dn] = $user;
@@ -135,10 +76,9 @@ class Manager {
 	}
 
 	/**
-	 * removes a user entry from the cache
-	 * @param $uid
+	 * Removes a user entry from the cache.
 	 */
-	public function invalidate($uid) {
+	public function invalidate(string $uid): void {
 		if (!isset($this->usersByUid[$uid])) {
 			return;
 		}
@@ -150,9 +90,9 @@ class Manager {
 	/**
 	 * @brief checks whether the Access instance has been set
 	 * @throws \Exception if Access has not been set
-	 * @return null
+	 * @psalm-assert !null $this->access
 	 */
-	private function checkAccess() {
+	private function checkAccess(): void {
 		if (is_null($this->access)) {
 			throw new \Exception('LDAP Access instance must be set first');
 		}
@@ -163,22 +103,35 @@ class Manager {
 	 * email, displayname, or others.
 	 *
 	 * @param bool $minimal - optional, set to true to skip attributes with big
-	 * payload
+	 *                      payload
 	 * @return string[]
 	 */
 	public function getAttributes($minimal = false) {
 		$baseAttributes = array_merge(Access::UUID_ATTRIBUTES, ['dn', 'uid', 'samaccountname', 'memberof']);
 		$attributes = [
 			$this->access->getConnection()->ldapExpertUUIDUserAttr,
+			$this->access->getConnection()->ldapExpertUsernameAttr,
 			$this->access->getConnection()->ldapQuotaAttribute,
 			$this->access->getConnection()->ldapEmailAttribute,
+			$this->access->getConnection()->ldapUserActiveState,
 			$this->access->getConnection()->ldapUserDisplayName,
 			$this->access->getConnection()->ldapUserDisplayName2,
 			$this->access->getConnection()->ldapExtStorageHomeAttribute,
+			$this->access->getConnection()->ldapAttributePhone,
+			$this->access->getConnection()->ldapAttributeWebsite,
+			$this->access->getConnection()->ldapAttributeAddress,
+			$this->access->getConnection()->ldapAttributeTwitter,
+			$this->access->getConnection()->ldapAttributeFediverse,
+			$this->access->getConnection()->ldapAttributeOrganisation,
+			$this->access->getConnection()->ldapAttributeRole,
+			$this->access->getConnection()->ldapAttributeHeadline,
+			$this->access->getConnection()->ldapAttributeBiography,
+			$this->access->getConnection()->ldapAttributeBirthDate,
+			$this->access->getConnection()->ldapAttributePronouns,
 		];
 
-		$homeRule = $this->access->getConnection()->homeFolderNamingRule;
-		if (strpos($homeRule, 'attr:') === 0) {
+		$homeRule = (string)$this->access->getConnection()->homeFolderNamingRule;
+		if (str_starts_with($homeRule, 'attr:')) {
 			$attributes[] = substr($homeRule, strlen('attr:'));
 		}
 
@@ -194,7 +147,7 @@ class Manager {
 		$attributes = array_reduce($attributes,
 			function ($list, $attribute) {
 				$attribute = strtolower(trim((string)$attribute));
-				if (!empty($attribute) && !in_array($attribute, $list)) {
+				if (!empty($attribute) && !in_array($attribute, $list, true)) {
 					$list[] = $attribute;
 				}
 
@@ -207,34 +160,35 @@ class Manager {
 	}
 
 	/**
-	 * Checks whether the specified user is marked as deleted
-	 * @param string $id the Nextcloud user name
-	 * @return bool
+	 * Checks whether the specified user is marked as deleted.
+	 * @param string $id the Nextcloud username
 	 */
-	public function isDeletedUser($id) {
-		$isDeleted = $this->ocConfig->getUserValue(
-			$id, 'user_ldap', 'isDeleted', 0);
-		return (int)$isDeleted === 1;
+	public function isDeletedUser(string $id): bool {
+		try {
+			return $this->userConfig->getValueBool($id, 'user_ldap', 'isDeleted');
+		} catch (\InvalidArgumentException $e) {
+			// Most likely the string is too long to be a valid user id
+			$this->logger->debug('Invalid id given to isDeletedUser', ['exception' => $e]);
+			return false;
+		}
 	}
 
 	/**
-	 * creates and returns an instance of OfflineUser for the specified user
-	 * @param string $id
-	 * @return \OCA\User_LDAP\User\OfflineUser
+	 * Creates and returns an instance of OfflineUser for the specified user.
 	 */
-	public function getDeletedUser($id) {
+	public function getDeletedUser(string $id): OfflineUser {
 		return new OfflineUser(
 			$id,
-			$this->ocConfig,
+			$this->userConfig,
 			$this->access->getUserMapper(),
 			$this->shareManager
 		);
 	}
 
 	/**
-	 * @brief returns a User object by it's Nextcloud username
+	 * @brief returns a User object by its Nextcloud username
 	 * @param string $id the DN or username of the user
-	 * @return \OCA\User_LDAP\User\User|\OCA\User_LDAP\User\OfflineUser|null
+	 * @return User|OfflineUser|null
 	 */
 	protected function createInstancyByUserName($id) {
 		//most likely a uid. Check whether it is a deleted user
@@ -249,9 +203,9 @@ class Manager {
 	}
 
 	/**
-	 * @brief returns a User object by it's DN or Nextcloud username
+	 * @brief returns a User object by its DN or Nextcloud username
 	 * @param string $id the DN or username of the user
-	 * @return \OCA\User_LDAP\User\User|\OCA\User_LDAP\User\OfflineUser|null
+	 * @return User|OfflineUser|null
 	 * @throws \Exception when connection could not be established
 	 */
 	public function get($id) {
@@ -270,5 +224,38 @@ class Manager {
 		}
 
 		return $this->createInstancyByUserName($id);
+	}
+
+	/**
+	 * @brief Checks whether a User object by its DN or Nextcloud username exists
+	 * @param string $id the DN or username of the user
+	 * @throws \Exception when connection could not be established
+	 */
+	public function exists($id): bool {
+		$this->checkAccess();
+		$this->logger->debug('Checking if {id} exists', ['id' => $id]);
+		if (isset($this->usersByDN[$id])) {
+			return true;
+		} elseif (isset($this->usersByUid[$id])) {
+			return true;
+		}
+
+		if ($this->access->stringResemblesDN($id)) {
+			$this->logger->debug('{id} looks like a dn', ['id' => $id]);
+			$uid = $this->access->dn2username($id);
+			if ($uid !== false) {
+				return true;
+			}
+		}
+
+		// Most likely a uid. Check whether it is a deleted user
+		if ($this->isDeletedUser($id)) {
+			return true;
+		}
+		$dn = $this->access->username2dn($id);
+		if ($dn !== false) {
+			return true;
+		}
+		return false;
 	}
 }

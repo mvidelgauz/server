@@ -1,41 +1,27 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Preview;
 
 use OCP\Files\File;
 use OCP\IImage;
+use OCP\Image;
 
 class MarkDown extends TXT {
 	/**
 	 * {@inheritDoc}
 	 */
+	#[\Override]
 	public function getMimeType(): string {
 		return '/text\/(x-)?markdown/';
 	}
 
+	#[\Override]
 	public function getThumbnail(File $file, int $maxX, int $maxY): ?IImage {
 		$content = $file->fopen('r');
 
@@ -43,7 +29,7 @@ class MarkDown extends TXT {
 			return null;
 		}
 
-		$content = stream_get_contents($content,3000);
+		$content = stream_get_contents($content, 3000);
 
 		//don't create previews of empty text files
 		if (trim($content) === '') {
@@ -70,7 +56,7 @@ class MarkDown extends TXT {
 		$lines = preg_split("/\r\n|\n|\r/", $content);
 
 		// Define text size of text file preview
-		$fontSize = $maxX ? (int) ((1 / ($maxX >= 512 ? 60 : 40) * $maxX)) : 10;
+		$fontSize = $maxX ? (int)((1 / ($maxX >= 512 ? 60 : 40) * $maxX)) : 10;
 
 		$image = imagecreate($maxX, $maxY);
 		imagecolorallocate($image, 255, 255, 255);
@@ -119,7 +105,7 @@ class MarkDown extends TXT {
 				// Get rid of markdown symbols that we still needed for the font size
 				$line = preg_replace('/^#*\s/', '', $line);
 
-				$wrappedText = wordwrap($line, $wordWrap,"\n");
+				$wrappedText = wordwrap($line, $wordWrap, "\n");
 				$linesWrapped = count(explode("\n", $wrappedText));
 				imagettftext($image, $actualFontSize, 0, $x, $y, $textColor, $actualFontSize === $fontSize ? $fontFile : $fontFileBold, $wrappedText);
 				$nextLineStart = (int)($linesWrapped * ceil($actualFontSize * 2));
@@ -137,7 +123,7 @@ class MarkDown extends TXT {
 			}
 		}
 
-		$imageObject = new \OC_Image();
+		$imageObject = new Image();
 		$imageObject->setResource($image);
 
 		return $imageObject->valid() ? $imageObject : null;

@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Authentication\WebAuthn;
 
 use OC\Authentication\WebAuthn\Db\PublicKeyCredentialEntity;
@@ -33,14 +17,12 @@ use Webauthn\PublicKeyCredentialSourceRepository;
 use Webauthn\PublicKeyCredentialUserEntity;
 
 class CredentialRepository implements PublicKeyCredentialSourceRepository {
-
-	/** @var PublicKeyCredentialMapper */
-	private $credentialMapper;
-
-	public function __construct(PublicKeyCredentialMapper $credentialMapper) {
-		$this->credentialMapper = $credentialMapper;
+	public function __construct(
+		private PublicKeyCredentialMapper $credentialMapper,
+	) {
 	}
 
+	#[\Override]
 	public function findOneByCredentialId(string $publicKeyCredentialId): ?PublicKeyCredentialSource {
 		try {
 			$entity = $this->credentialMapper->findOneByCredentialId($publicKeyCredentialId);
@@ -53,6 +35,7 @@ class CredentialRepository implements PublicKeyCredentialSourceRepository {
 	/**
 	 * @return PublicKeyCredentialSource[]
 	 */
+	#[\Override]
 	public function findAllForUserEntity(PublicKeyCredentialUserEntity $publicKeyCredentialUserEntity): array {
 		$uid = $publicKeyCredentialUserEntity->getId();
 		$entities = $this->credentialMapper->findAllForUid($uid);
@@ -62,7 +45,7 @@ class CredentialRepository implements PublicKeyCredentialSourceRepository {
 		}, $entities);
 	}
 
-	public function saveAndReturnCredentialSource(PublicKeyCredentialSource $publicKeyCredentialSource, string $name = null): PublicKeyCredentialEntity {
+	public function saveAndReturnCredentialSource(PublicKeyCredentialSource $publicKeyCredentialSource, ?string $name = null, bool $userVerification = false): PublicKeyCredentialEntity {
 		$oldEntity = null;
 
 		try {
@@ -76,19 +59,28 @@ class CredentialRepository implements PublicKeyCredentialSourceRepository {
 			$name = 'default';
 		}
 
-		$entity = PublicKeyCredentialEntity::fromPublicKeyCrendentialSource($name, $publicKeyCredentialSource);
+		$entity = PublicKeyCredentialEntity::fromPublicKeyCrendentialSource($name, $publicKeyCredentialSource, $userVerification);
 
 		if ($oldEntity) {
+			if ($oldEntity->getUid() !== $entity->getUid()) {
+				throw new \InvalidArgumentException('Uid mismatch');
+			}
 			$entity->setId($oldEntity->getId());
 			if ($defaultName) {
 				$entity->setName($oldEntity->getName());
+			}
+
+			// Don't downgrade UV just because it was skipped during a login due to another key
+			if ($oldEntity->getUserVerification()) {
+				$entity->setUserVerification(true);
 			}
 		}
 
 		return $this->credentialMapper->insertOrUpdate($entity);
 	}
 
-	public function saveCredentialSource(PublicKeyCredentialSource $publicKeyCredentialSource, string $name = null): void {
+	#[\Override]
+	public function saveCredentialSource(PublicKeyCredentialSource $publicKeyCredentialSource, ?string $name = null): void {
 		$this->saveAndReturnCredentialSource($publicKeyCredentialSource, $name);
 	}
 }

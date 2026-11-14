@@ -1,28 +1,14 @@
 <?php
 
 /**
- * ownCloud - App Framework
- *
- * @author Bernhard Posselt
- * @copyright 2012 Bernhard Posselt <dev@bernhard-posselt.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
- * License as published by the Free Software Foundation; either
- * version 3 of the License, or any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU AFFERO GENERAL PUBLIC LICENSE for more details.
- *
- * You should have received a copy of the GNU Affero General Public
- * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\AppFramework\Http;
 
+use OC\AppFramework\DependencyInjection\DIContainer;
 use OC\AppFramework\Http\Dispatcher;
 use OC\AppFramework\Http\Request;
 use OC\AppFramework\Middleware\MiddlewareDispatcher;
@@ -30,17 +16,36 @@ use OC\AppFramework\Utility\ControllerMethodReflector;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\AppFramework\Http\InvalidEnumParameterException;
+use OCP\AppFramework\Http\InvalidStringParameterException;
 use OCP\AppFramework\Http\JSONResponse;
+use OCP\AppFramework\Http\ParameterOutOfRangeException;
 use OCP\AppFramework\Http\Response;
+use OCP\Diagnostics\IEventLogger;
 use OCP\IConfig;
+use OCP\IDBConnection;
 use OCP\IRequest;
+use OCP\IRequestId;
+use OCP\IUserSession;
+use OCP\Server;
 use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
+
+enum TestStringBackedEnum: string {
+	case Foo = 'foo';
+	case Bar = 'bar';
+}
+
+enum TestIntBackedEnum: int {
+	case One = 1;
+	case Two = 2;
+}
 
 class TestController extends Controller {
 	/**
 	 * @param string $appName
-	 * @param \OCP\IRequest $request
+	 * @param IRequest $request
 	 */
 	public function __construct($appName, $request) {
 		parent::__construct($appName, $request);
@@ -49,17 +54,17 @@ class TestController extends Controller {
 	/**
 	 * @param int $int
 	 * @param bool $bool
+	 * @param double $foo
 	 * @param int $test
-	 * @param int $test2
+	 * @param integer $test2
 	 * @return array
 	 */
-	public function exec($int, $bool, $test = 4, $test2 = 1) {
+	public function exec($int, $bool, $foo, $test = 4, $test2 = 1) {
 		$this->registerResponder('text', function ($in) {
 			return new JSONResponse(['text' => $in]);
 		});
 		return [$int, $bool, $test, $test2];
 	}
-
 
 	/**
 	 * @param int $int
@@ -73,68 +78,80 @@ class TestController extends Controller {
 			'text' => [$int, $bool, $test, $test2]
 		]);
 	}
+
+	public function test(): Response {
+		return new DataResponse();
+	}
+
+	public function execStringBackedEnum(TestStringBackedEnum $enum) {
+		return [$enum];
+	}
+
+	public function execIntBackedEnum(TestIntBackedEnum $enum) {
+		return [$enum];
+	}
+
+	public function execNullableBackedEnum(?TestStringBackedEnum $enum = null) {
+		return [$enum];
+	}
 }
 
 /**
  * Class DispatcherTest
  *
  * @package Test\AppFramework\Http
- * @group DB
  */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class DispatcherTest extends \Test\TestCase {
 	/** @var MiddlewareDispatcher */
 	private $middlewareDispatcher;
 	/** @var Dispatcher */
 	private $dispatcher;
 	private $controllerMethod;
+	/** @var Controller|MockObject */
+	private $controller;
 	private $response;
-	/** @var IRequest|MockObject  */
+	/** @var IRequest|MockObject */
 	private $request;
 	private $lastModified;
 	private $etag;
-	/** @var Http|MockObject  */
+	/** @var Http|MockObject */
 	private $http;
 	private $reflector;
-	/** @var IConfig|MockObject  */
+	/** @var IConfig|MockObject */
 	private $config;
-	/** @var LoggerInterface|MockObject  */
+	/** @var LoggerInterface|MockObject */
 	private $logger;
+	/** @var IEventLogger|MockObject */
+	private $eventLogger;
+	/** @var ContainerInterface|MockObject */
+	private $container;
+	/** @var IUserSession|MockObject */
+	private $userSession;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 		$this->controllerMethod = 'test';
 
 		$this->config = $this->createMock(IConfig::class);
 		$this->logger = $this->createMock(LoggerInterface::class);
-		$app = $this->getMockBuilder(
-			'OC\AppFramework\DependencyInjection\DIContainer')
-			->disableOriginalConstructor()
-			->getMock();
-		$request = $this->getMockBuilder(
-			'\OC\AppFramework\Http\Request')
-			->disableOriginalConstructor()
-			->getMock();
-		$this->http = $this->getMockBuilder(
-			\OC\AppFramework\Http::class)
-			->disableOriginalConstructor()
-			->getMock();
+		$this->eventLogger = $this->createMock(IEventLogger::class);
+		$this->container = $this->createMock(ContainerInterface::class);
+		$this->userSession = $this->createMock(IUserSession::class);
+		$app = $this->createMock(DIContainer::class);
+		$request = $this->createMock(Request::class);
+		$this->http = $this->createMock(\OC\AppFramework\Http::class);
 
-		$this->middlewareDispatcher = $this->getMockBuilder(
-			'\OC\AppFramework\Middleware\MiddlewareDispatcher')
-			->disableOriginalConstructor()
-			->getMock();
-		$this->controller = $this->getMockBuilder(
-			'\OCP\AppFramework\Controller')
-			->setMethods([$this->controllerMethod])
+		$this->middlewareDispatcher = $this->createMock(MiddlewareDispatcher::class);
+		$this->controller = $this->getMockBuilder(TestController::class)
+			->onlyMethods([$this->controllerMethod])
 			->setConstructorArgs([$app, $request])
 			->getMock();
 
-		$this->request = $this->getMockBuilder(
-			'\OC\AppFramework\Http\Request')
-			->disableOriginalConstructor()
-			->getMock();
+		$this->request = $this->createMock(Request::class);
 
-		$this->reflector = new ControllerMethodReflector();
+		$this->reflector = new ControllerMethodReflector(Server::get(LoggerInterface::class));
 
 		$this->dispatcher = new Dispatcher(
 			$this->http,
@@ -142,16 +159,18 @@ class DispatcherTest extends \Test\TestCase {
 			$this->reflector,
 			$this->request,
 			$this->config,
-			\OC::$server->getDatabaseConnection(),
-			$this->logger
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
 		);
 
 		$this->response = $this->createMock(Response::class);
 
-		$this->lastModified = new \DateTime(null, new \DateTimeZone('GMT'));
+		$this->lastModified = new \DateTime('now', new \DateTimeZone('GMT'));
 		$this->etag = 'hi';
 	}
-
 
 	/**
 	 * @param string $out
@@ -166,7 +185,7 @@ class DispatcherTest extends \Test\TestCase {
 				->method('beforeController')
 				->with($this->equalTo($this->controller),
 					$this->equalTo($this->controllerMethod))
-				->will($this->throwException($exception));
+				->willThrowException($exception);
 			if ($catchEx) {
 				$this->middlewareDispatcher->expects($this->once())
 					->method('afterException')
@@ -229,8 +248,7 @@ class DispatcherTest extends \Test\TestCase {
 			->willReturn($out);
 	}
 
-
-	public function testDispatcherReturnsArrayWith2Entries() {
+	public function testDispatcherReturnsArrayWith2Entries(): void {
 		$this->setMiddlewareExpectations('');
 
 		$response = $this->dispatcher->dispatch($this->controller, $this->controllerMethod);
@@ -239,8 +257,7 @@ class DispatcherTest extends \Test\TestCase {
 		$this->assertNull($response[2]);
 	}
 
-
-	public function testHeadersAndOutputAreReturned() {
+	public function testHeadersAndOutputAreReturned(): void {
 		$out = 'yo';
 		$httpHeaders = 'Http';
 		$responseHeaders = ['hell' => 'yeah'];
@@ -254,8 +271,7 @@ class DispatcherTest extends \Test\TestCase {
 		$this->assertEquals($out, $response[3]);
 	}
 
-
-	public function testExceptionCallsAfterException() {
+	public function testExceptionCallsAfterException(): void {
 		$out = 'yo';
 		$httpHeaders = 'Http';
 		$responseHeaders = ['hell' => 'yeah'];
@@ -269,8 +285,7 @@ class DispatcherTest extends \Test\TestCase {
 		$this->assertEquals($out, $response[3]);
 	}
 
-
-	public function testExceptionThrowsIfCanNotBeHandledByAfterException() {
+	public function testExceptionThrowsIfCanNotBeHandledByAfterException(): void {
 		$out = 'yo';
 		$httpHeaders = 'Http';
 		$responseHeaders = ['hell' => 'yeah'];
@@ -283,10 +298,9 @@ class DispatcherTest extends \Test\TestCase {
 		);
 	}
 
-
 	private function dispatcherPassthrough() {
 		$this->middlewareDispatcher->expects($this->once())
-				->method('beforeController');
+			->method('beforeController');
 		$this->middlewareDispatcher->expects($this->once())
 			->method('afterController')
 			->willReturnCallback(function ($a, $b, $in) {
@@ -299,63 +313,28 @@ class DispatcherTest extends \Test\TestCase {
 			});
 	}
 
-
-	public function testControllerParametersInjected() {
-		$this->request = new Request(
-			[
-				'post' => [
-					'int' => '3',
-					'bool' => 'false'
-				],
-				'method' => 'POST'
-			],
-			$this->getMockBuilder('\OCP\Security\ISecureRandom')
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
-		);
-		$this->dispatcher = new Dispatcher(
-			$this->http, $this->middlewareDispatcher, $this->reflector,
-			$this->request,
-			$this->config,
-			\OC::$server->getDatabaseConnection(),
-			$this->logger
-		);
-		$controller = new TestController('app', $this->request);
-
-		// reflector is supposed to be called once
-		$this->dispatcherPassthrough();
-		$response = $this->dispatcher->dispatch($controller, 'exec');
-
-		$this->assertEquals('[3,true,4,1]', $response[3]);
-	}
-
-
-	public function testControllerParametersInjectedDefaultOverwritten() {
+	public function testControllerParametersInjected(): void {
 		$this->request = new Request(
 			[
 				'post' => [
 					'int' => '3',
 					'bool' => 'false',
-					'test2' => 7
+					'double' => 1.2,
 				],
-				'method' => 'POST',
+				'method' => 'POST'
 			],
-			$this->getMockBuilder('\OCP\Security\ISecureRandom')
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		);
 		$this->dispatcher = new Dispatcher(
 			$this->http, $this->middlewareDispatcher, $this->reflector,
 			$this->request,
 			$this->config,
-			\OC::$server->getDatabaseConnection(),
-			$this->logger
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
 		);
 		$controller = new TestController('app', $this->request);
 
@@ -363,36 +342,152 @@ class DispatcherTest extends \Test\TestCase {
 		$this->dispatcherPassthrough();
 		$response = $this->dispatcher->dispatch($controller, 'exec');
 
-		$this->assertEquals('[3,true,4,7]', $response[3]);
+		$this->assertEquals('[3,false,4,1]', $response[3]);
 	}
 
+	public function testControllerParametersInjectedStringBackedEnum(): void {
+		$this->request = new Request(
+			[
+				'post' => [
+					'enum' => 'foo',
+				],
+				'method' => 'POST',
+			],
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
+		);
+		$this->dispatcher = new Dispatcher(
+			$this->http, $this->middlewareDispatcher, $this->reflector,
+			$this->request,
+			$this->config,
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
+		);
+		$controller = new TestController('app', $this->request);
 
+		$this->dispatcherPassthrough();
+		$response = $this->dispatcher->dispatch($controller, 'execStringBackedEnum');
 
-	public function testResponseTransformedByUrlFormat() {
+		$this->assertEquals('["foo"]', $response[3]);
+	}
+
+	public function testControllerParametersInjectedIntBackedEnum(): void {
+		$this->request = new Request(
+			[
+				'post' => [
+					'enum' => '2',
+				],
+				'method' => 'POST',
+			],
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
+		);
+		$this->dispatcher = new Dispatcher(
+			$this->http, $this->middlewareDispatcher, $this->reflector,
+			$this->request,
+			$this->config,
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
+		);
+		$controller = new TestController('app', $this->request);
+
+		$this->dispatcherPassthrough();
+		$response = $this->dispatcher->dispatch($controller, 'execIntBackedEnum');
+
+		$this->assertEquals('[2]', $response[3]);
+	}
+
+	public function testControllerParametersInjectedNullableBackedEnumDefault(): void {
+		$this->request = new Request(
+			[
+				'post' => [],
+				'method' => 'POST',
+			],
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
+		);
+		$this->dispatcher = new Dispatcher(
+			$this->http, $this->middlewareDispatcher, $this->reflector,
+			$this->request,
+			$this->config,
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
+		);
+		$controller = new TestController('app', $this->request);
+
+		$this->dispatcherPassthrough();
+		$response = $this->dispatcher->dispatch($controller, 'execNullableBackedEnum');
+
+		$this->assertEquals('[null]', $response[3]);
+	}
+
+	public function testControllerParametersInjectedDefaultOverwritten(): void {
 		$this->request = new Request(
 			[
 				'post' => [
 					'int' => '3',
-					'bool' => 'false'
+					'bool' => 'false',
+					'double' => 1.2,
+					'test2' => 7
+				],
+				'method' => 'POST',
+			],
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
+		);
+		$this->dispatcher = new Dispatcher(
+			$this->http, $this->middlewareDispatcher, $this->reflector,
+			$this->request,
+			$this->config,
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
+		);
+		$controller = new TestController('app', $this->request);
+
+		// reflector is supposed to be called once
+		$this->dispatcherPassthrough();
+		$response = $this->dispatcher->dispatch($controller, 'exec');
+
+		$this->assertEquals('[3,false,4,7]', $response[3]);
+	}
+
+	public function testResponseTransformedByUrlFormat(): void {
+		$this->request = new Request(
+			[
+				'post' => [
+					'int' => '3',
+					'bool' => 'false',
+					'double' => 1.2,
 				],
 				'urlParams' => [
 					'format' => 'text'
 				],
 				'method' => 'GET'
 			],
-			$this->getMockBuilder('\OCP\Security\ISecureRandom')
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		);
 		$this->dispatcher = new Dispatcher(
 			$this->http, $this->middlewareDispatcher, $this->reflector,
 			$this->request,
 			$this->config,
-			\OC::$server->getDatabaseConnection(),
-			$this->logger
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
 		);
 		$controller = new TestController('app', $this->request);
 
@@ -403,32 +498,31 @@ class DispatcherTest extends \Test\TestCase {
 		$this->assertEquals('{"text":[3,false,4,1]}', $response[3]);
 	}
 
-
-	public function testResponseTransformsDataResponse() {
+	public function testResponseTransformsDataResponse(): void {
 		$this->request = new Request(
 			[
 				'post' => [
 					'int' => '3',
-					'bool' => 'false'
+					'bool' => 'false',
+					'double' => 1.2,
 				],
 				'urlParams' => [
 					'format' => 'json'
 				],
 				'method' => 'GET'
 			],
-			$this->getMockBuilder('\OCP\Security\ISecureRandom')
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		);
 		$this->dispatcher = new Dispatcher(
 			$this->http, $this->middlewareDispatcher, $this->reflector,
 			$this->request,
 			$this->config,
-			\OC::$server->getDatabaseConnection(),
-			$this->logger
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
 		);
 		$controller = new TestController('app', $this->request);
 
@@ -439,13 +533,13 @@ class DispatcherTest extends \Test\TestCase {
 		$this->assertEquals('{"text":[3,false,4,1]}', $response[3]);
 	}
 
-
-	public function testResponseTransformedByAcceptHeader() {
+	public function testResponseTransformedByAcceptHeader(): void {
 		$this->request = new Request(
 			[
 				'post' => [
 					'int' => '3',
-					'bool' => 'false'
+					'bool' => 'false',
+					'double' => 1.2,
 				],
 				'server' => [
 					'HTTP_ACCEPT' => 'application/text, test',
@@ -453,19 +547,18 @@ class DispatcherTest extends \Test\TestCase {
 				],
 				'method' => 'PUT'
 			],
-			$this->getMockBuilder('\OCP\Security\ISecureRandom')
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		);
 		$this->dispatcher = new Dispatcher(
 			$this->http, $this->middlewareDispatcher, $this->reflector,
 			$this->request,
 			$this->config,
-			\OC::$server->getDatabaseConnection(),
-			$this->logger
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
 		);
 		$controller = new TestController('app', $this->request);
 
@@ -476,13 +569,49 @@ class DispatcherTest extends \Test\TestCase {
 		$this->assertEquals('{"text":[3,false,4,1]}', $response[3]);
 	}
 
-
-	public function testResponsePrimarilyTransformedByParameterFormat() {
+	public function testResponseTransformedBySendingMultipartFormData(): void {
 		$this->request = new Request(
 			[
 				'post' => [
 					'int' => '3',
-					'bool' => 'false'
+					'bool' => 'false',
+					'double' => 1.2,
+				],
+				'server' => [
+					'HTTP_ACCEPT' => 'application/text, test',
+					'HTTP_CONTENT_TYPE' => 'multipart/form-data'
+				],
+				'method' => 'POST'
+			],
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
+		);
+		$this->dispatcher = new Dispatcher(
+			$this->http, $this->middlewareDispatcher, $this->reflector,
+			$this->request,
+			$this->config,
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
+		);
+		$controller = new TestController('app', $this->request);
+
+		// reflector is supposed to be called once
+		$this->dispatcherPassthrough();
+		$response = $this->dispatcher->dispatch($controller, 'exec');
+
+		$this->assertEquals('{"text":[3,false,4,1]}', $response[3]);
+	}
+
+	public function testResponsePrimarilyTransformedByParameterFormat(): void {
+		$this->request = new Request(
+			[
+				'post' => [
+					'int' => '3',
+					'bool' => 'false',
+					'double' => 1.2,
 				],
 				'get' => [
 					'format' => 'text'
@@ -492,19 +621,18 @@ class DispatcherTest extends \Test\TestCase {
 				],
 				'method' => 'POST'
 			],
-			$this->getMockBuilder('\OCP\Security\ISecureRandom')
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		);
 		$this->dispatcher = new Dispatcher(
 			$this->http, $this->middlewareDispatcher, $this->reflector,
 			$this->request,
 			$this->config,
-			\OC::$server->getDatabaseConnection(),
-			$this->logger
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
 		);
 		$controller = new TestController('app', $this->request);
 
@@ -512,6 +640,174 @@ class DispatcherTest extends \Test\TestCase {
 		$this->dispatcherPassthrough();
 		$response = $this->dispatcher->dispatch($controller, 'exec');
 
-		$this->assertEquals('{"text":[3,true,4,1]}', $response[3]);
+		$this->assertEquals('{"text":[3,false,4,1]}', $response[3]);
+	}
+
+	public static function rangeDataProvider(): array {
+		return [
+			[PHP_INT_MIN, PHP_INT_MAX, 42, false],
+			[0, 12, -5, true],
+			[-12, 0, 5, true],
+			[1, 200, 0, true],
+			[-15, -5, 0, true],
+			[-15, 15, 0, false],
+			[0, 200, 0, false],
+			[-200, 0, 0, false],
+			[7, 14, 5, true],
+			[7, 14, 10, false],
+			[-14, -7, -10, false],
+			[null, null, -1, false],
+
+			// $limit comes with default limits of self::DEFAULT_MIN (1) <= $limit <= self::DEFAULT_MAX (500)
+			[null, null, -1, true, 'limit'],
+			[null, null, -1, false, 'limit', -1],
+			[null, null, 0, true, 'limit'],
+			[null, null, 0, true, 'limit', -1],
+			[null, null, 1, false, 'limit'],
+			[null, null, 500, false, 'limit'],
+			[null, null, 501, true, 'limit'],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('rangeDataProvider')]
+	public function testEnsureParameterValueSatisfiesRange(?int $min, ?int $max, int $input, bool $throw, string $param = 'myArgument', ?int $default = null): void {
+		$this->reflector = $this->createMock(ControllerMethodReflector::class);
+		if ($min === null && $max === null) {
+			$this->reflector->expects($this->any())
+				->method('getRange')
+				->willReturn(null);
+		} else {
+			$this->reflector->expects($this->any())
+				->method('getRange')
+				->willReturn([
+					'min' => $min,
+					'max' => $max,
+				]);
+		}
+
+		$this->dispatcher = new Dispatcher(
+			$this->http,
+			$this->middlewareDispatcher,
+			$this->reflector,
+			$this->request,
+			$this->config,
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
+		);
+
+		if ($throw) {
+			$this->expectException(ParameterOutOfRangeException::class);
+		}
+
+		self::invokePrivate($this->dispatcher, 'ensureParameterValueSatisfiesRange', [$param, $input, $default]);
+		if (!$throw) {
+			// do not mark this test risky
+			$this->assertTrue(true);
+		}
+	}
+
+	public static function stringConstraintDataProvider(): array {
+		return [
+			[true, null, false],
+			[true, 'non-empty-string', false],
+			[false, 'non-empty-string', true],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('stringConstraintDataProvider')]
+	public function testEnsureParameterValueSatisfiesStringConstraint(bool $satisfies, ?string $constraint, bool $throw): void {
+		$this->reflector = $this->createMock(ControllerMethodReflector::class);
+		$this->reflector->expects($this->any())
+			->method('satisfiesStringConstraint')
+			->willReturn($satisfies);
+		$this->reflector->expects($this->any())
+			->method('getStringConstraint')
+			->willReturn($constraint);
+
+		$this->dispatcher = new Dispatcher(
+			$this->http,
+			$this->middlewareDispatcher,
+			$this->reflector,
+			$this->request,
+			$this->config,
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
+		);
+
+		if ($throw) {
+			$this->expectException(InvalidStringParameterException::class);
+		}
+
+		self::invokePrivate($this->dispatcher, 'ensureParameterValueSatisfiesStringConstraint', ['myArgument', '']);
+		if (!$throw) {
+			// do not mark this test risky
+			$this->assertTrue(true);
+		}
+	}
+
+	public static function backedEnumDataProvider(): array {
+		return [
+			[TestStringBackedEnum::class, 'foo', TestStringBackedEnum::Foo],
+			[TestStringBackedEnum::class, 'bar', TestStringBackedEnum::Bar],
+			[TestIntBackedEnum::class, '1', TestIntBackedEnum::One],
+			[TestIntBackedEnum::class, 1, TestIntBackedEnum::One],
+			[TestIntBackedEnum::class, 2, TestIntBackedEnum::Two],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('backedEnumDataProvider')]
+	public function testResolveBackedEnumValue(string $enumClass, string|int $input, \BackedEnum $expected): void {
+		$this->reflector = $this->createMock(ControllerMethodReflector::class);
+		$this->dispatcher = new Dispatcher(
+			$this->http,
+			$this->middlewareDispatcher,
+			$this->reflector,
+			$this->request,
+			$this->config,
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
+		);
+
+		$result = self::invokePrivate($this->dispatcher, 'resolveBackedEnumValue', ['myArgument', $enumClass, $input]);
+		$this->assertSame($expected, $result);
+	}
+
+	public static function invalidBackedEnumDataProvider(): array {
+		return [
+			[TestStringBackedEnum::class, 'invalid'],
+			[TestIntBackedEnum::class, 'not-a-number'],
+			[TestIntBackedEnum::class, 99],
+			[TestStringBackedEnum::class, ['array']],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('invalidBackedEnumDataProvider')]
+	public function testResolveBackedEnumValueThrowsOnInvalidValue(string $enumClass, mixed $input): void {
+		$this->reflector = $this->createMock(ControllerMethodReflector::class);
+		$this->dispatcher = new Dispatcher(
+			$this->http,
+			$this->middlewareDispatcher,
+			$this->reflector,
+			$this->request,
+			$this->config,
+			Server::get(IDBConnection::class),
+			$this->logger,
+			$this->eventLogger,
+			$this->container,
+			$this->userSession,
+		);
+
+		$this->expectException(InvalidEnumParameterException::class);
+
+		self::invokePrivate($this->dispatcher, 'resolveBackedEnumValue', ['myArgument', $enumClass, $input]);
 	}
 }

@@ -1,47 +1,18 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2018 Robin Appelman <robin@icewind.nl>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Log;
 
-use OC\Core\Controller\SetupController;
-use OC\Security\IdentityProof\Key;
-use OC\Setup;
 use OC\SystemConfig;
-use OCA\Encryption\Controller\RecoveryController;
-use OCA\Encryption\Controller\SettingsController;
-use OCA\Encryption\Crypto\Crypt;
-use OCA\Encryption\Crypto\Encryption;
-use OCA\Encryption\Hooks\UserHooks;
-use OCA\Encryption\KeyManager;
-use OCA\Encryption\Session;
 use OCP\HintException;
 
 class ExceptionSerializer {
+	public const SENSITIVE_VALUE_PLACEHOLDER = '*** sensitive parameters replaced ***';
+
 	public const methodsWithSensitiveParameters = [
 		// Session/User
 		'completeLogin',
@@ -53,6 +24,7 @@ class ExceptionSerializer {
 		'validateUserPass',
 		'loginWithToken',
 		'{closure}',
+		'{closure:*',
 		'createSessionToken',
 
 		// Provisioning
@@ -98,89 +70,41 @@ class ExceptionSerializer {
 
 		// Preview providers, don't log big data strings
 		'imagecreatefromstring',
+
+		// text: PublicSessionController, SessionController and ApiService
+		'create',
+		'close',
+		'push',
+		'sync',
+		'updateSession',
+		'mention',
+		'loginSessionUser',
 	];
 
-	/** @var SystemConfig */
-	private $systemConfig;
-
-	public function __construct(SystemConfig $systemConfig) {
-		$this->systemConfig = $systemConfig;
+	public function __construct(
+		private SystemConfig $systemConfig,
+	) {
 	}
 
-	public const methodsWithSensitiveParametersByClass = [
-		SetupController::class => [
-			'run',
-			'display',
-			'loadAutoConfig',
-		],
-		Setup::class => [
-			'install'
-		],
-		Key::class => [
-			'__construct'
-		],
-		\Redis::class => [
-			'auth'
-		],
-		\RedisCluster::class => [
-			'__construct'
-		],
-		Crypt::class => [
-			'symmetricEncryptFileContent',
-			'encrypt',
-			'generatePasswordHash',
-			'encryptPrivateKey',
-			'decryptPrivateKey',
-			'isValidPrivateKey',
-			'symmetricDecryptFileContent',
-			'checkSignature',
-			'createSignature',
-			'decrypt',
-			'multiKeyDecrypt',
-			'multiKeyEncrypt',
-		],
-		RecoveryController::class => [
-			'adminRecovery',
-			'changeRecoveryPassword'
-		],
-		SettingsController::class => [
-			'updatePrivateKeyPassword',
-		],
-		Encryption::class => [
-			'encrypt',
-			'decrypt',
-		],
-		KeyManager::class => [
-			'checkRecoveryPassword',
-			'storeKeyPair',
-			'setRecoveryKey',
-			'setPrivateKey',
-			'setFileKey',
-			'setAllFileKeys',
-		],
-		Session::class => [
-			'setPrivateKey',
-			'prepareDecryptAll',
-		],
-		\OCA\Encryption\Users\Setup::class => [
-			'setupUser',
-		],
-		UserHooks::class => [
-			'login',
-			'postCreateUser',
-			'postDeleteUser',
-			'prePasswordReset',
-			'postPasswordReset',
-			'preSetPassphrase',
-			'setPassphrase',
-		],
-	];
+	protected array $methodsWithSensitiveParametersByClass = [];
 
 	private function editTrace(array &$sensitiveValues, array $traceLine): array {
 		if (isset($traceLine['args'])) {
 			$sensitiveValues = array_merge($sensitiveValues, $traceLine['args']);
 		}
-		$traceLine['args'] = ['*** sensitive parameters replaced ***'];
+		$traceLine['args'] = [self::SENSITIVE_VALUE_PLACEHOLDER];
+		return $traceLine;
+	}
+
+	private function processSensitiveParameterValues(array &$sensitiveValues, array $traceLine): array {
+		if (isset($traceLine['args'])) {
+			foreach ($traceLine['args'] as &$arg) {
+				if ($arg instanceof \SensitiveParameterValue) {
+					$sensitiveValues[] = $arg->getValue();
+					$arg = self::SENSITIVE_VALUE_PLACEHOLDER;
+				}
+			}
+		}
 		return $traceLine;
 	}
 
@@ -188,16 +112,18 @@ class ExceptionSerializer {
 		$sensitiveValues = [];
 		$trace = array_map(function (array $traceLine) use (&$sensitiveValues) {
 			$className = $traceLine['class'] ?? '';
-			if ($className && isset(self::methodsWithSensitiveParametersByClass[$className])
-				&& in_array($traceLine['function'], self::methodsWithSensitiveParametersByClass[$className], true)) {
+			if ($className && isset($this->methodsWithSensitiveParametersByClass[$className])
+				&& in_array($traceLine['function'], $this->methodsWithSensitiveParametersByClass[$className], true)) {
 				return $this->editTrace($sensitiveValues, $traceLine);
 			}
 			foreach (self::methodsWithSensitiveParameters as $sensitiveMethod) {
-				if (strpos($traceLine['function'], $sensitiveMethod) !== false) {
+				if (str_contains($traceLine['function'], $sensitiveMethod)
+					|| (str_ends_with($sensitiveMethod, '*')
+						&& str_starts_with($traceLine['function'], substr($sensitiveMethod, 0, -1)))) {
 					return $this->editTrace($sensitiveValues, $traceLine);
 				}
 			}
-			return $traceLine;
+			return $this->processSensitiveParameterValues($sensitiveValues, $traceLine);
 		}, $trace);
 		return array_map(function (array $traceLine) use ($sensitiveValues) {
 			if (isset($traceLine['args'])) {
@@ -207,29 +133,35 @@ class ExceptionSerializer {
 		}, $trace);
 	}
 
-	private function removeValuesFromArgs($args, $values) {
-		foreach ($args as &$arg) {
+	private function removeValuesFromArgs(array $args, array $values): array {
+		$workArgs = [];
+		foreach ($args as $key => $arg) {
 			if (in_array($arg, $values, true)) {
-				$arg = '*** sensitive parameter replaced ***';
+				$arg = self::SENSITIVE_VALUE_PLACEHOLDER;
 			} elseif (is_array($arg)) {
 				$arg = $this->removeValuesFromArgs($arg, $values);
 			}
+			$workArgs[$key] = $arg;
 		}
-		return $args;
+		return $workArgs;
 	}
 
-	private function encodeTrace($trace) {
-		$filteredTrace = $this->filterTrace($trace);
-		return array_map(function (array $line) {
+	private function encodeTrace(array $trace): array {
+		$trace = array_map(function (array $line) {
 			if (isset($line['args'])) {
-				$line['args'] = array_map([$this, 'encodeArg'], $line['args']);
+				$line['args'] = array_map($this->encodeArg(...), $line['args']);
 			}
 			return $line;
-		}, $filteredTrace);
+		}, $trace);
+		return $this->filterTrace($trace);
 	}
 
-	private function encodeArg($arg, $nestingLevel = 5) {
+	private function encodeArg(mixed $arg, int $nestingLevel = 5): mixed {
 		if (is_object($arg)) {
+			if ($arg instanceof \SensitiveParameterValue) {
+				// Keep SensitiveParameterValue as-is, it will be handled later
+				return $arg;
+			}
 			if ($nestingLevel === 0) {
 				return [
 					'__class__' => get_class($arg),
@@ -238,7 +170,12 @@ class ExceptionSerializer {
 			}
 
 			$objectInfo = [ '__class__' => get_class($arg) ];
-			$objectVars = get_object_vars($arg);
+			try {
+				$objectVars = get_object_vars($arg);
+			} catch (\Throwable $e) {
+				// get_object_vars may throw if $arg was a ghost and failed to build
+				$objectVars = ['__failure__' => $e->getMessage()];
+			}
 			return array_map(function ($arg) use ($nestingLevel) {
 				return $this->encodeArg($arg, $nestingLevel - 1);
 			}, array_merge($objectInfo, $objectVars));
@@ -265,7 +202,7 @@ class ExceptionSerializer {
 		return $arg;
 	}
 
-	public function serializeException(\Throwable $exception) {
+	public function serializeException(\Throwable $exception): array {
 		$data = [
 			'Exception' => get_class($exception),
 			'Message' => $exception->getMessage(),
@@ -284,5 +221,12 @@ class ExceptionSerializer {
 		}
 
 		return $data;
+	}
+
+	public function enlistSensitiveMethods(string $class, array $methods): void {
+		if (!isset($this->methodsWithSensitiveParametersByClass[$class])) {
+			$this->methodsWithSensitiveParametersByClass[$class] = [];
+		}
+		$this->methodsWithSensitiveParametersByClass[$class] = array_merge($this->methodsWithSensitiveParametersByClass[$class], $methods);
 	}
 }

@@ -1,43 +1,31 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016, Roger Szabo (roger.szabo@web.de)
- *
- * @author Roger Szabo <roger.szabo@web.de>
- * @author root <root@localhost.localdomain>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\User_LDAP;
+
+use OCP\LDAP\Exceptions\MultipleUsersReturnedException;
 
 interface IUserLDAP {
 
 	//Functions used by LDAPProvider
-	
+
 	/**
 	 * Return access for LDAP interaction.
 	 * @param string $uid
 	 * @return Access instance of Access for LDAP interaction
 	 */
 	public function getLDAPAccess($uid);
-	
+
 	/**
 	 * Return a new LDAP connection for the specified user.
 	 * @param string $uid
-	 * @return resource of the LDAP connection
+	 * @return \LDAP\Connection of the LDAP connection
 	 */
 	public function getNewLDAPConnection($uid);
 
@@ -47,4 +35,14 @@ interface IUserLDAP {
 	 * @return string|false with the username
 	 */
 	public function dn2UserName($dn);
+
+	/**
+	 * Fetches one user from LDAP based on a filter or a custom attribute and search term.
+	 *
+	 * @param string $attribute The LDAP attribute name to search against (e.g., 'mail', 'cn', 'uid').
+	 * @param string $searchTerm The search term to match against the attribute. Will be escaped for LDAP filter safety.
+	 * @return string|null Returns the username if found in LDAP using the configured LDAP filter, or null if no user is found.
+	 * @throws MultipleUsersReturnedException if multiple users have been found (search query should not allow this)
+	 */
+	public function getUserFromCustomAttribute(string $attribute, string $searchTerm): ?string;
 }

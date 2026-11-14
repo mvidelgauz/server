@@ -1,51 +1,30 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017  Joas Schilling <coding@schilljs.com>
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Settings\Controller;
 
+use OCA\Settings\Settings\Admin\Mail;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\AuthorizedAdminSetting;
+use OCP\AppFramework\Http\Attribute\PasswordConfirmationRequired;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IConfig;
 use OCP\IL10N;
 use OCP\IRequest;
+use OCP\IURLGenerator;
 use OCP\IUserSession;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
 use OCP\Mail\IMailer;
+use Psr\Log\LoggerInterface;
 
 class MailSettingsController extends Controller {
-
-	/** @var IL10N */
-	private $l10n;
-	/** @var IConfig */
-	private $config;
-	/** @var IUserSession */
-	private $userSession;
-	/** @var IMailer */
-	private $mailer;
 
 	/**
 	 * @param string $appName
@@ -53,91 +32,122 @@ class MailSettingsController extends Controller {
 	 * @param IL10N $l10n
 	 * @param IConfig $config
 	 * @param IUserSession $userSession
+	 * @param IURLGenerator $urlGenerator,
 	 * @param IMailer $mailer
 	 */
-	public function __construct($appName,
-								IRequest $request,
-								IL10N $l10n,
-								IConfig $config,
-								IUserSession $userSession,
-								IMailer $mailer) {
+	public function __construct(
+		$appName,
+		IRequest $request,
+		private IL10N $l10n,
+		private IConfig $config,
+		private IUserSession $userSession,
+		private IURLGenerator $urlGenerator,
+		private IMailer $mailer,
+		private LoggerInterface $logger,
+		private IEventDispatcher $eventDispatcher,
+	) {
 		parent::__construct($appName, $request);
-		$this->l10n = $l10n;
-		$this->config = $config;
-		$this->userSession = $userSession;
-		$this->mailer = $mailer;
 	}
 
 	/**
 	 * Sets the email settings
-	 *
-	 * @PasswordConfirmationRequired
-	 * @AuthorizedAdminSetting(settings=OCA\Settings\Settings\Admin\Overview)
-	 *
-	 * @param string $mail_domain
-	 * @param string $mail_from_address
-	 * @param string $mail_smtpmode
-	 * @param string $mail_smtpsecure
-	 * @param string $mail_smtphost
-	 * @param string $mail_smtpauthtype
-	 * @param int $mail_smtpauth
-	 * @param string $mail_smtpport
-	 * @return DataResponse
 	 */
-	public function setMailSettings($mail_domain,
-									$mail_from_address,
-									$mail_smtpmode,
-									$mail_smtpsecure,
-									$mail_smtphost,
-									$mail_smtpauthtype,
-									$mail_smtpauth,
-									$mail_smtpport,
-									$mail_sendmailmode) {
-		$params = get_defined_vars();
-		$configs = [];
-		foreach ($params as $key => $value) {
+	#[AuthorizedAdminSetting(settings: Mail::class)]
+	#[PasswordConfirmationRequired]
+	public function setMailSettings(
+		string $mail_domain,
+		string $mail_from_address,
+		string $mail_smtpmode,
+		string $mail_smtpsecure,
+		string $mail_smtphost,
+		?bool $mail_smtpauth,
+		string $mail_smtpport,
+		string $mail_sendmailmode,
+		?bool $mail_noverify = null,
+	): DataResponse {
+		$mail_smtpauth = $mail_smtpauth === true;
+
+		$configs = [
+			'mail_domain' => $mail_domain,
+			'mail_from_address' => $mail_from_address,
+			'mail_smtpmode' => $mail_smtpmode,
+			'mail_smtpsecure' => $mail_smtpsecure,
+			'mail_smtphost' => $mail_smtphost,
+			'mail_smtpauth' => $mail_smtpauth,
+			'mail_smtpport' => $mail_smtpport,
+			'mail_sendmailmode' => $mail_sendmailmode,
+		];
+		foreach ($configs as $key => $value) {
 			$configs[$key] = empty($value) ? null : $value;
 		}
 
+		if ($mail_noverify !== null) {
+			$options = $this->config->getSystemValue('mail_smtpstreamoptions', []);
+			$options['ssl'] ??= [];
+			$options['ssl']['allow_self_signed'] = $mail_noverify;
+			$options['ssl']['verify_peer'] = !$mail_noverify;
+			$options['ssl']['verify_peer_name'] = !$mail_noverify;
+			$configs['mail_smtpstreamoptions'] = $options;
+		}
+
 		// Delete passwords from config in case no auth is specified
-		if ($params['mail_smtpauth'] !== 1) {
+		if (!$mail_smtpauth) {
 			$configs['mail_smtpname'] = null;
 			$configs['mail_smtppassword'] = null;
 		}
 
 		$this->config->setSystemValues($configs);
 
+		$this->config->setAppValue('core', 'emailTestSuccessful', '0');
+
+		$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+			'Mail server settings were changed: mode "%s", host "%s", port "%s", security "%s", from address "%s", domain "%s"',
+			[
+				'mailSmtpMode' => $mail_smtpmode,
+				'mailSmtpHost' => $mail_smtphost,
+				'mailSmtpPort' => $mail_smtpport,
+				'mailSmtpSecure' => $mail_smtpsecure,
+				'mailFromAddress' => $mail_from_address,
+				'mailDomain' => $mail_domain,
+			],
+			false,
+			'settings.mail.updated',
+		));
+
 		return new DataResponse();
 	}
 
 	/**
 	 * Store the credentials used for SMTP in the config
-	 *
-	 * @PasswordConfirmationRequired
-	 * @AuthorizedAdminSetting(settings=OCA\Settings\Settings\Admin\Overview)
-	 *
-	 * @param string $mail_smtpname
-	 * @param string $mail_smtppassword
-	 * @return DataResponse
 	 */
-	public function storeCredentials($mail_smtpname, $mail_smtppassword) {
+	#[AuthorizedAdminSetting(settings: Mail::class)]
+	#[PasswordConfirmationRequired]
+	public function storeCredentials(string $mail_smtpname, ?string $mail_smtppassword): DataResponse {
 		if ($mail_smtppassword === '********') {
 			return new DataResponse($this->l10n->t('Invalid SMTP password.'), Http::STATUS_BAD_REQUEST);
 		}
 
-		$this->config->setSystemValues([
-			'mail_smtpname' => $mail_smtpname,
-			'mail_smtppassword' => $mail_smtppassword,
-		]);
+		if ($mail_smtppassword !== null) {
+			$this->config->setSystemValue('mail_smtppassword', $mail_smtppassword);
+		}
+		$this->config->setSystemValue('mail_smtpname', $mail_smtpname);
+		$this->config->setAppValue('core', 'emailTestSuccessful', '0');
+
+		$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+			'Mail server credentials were changed for SMTP user "%s"',
+			['mailSmtpName' => $mail_smtpname],
+			false,
+			'settings.mail_credentials.updated',
+		));
 
 		return new DataResponse();
 	}
 
 	/**
 	 * Send a mail to test the settings
-	 * @AuthorizedAdminSetting(settings=OCA\Settings\Settings\Admin\Overview)
 	 * @return DataResponse
 	 */
+	#[AuthorizedAdminSetting(settings: Mail::class)]
 	public function sendTestMail() {
 		$email = $this->config->getUserValue($this->userSession->getUser()->getUID(), $this->appName, 'email', '');
 		if (!empty($email)) {
@@ -147,6 +157,7 @@ class MailSettingsController extends Controller {
 				$template = $this->mailer->createEMailTemplate('settings.TestEmail', [
 					'displayname' => $displayName,
 				]);
+				$template->setLanguage($this->l10n->getLanguageCode());
 
 				$template->setSubject($this->l10n->t('Email setting test'));
 				$template->addHeader();
@@ -159,14 +170,21 @@ class MailSettingsController extends Controller {
 				$message->useTemplate($template);
 				$errors = $this->mailer->send($message);
 				if (!empty($errors)) {
+					$this->config->setAppValue('core', 'emailTestSuccessful', '0');
 					throw new \RuntimeException($this->l10n->t('Email could not be sent. Check your mail server log'));
 				}
+				// Store the successful config in the app config
+				$this->config->setAppValue('core', 'emailTestSuccessful', '1');
 				return new DataResponse();
 			} catch (\Exception $e) {
+				$this->config->setAppValue('core', 'emailTestSuccessful', '0');
+				$this->logger->error('Failed sending test email: ' . $e->getMessage(), ['exception' => $e]);
 				return new DataResponse($this->l10n->t('A problem occurred while sending the email. Please revise your settings. (Error: %s)', [$e->getMessage()]), Http::STATUS_BAD_REQUEST);
 			}
 		}
 
-		return new DataResponse($this->l10n->t('You need to set your user email before being able to send test emails.'), Http::STATUS_BAD_REQUEST);
+		$this->config->setAppValue('core', 'emailTestSuccessful', '0');
+		$this->logger->error('Failed sending test email: User ' . $this->userSession->getUser()->getUID() . ' has no email address configured in their account settings');
+		return new DataResponse($this->l10n->t('You need to set your account email before being able to send test emails. Go to %s for that.', [$this->urlGenerator->linkToRouteAbsolute('settings.PersonalSettings.index')]), Http::STATUS_BAD_REQUEST);
 	}
 }

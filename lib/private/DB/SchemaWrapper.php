@@ -1,67 +1,63 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2017 Joas Schilling <coding@schilljs.com>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\DB;
 
+use Doctrine\DBAL\Exception;
+use Doctrine\DBAL\Platforms\AbstractPlatform;
+use Doctrine\DBAL\Platforms\OraclePlatform;
 use Doctrine\DBAL\Schema\Schema;
+use Doctrine\DBAL\Schema\SchemaException as DBALSchemaException;
+use Doctrine\DBAL\Schema\Table as DBALTable;
+use OC\DB\Schema\Table;
 use OCP\DB\ISchemaWrapper;
+use OCP\DB\Schema\ITable;
+use OCP\DB\Schema\SchemaException;
+use OCP\Server;
+use Psr\Log\LoggerInterface;
 
 class SchemaWrapper implements ISchemaWrapper {
+	protected Schema $schema;
 
-	/** @var Connection */
-	protected $connection;
+	/** @var array<string, true> */
+	protected array $tablesToDelete = [];
 
-	/** @var Schema */
-	protected $schema;
-
-	/** @var array */
-	protected $tablesToDelete = [];
-
-	public function __construct(Connection $connection) {
-		$this->connection = $connection;
-		$this->schema = $this->connection->createSchema();
+	public function __construct(
+		protected readonly Connection $connection,
+		?Schema $schema = null,
+	) {
+		if ($schema !== null) {
+			$this->schema = $schema;
+		} else {
+			$this->schema = $this->connection->createSchema();
+		}
 	}
 
-	public function getWrappedSchema() {
+	public function getWrappedSchema(): Schema {
 		return $this->schema;
 	}
 
-	public function performDropTableCalls() {
+	public function performDropTableCalls(): void {
 		foreach ($this->tablesToDelete as $tableName => $true) {
 			$this->connection->dropTable($tableName);
+			foreach ($this->connection->getShardConnections() as $shardConnection) {
+				$shardConnection->dropTable($tableName);
+			}
 			unset($this->tablesToDelete[$tableName]);
 		}
 	}
 
-	/**
-	 * Gets all table names
-	 *
-	 * @return array
-	 */
-	public function getTableNamesWithoutPrefix() {
-		$tableNames = $this->schema->getTableNames();
+	#[\Override]
+	public function getTableNamesWithoutPrefix(): array {
+		$tableNames = $this->getTableNames();
 		return array_map(function ($tableName) {
-			if (strpos($tableName, $this->connection->getPrefix()) === 0) {
+			if (str_starts_with($tableName, $this->connection->getPrefix())) {
 				return substr($tableName, strlen($this->connection->getPrefix()));
 			}
 
@@ -71,62 +67,67 @@ class SchemaWrapper implements ISchemaWrapper {
 
 	// Overwritten methods
 
-	/**
-	 * @return array
-	 */
-	public function getTableNames() {
-		return $this->schema->getTableNames();
+	#[\Override]
+	public function getTableNames(): array {
+		return array_values(array_map(fn (DBALTable $table): string => $table->getName(), $this->schema->getTables()));
 	}
 
-	/**
-	 * @param string $tableName
-	 *
-	 * @return \Doctrine\DBAL\Schema\Table
-	 * @throws \Doctrine\DBAL\Schema\SchemaException
-	 */
-	public function getTable($tableName) {
-		return $this->schema->getTable($this->connection->getPrefix() . $tableName);
+	#[\Override]
+	public function getTable($tableName): ITable {
+		try {
+			return new Table($this->schema->getTable($this->connection->getPrefix() . $tableName));
+		} catch (DBALSchemaException $e) {
+			throw new SchemaException($e->getMessage(), $e->getCode(), $e);
+		}
 	}
 
 	/**
 	 * Does this schema have a table with the given name?
-	 *
-	 * @param string $tableName
-	 *
-	 * @return boolean
 	 */
-	public function hasTable($tableName) {
+	#[\Override]
+	public function hasTable($tableName): bool {
 		return $this->schema->hasTable($this->connection->getPrefix() . $tableName);
 	}
 
-	/**
-	 * Creates a new table.
-	 *
-	 * @param string $tableName
-	 * @return \Doctrine\DBAL\Schema\Table
-	 */
-	public function createTable($tableName) {
+	#[\Override]
+	public function createTable($tableName): ITable {
 		unset($this->tablesToDelete[$tableName]);
-		return $this->schema->createTable($this->connection->getPrefix() . $tableName);
+		try {
+			return new Table($this->schema->createTable($this->connection->getPrefix() . $tableName));
+		} catch (DBALSchemaException $e) {
+			throw new SchemaException($e->getMessage(), $e->getCode(), $e);
+		}
 	}
 
-	/**
-	 * Drops a table from the schema.
-	 *
-	 * @param string $tableName
-	 * @return \Doctrine\DBAL\Schema\Schema
-	 */
-	public function dropTable($tableName) {
+	#[\Override]
+	public function dropTable($tableName): self {
 		$this->tablesToDelete[$tableName] = true;
-		return $this->schema->dropTable($this->connection->getPrefix() . $tableName);
+		$this->schema->dropTable($this->connection->getPrefix() . $tableName);
+		return $this;
 	}
 
-	/**
-	 * Gets all tables of this schema.
-	 *
-	 * @return \Doctrine\DBAL\Schema\Table[]
-	 */
-	public function getTables() {
-		return $this->schema->getTables();
+	#[\Override]
+	public function getTables(): array {
+		return array_values(array_map(fn (DBALTable $table): ITable => new Table($table), $this->schema->getTables()));
+	}
+
+	#[\Override]
+	public function getDatabasePlatform(): AbstractPlatform {
+		return $this->connection->getDatabasePlatform();
+	}
+
+	#[\Override]
+	public function dropAutoincrementColumn(string $table, string $column): void {
+		$tableObj = $this->schema->getTable($this->connection->getPrefix() . $table);
+		$tableObj->modifyColumn($column, ['autoincrement' => false]);
+		$platform = $this->getDatabasePlatform();
+		if ($platform instanceof OraclePlatform) {
+			try {
+				$this->connection->executeStatement('DROP TRIGGER "' . $this->connection->getPrefix() . $table . '_AI_PK"');
+				$this->connection->executeStatement('DROP SEQUENCE "' . $this->connection->getPrefix() . $table . '_SEQ"');
+			} catch (Exception $e) {
+				Server::get(LoggerInterface::class)->error($e->getMessage(), ['exception' => $e]);
+			}
+		}
 	}
 }

@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020 Robin Appelman <robin@icewind.nl>
- *
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Files\Stream;
 
 use Icewind\Streams\Wrapper;
@@ -51,23 +35,36 @@ class HashWrapper extends Wrapper {
 		return true;
 	}
 
+	#[\Override]
 	public function dir_opendir($path, $options) {
 		return $this->open();
 	}
 
+	#[\Override]
 	public function stream_open($path, $mode, $options, &$opened_path) {
 		return $this->open();
 	}
 
+	#[\Override]
 	public function stream_read($count) {
 		$result = parent::stream_read($count);
 		hash_update($this->hash, $result);
 		return $result;
 	}
 
+	#[\Override]
 	public function stream_close() {
 		if (is_callable($this->callback)) {
-			call_user_func($this->callback, hash_final($this->hash));
+			// if the stream is closed as a result of the end-of-request GC, the hash context might be cleaned up before this stream
+			if ($this->hash instanceof \HashContext) {
+				try {
+					$hash = @hash_final($this->hash);
+					if ($hash) {
+						call_user_func($this->callback, $hash);
+					}
+				} catch (\Throwable $e) {
+				}
+			}
 			// prevent further calls by potential PHP 7 GC ghosts
 			$this->callback = null;
 		}

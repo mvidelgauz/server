@@ -3,50 +3,41 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020, Georg Ehrke
- *
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Search;
 
+use DateTimeImmutable;
 use OCA\DAV\CalDAV\CalDavBackend;
 use OCP\IUser;
+use OCP\Search\IFilter;
+use OCP\Search\IFilteringProvider;
 use OCP\Search\ISearchQuery;
 use OCP\Search\SearchResult;
 use OCP\Search\SearchResultEntry;
 use Sabre\VObject\Component;
+use Sabre\VObject\Component\VCalendar;
 use Sabre\VObject\DateTimeParser;
+use Sabre\VObject\InvalidDataException;
+use Sabre\VObject\ParseException;
 use Sabre\VObject\Property;
+use Sabre\VObject\Property\ICalendar\DateTime;
+use Sabre\VObject\Reader;
+use Sabre\VObject\Recur\MaxInstancesExceededException;
+use function array_push;
 
 /**
  * Class EventsSearchProvider
  *
  * @package OCA\DAV\Search
  */
-class EventsSearchProvider extends ACalendarSearchProvider {
-
+class EventsSearchProvider extends ACalendarSearchProvider implements IFilteringProvider {
 	/**
 	 * @var string[]
 	 */
-	private static $searchProperties = [
+	private const array SEARCH_PROPERTIES = [
 		'SUMMARY',
 		'LOCATION',
 		'DESCRIPTION',
@@ -56,9 +47,9 @@ class EventsSearchProvider extends ACalendarSearchProvider {
 	];
 
 	/**
-	 * @var string[]
+	 * @var array<string, string[]>
 	 */
-	private static $searchParameters = [
+	private const array SEARCH_PARAMETERS = [
 		'ATTENDEE' => ['CN'],
 		'ORGANIZER' => ['CN'],
 	];
@@ -66,11 +57,12 @@ class EventsSearchProvider extends ACalendarSearchProvider {
 	/**
 	 * @var string
 	 */
-	private static $componentType = 'VEVENT';
+	private const string COMPONENT_TYPE = 'VEVENT';
 
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	public function getId(): string {
 		return 'calendar';
 	}
@@ -78,6 +70,7 @@ class EventsSearchProvider extends ACalendarSearchProvider {
 	/**
 	 * @inheritDoc
 	 */
+	#[\Override]
 	public function getName(): string {
 		return $this->l10n->t('Events');
 	}
@@ -85,18 +78,23 @@ class EventsSearchProvider extends ACalendarSearchProvider {
 	/**
 	 * @inheritDoc
 	 */
-	public function getOrder(string $route, array $routeParameters): int {
-		if ($route === 'calendar.View.index') {
-			return -1;
+	#[\Override]
+	public function getOrder(string $route, array $routeParameters): ?int {
+		if ($this->appManager->isEnabledForUser('calendar')) {
+			return $route === 'calendar.View.index' ? -1 : 30;
 		}
-		return 30;
+
+		return null;
 	}
 
 	/**
 	 * @inheritDoc
 	 */
-	public function search(IUser $user,
-						   ISearchQuery $query): SearchResult {
+	#[\Override]
+	public function search(
+		IUser $user,
+		ISearchQuery $query,
+	): SearchResult {
 		if (!$this->appManager->isEnabledForUser('calendar', $user)) {
 			return SearchResult::complete($this->getName(), []);
 		}
@@ -105,48 +103,199 @@ class EventsSearchProvider extends ACalendarSearchProvider {
 		$calendarsById = $this->getSortedCalendars($principalUri);
 		$subscriptionsById = $this->getSortedSubscriptions($principalUri);
 
-		$searchResults = $this->backend->searchPrincipalUri(
-			$principalUri,
-			$query->getTerm(),
-			[self::$componentType],
-			self::$searchProperties,
-			self::$searchParameters,
-			[
-				'limit' => $query->getLimit(),
-				'offset' => $query->getCursor(),
-			]
-		);
-		$formattedResults = \array_map(function (array $eventRow) use ($calendarsById, $subscriptionsById):SearchResultEntry {
-			$component = $this->getPrimaryComponent($eventRow['calendardata'], self::$componentType);
-			$title = (string)($component->SUMMARY ?? $this->l10n->t('Untitled event'));
-			$subline = $this->generateSubline($component);
+		/** @var string|null $term */
+		$term = $query->getFilter(IFilter::BUILTIN_TERM)?->get();
 
-			if ($eventRow['calendartype'] === CalDavBackend::CALENDAR_TYPE_CALENDAR) {
-				$calendar = $calendarsById[$eventRow['calendarid']];
-			} else {
-				$calendar = $subscriptionsById[$eventRow['calendarid']];
+		/** @var DateTimeImmutable|null $since */
+		$since = $query->getFilter(IFilter::BUILTIN_SINCE)?->get();
+		/** @var DateTimeImmutable|null $until */
+		$until = $query->getFilter(IFilter::BUILTIN_UNTIL)?->get();
+
+		// Expanding recurrences needs two concrete bounds, unlike the plain
+		// mtime/timestamp comparisons other search providers use. When only one
+		// side is given, cap the window at three years so an unbounded search
+		// does not expand a daily recurrence until the end of time.
+		if ($since instanceof DateTimeImmutable && $until === null) {
+			$until = $since->modify('+3 years');
+		}
+		if ($until instanceof DateTimeImmutable && $since === null) {
+			$since = $until->modify('-3 years');
+		}
+
+		/** @var array{start: DateTimeImmutable|null, end: DateTimeImmutable|null} $timeRange */
+		$timeRange = [
+			'start' => $since,
+			'end' => $until,
+		];
+
+		if ($term === null) {
+			$searchResults = [];
+		} else {
+			$searchResults = $this->backend->searchPrincipalUri(
+				$principalUri,
+				$term,
+				[self::COMPONENT_TYPE],
+				self::SEARCH_PROPERTIES,
+				self::SEARCH_PARAMETERS,
+				[
+					'limit' => $query->getLimit(),
+					'offset' => $query->getCursor(),
+					'timerange' => $timeRange,
+				]
+			);
+		}
+		/** @var IUser|null $person */
+		$person = $query->getFilter('person')?->get();
+		$personDisplayName = $person?->getDisplayName();
+		if ($personDisplayName !== null) {
+			array_push($searchResults, ...$this->backend->searchPrincipalUri(
+				$principalUri,
+				$personDisplayName,
+				[self::COMPONENT_TYPE],
+				['ATTENDEE'],
+				self::SEARCH_PARAMETERS,
+				[
+					'limit' => $query->getLimit(),
+					'offset' => $query->getCursor(),
+					'timerange' => $timeRange,
+				],
+			));
+		}
+
+		// Deduplicate events that matched both the term and attendee searches,
+		// keyed by calendarid-uri.
+		$uniqueResults = [];
+		foreach ($searchResults as $searchResult) {
+			$key = $searchResult['calendarid'] . '-' . $searchResult['uri'];
+			$uniqueResults[$key] ??= $searchResult;
+		}
+
+		// Resolve each row to its in-range component, dropping anything that
+		// does not resolve to a usable in-range component, and format it.
+		$formattedResults = [];
+		foreach ($uniqueResults as $searchResult) {
+			$component = $this->resolveComponent($searchResult['calendardata'], $since, $until);
+			if ($component === null) {
+				continue;
 			}
-			$resourceUrl = $this->getDeepLinkToCalendarApp($calendar['principaluri'], $calendar['uri'], $eventRow['uri']);
 
-			return new SearchResultEntry('', $title, $subline, $resourceUrl, 'icon-calendar-dark', false);
-		}, $searchResults);
+			$title = (string)($component->SUMMARY ?? $this->l10n->t('Untitled event'));
+			if ($searchResult['calendartype'] === CalDavBackend::CALENDAR_TYPE_CALENDAR) {
+				$calendar = $calendarsById[$searchResult['calendarid']];
+			} else {
+				$calendar = $subscriptionsById[$searchResult['calendarid']];
+			}
+			$subline = $this->generateSubline($component, $calendar);
+			$resourceUrl = $this->getDeepLinkToCalendarApp($calendar['principaluri'], $calendar['uri'], $searchResult['uri']);
+			$result = new SearchResultEntry('', $title, $subline, $resourceUrl, 'icon-calendar-dark', false);
 
+			$dtStart = $component->DTSTART;
+			if ($dtStart instanceof DateTime) {
+				$result->addAttribute('createdAt', $dtStart->getDateTime()->format('U'));
+			}
+
+			$formattedResults[] = $result;
+		}
+
+		// Advance the cursor by the number of unique backend rows consumed,
+		// not by the number of formatted results, so a page where every row
+		// gets dropped (invalid data, no in-range occurrence) still moves the
+		// cursor forward instead of stalling pagination.
 		return SearchResult::paginated(
 			$this->getName(),
 			$formattedResults,
-			$query->getCursor() + count($formattedResults)
+			$query->getCursor() + count($uniqueResults)
 		);
 	}
 
 	/**
-	 * @param string $principalUri
-	 * @param string $calendarUri
-	 * @param string $calendarObjectUri
-	 * @return string
+	 * Resolve the component to display for a result row.
+	 *
+	 * Parses the calendar data and, when a time range is requested,
+	 * expands it to the in-range occurrence. Returns null to drop the row when the
+	 * data is not a calendar or has no occurrence within since and until.
 	 */
-	protected function getDeepLinkToCalendarApp(string $principalUri,
-												string $calendarUri,
-												string $calendarObjectUri): string {
+	private function resolveComponent(string $calendarData, ?\DateTimeInterface $since, ?\DateTimeInterface $until): ?Component {
+		try {
+			$document = Reader::read($calendarData, Reader::OPTION_FORGIVING);
+		} catch (ParseException|InvalidDataException) {
+			return null;
+		}
+		if (!$document instanceof VCalendar) {
+			return null;
+		}
+
+		if ($since !== null && $until !== null) {
+			$document = $this->expandInRange($document, $since, $until);
+			if ($document === null) {
+				return null;
+			}
+		}
+
+		return $this->getPrimaryComponent($document, self::COMPONENT_TYPE);
+	}
+
+	/**
+	 * Expand a recurring event into its occurrences within the requested
+	 * [$since, $until] window, converted back from the UTC that expand() forces
+	 * into the event's original timezone.
+	 *
+	 * Returns null when the event has no occurrence in range (recurrence gap) or
+	 * cannot be expanded.
+	 */
+	private function expandInRange(VCalendar $vCalendar, \DateTimeInterface $since, \DateTimeInterface $until): ?VCalendar {
+		// Sabre refuses to generate more than Settings::$maxRecurrences (3500)
+		// instances, counted from DTSTART rather than from $since, so a
+		// fine-grained recurrence like FREQ=HOURLY exceeds it for any time
+		// range once it is old enough. Drop the row like an out-of-range one
+		// instead of failing the whole search request.
+		// expand() rewrites every occurrence's DTSTART/DTEND to UTC, so remember
+		// the event's original timezone to display the occurrence in local time.
+		$originalTimeZone = null;
+		$baseComponent = $vCalendar->getBaseComponent(self::COMPONENT_TYPE);
+		if ($baseComponent !== null && isset($baseComponent->DTSTART) && $baseComponent->DTSTART->hasTime()) {
+			$originalTimeZone = $baseComponent->DTSTART->getDateTime()->getTimezone();
+		}
+
+		try {
+			$expanded = $vCalendar->expand($since, $until);
+		} catch (InvalidDataException|MaxInstancesExceededException $e) {
+			return null;
+		}
+
+		$occurrences = $expanded->select(self::COMPONENT_TYPE);
+		if ($occurrences === []) {
+			return null;
+		}
+
+		if ($originalTimeZone !== null) {
+			foreach ($occurrences as $occurrence) {
+				$this->applyTimeZone($occurrence, $originalTimeZone);
+			}
+		}
+
+		return $expanded;
+	}
+
+	/**
+	 * Move the occurrence back into the event's original timezone after expand()
+	 * has rewritten it to UTC, so the rendered time matches the user's local time.
+	 */
+	private function applyTimeZone(Component $component, \DateTimeZone $timeZone): void {
+		foreach (['DTSTART', 'DTEND'] as $name) {
+			if (isset($component->$name) && $component->$name->hasTime()) {
+				$component->$name->setDateTime(
+					$component->$name->getDateTime()->setTimezone($timeZone),
+				);
+			}
+		}
+	}
+
+	protected function getDeepLinkToCalendarApp(
+		string $principalUri,
+		string $calendarUri,
+		string $calendarObjectUri,
+	): string {
 		$davUrl = $this->getDavUrlForCalendarObject($principalUri, $calendarUri, $calendarObjectUri);
 		// This route will automatically figure out what recurrence-id to open
 		return $this->urlGenerator->getAbsoluteURL(
@@ -156,28 +305,20 @@ class EventsSearchProvider extends ACalendarSearchProvider {
 		);
 	}
 
-	/**
-	 * @param string $principalUri
-	 * @param string $calendarUri
-	 * @param string $calendarObjectUri
-	 * @return string
-	 */
-	protected function getDavUrlForCalendarObject(string $principalUri,
-												  string $calendarUri,
-												  string $calendarObjectUri): string {
+	protected function getDavUrlForCalendarObject(
+		string $principalUri,
+		string $calendarUri,
+		string $calendarObjectUri,
+	): string {
 		[,, $principalId] = explode('/', $principalUri, 3);
 
 		return $this->urlGenerator->linkTo('', 'remote.php') . '/dav/calendars/'
-			. $principalId . '/'
+			. str_replace(' ', '%20', $principalId) . '/'
 			. $calendarUri . '/'
 			. $calendarObjectUri;
 	}
 
-	/**
-	 * @param Component $eventComponent
-	 * @return string
-	 */
-	protected function generateSubline(Component $eventComponent): string {
+	protected function generateSubline(Component $eventComponent, array $calendarInfo): string {
 		$dtStart = $eventComponent->DTSTART;
 		$dtEnd = $this->getDTEndForEvent($eventComponent);
 		$isAllDayEvent = $dtStart instanceof Property\ICalendar\Date;
@@ -187,30 +328,33 @@ class EventsSearchProvider extends ACalendarSearchProvider {
 		if ($isAllDayEvent) {
 			$endDateTime->modify('-1 day');
 			if ($this->isDayEqual($startDateTime, $endDateTime)) {
-				return $this->l10n->l('date', $startDateTime, ['width' => 'medium']);
+				$formattedSubline = $this->l10n->l('date', $startDateTime, ['width' => 'medium']);
+			} else {
+				$formattedStart = $this->l10n->l('date', $startDateTime, ['width' => 'medium']);
+				$formattedEnd = $this->l10n->l('date', $endDateTime, ['width' => 'medium']);
+				$formattedSubline = "$formattedStart - $formattedEnd";
 			}
+		} else {
+			$formattedStartDate = $this->l10n->l('date', $startDateTime, ['width' => 'medium']);
+			$formattedEndDate = $this->l10n->l('date', $endDateTime, ['width' => 'medium']);
+			$formattedStartTime = $this->l10n->l('time', $startDateTime, ['width' => 'short']);
+			$formattedEndTime = $this->l10n->l('time', $endDateTime, ['width' => 'short']);
 
-			$formattedStart = $this->l10n->l('date', $startDateTime, ['width' => 'medium']);
-			$formattedEnd = $this->l10n->l('date', $endDateTime, ['width' => 'medium']);
-			return "$formattedStart - $formattedEnd";
+			if ($this->isDayEqual($startDateTime, $endDateTime)) {
+				$formattedSubline = "$formattedStartDate $formattedStartTime - $formattedEndTime";
+			} else {
+				$formattedSubline = "$formattedStartDate $formattedStartTime - $formattedEndDate $formattedEndTime";
+			}
 		}
 
-		$formattedStartDate = $this->l10n->l('date', $startDateTime, ['width' => 'medium']);
-		$formattedEndDate = $this->l10n->l('date', $endDateTime, ['width' => 'medium']);
-		$formattedStartTime = $this->l10n->l('time', $startDateTime, ['width' => 'short']);
-		$formattedEndTime = $this->l10n->l('time', $endDateTime, ['width' => 'short']);
-
-		if ($this->isDayEqual($startDateTime, $endDateTime)) {
-			return "$formattedStartDate $formattedStartTime - $formattedEndTime";
+		if (isset($calendarInfo['{DAV:}displayname']) && !empty($calendarInfo['{DAV:}displayname'])) {
+			$formattedSubline = $formattedSubline . " ({$calendarInfo['{DAV:}displayname']})";
 		}
 
-		return "$formattedStartDate $formattedStartTime - $formattedEndDate $formattedEndTime";
+		// string cast is just to make psalm happy
+		return (string)$formattedSubline;
 	}
 
-	/**
-	 * @param Component $eventComponent
-	 * @return Property
-	 */
 	protected function getDTEndForEvent(Component $eventComponent):Property {
 		if (isset($eventComponent->DTEND)) {
 			$end = $eventComponent->DTEND;
@@ -233,13 +377,30 @@ class EventsSearchProvider extends ACalendarSearchProvider {
 		return $end;
 	}
 
-	/**
-	 * @param \DateTime $dtStart
-	 * @param \DateTime $dtEnd
-	 * @return bool
-	 */
-	protected function isDayEqual(\DateTime $dtStart,
-								  \DateTime $dtEnd) {
+	protected function isDayEqual(
+		\DateTime $dtStart,
+		\DateTime $dtEnd,
+	): bool {
 		return $dtStart->format('Y-m-d') === $dtEnd->format('Y-m-d');
+	}
+
+	#[\Override]
+	public function getSupportedFilters(): array {
+		return [
+			'term',
+			'person',
+			'since',
+			'until',
+		];
+	}
+
+	#[\Override]
+	public function getAlternateIds(): array {
+		return [];
+	}
+
+	#[\Override]
+	public function getCustomFilters(): array {
+		return [];
 	}
 }

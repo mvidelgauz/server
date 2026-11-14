@@ -1,36 +1,27 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Robin Appelman <robin@icewind.nl>
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\DB\QueryBuilder\FunctionBuilder;
 
+use OC\DB\ConnectionAdapter;
 use OC\DB\QueryBuilder\QueryFunction;
 use OCP\DB\QueryBuilder\ILiteral;
 use OCP\DB\QueryBuilder\IParameter;
 use OCP\DB\QueryBuilder\IQueryFunction;
 
 class OCIFunctionBuilder extends FunctionBuilder {
+	#[\Override]
 	public function md5($input): IQueryFunction {
-		return new QueryFunction('LOWER(DBMS_OBFUSCATION_TOOLKIT.md5 (input => UTL_RAW.cast_to_raw(' . $this->helper->quoteColumnName($input) .')))');
+		/** @var ConnectionAdapter $co */
+		$co = $this->connection;
+		if (version_compare($co->getServerVersion(), '20', '>=')) {
+			return new QueryFunction('LOWER(STANDARD_HASH(' . $this->helper->quoteColumnName($input) . ", 'MD5'))");
+		}
+		return new QueryFunction('LOWER(DBMS_OBFUSCATION_TOOLKIT.md5 (input => UTL_RAW.cast_to_raw(' . $this->helper->quoteColumnName($input) . ')))');
 	}
 
 	/**
@@ -45,6 +36,7 @@ class OCIFunctionBuilder extends FunctionBuilder {
 	 * @param string|ILiteral|IParameter|IQueryFunction $y
 	 * @return IQueryFunction
 	 */
+	#[\Override]
 	public function greatest($x, $y): IQueryFunction {
 		if (is_string($y) || $y instanceof IQueryFunction) {
 			return parent::greatest($y, $x);
@@ -65,11 +57,47 @@ class OCIFunctionBuilder extends FunctionBuilder {
 	 * @param string|ILiteral|IParameter|IQueryFunction $y
 	 * @return IQueryFunction
 	 */
+	#[\Override]
 	public function least($x, $y): IQueryFunction {
 		if (is_string($y) || $y instanceof IQueryFunction) {
 			return parent::least($y, $x);
 		}
 
 		return parent::least($x, $y);
+	}
+
+	#[\Override]
+	public function concat($x, ...$expr): IQueryFunction {
+		$args = func_get_args();
+		$list = [];
+		foreach ($args as $item) {
+			$list[] = $this->helper->quoteColumnName($item);
+		}
+		return new QueryFunction(sprintf('(%s)', implode(' || ', $list)));
+	}
+
+	#[\Override]
+	public function groupConcat($expr, ?string $separator = ','): IQueryFunction {
+		$orderByClause = ' WITHIN GROUP(ORDER BY NULL)';
+		if (is_null($separator)) {
+			return new QueryFunction('LISTAGG(' . $this->helper->quoteColumnName($expr) . ')' . $orderByClause);
+		}
+
+		$separator = $this->connection->quote($separator);
+		return new QueryFunction('LISTAGG(' . $this->helper->quoteColumnName($expr) . ', ' . $separator . ')' . $orderByClause);
+	}
+
+	#[\Override]
+	public function octetLength($field, $alias = ''): IQueryFunction {
+		$alias = $alias ? (' AS ' . $this->helper->quoteColumnName($alias)) : '';
+		$quotedName = $this->helper->quoteColumnName($field);
+		return new QueryFunction('COALESCE(LENGTHB(' . $quotedName . '), 0)' . $alias);
+	}
+
+	#[\Override]
+	public function charLength($field, $alias = ''): IQueryFunction {
+		$alias = $alias ? (' AS ' . $this->helper->quoteColumnName($alias)) : '';
+		$quotedName = $this->helper->quoteColumnName($field);
+		return new QueryFunction('COALESCE(LENGTH(' . $quotedName . '), 0)' . $alias);
 	}
 }

@@ -1,74 +1,69 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Notification;
 
 use OC\AppFramework\Bootstrap\Coordinator;
-use OCP\AppFramework\QueryException;
-use OCP\ILogger;
+use OCA\Notifications\App;
+use OCP\ICache;
+use OCP\ICacheFactory;
+use OCP\IUserManager;
 use OCP\Notification\AlreadyProcessedException;
 use OCP\Notification\IApp;
 use OCP\Notification\IDeferrableApp;
 use OCP\Notification\IDismissableNotifier;
 use OCP\Notification\IManager;
+use OCP\Notification\IncompleteNotificationException;
+use OCP\Notification\IncompleteParsedNotificationException;
 use OCP\Notification\INotification;
 use OCP\Notification\INotifier;
+use OCP\Notification\IPreloadableNotifier;
+use OCP\Notification\NotificationPreloadReason;
+use OCP\Notification\UnknownNotificationException;
+use OCP\RichObjectStrings\IRichTextFormatter;
 use OCP\RichObjectStrings\IValidator;
+use OCP\Server;
+use OCP\Support\Subscription\IRegistry;
+use Psr\Container\ContainerExceptionInterface;
+use Psr\Log\LoggerInterface;
 
 class Manager implements IManager {
-	/** @var IValidator */
-	protected $validator;
-	/** @var ILogger */
-	protected $logger;
-	/** @var Coordinator */
-	private $coordinator;
+	/** @var ICache */
+	protected ICache $cache;
 
 	/** @var IApp[] */
-	protected $apps;
+	protected array $apps;
 	/** @var string[] */
-	protected $appClasses;
+	protected array $appClasses;
 
 	/** @var INotifier[] */
-	protected $notifiers;
+	protected array $notifiers;
 	/** @var string[] */
-	protected $notifierClasses;
+	protected array $notifierClasses;
 
 	/** @var bool */
-	protected $preparingPushNotification;
+	protected bool $preparingPushNotification;
 	/** @var bool */
-	protected $deferPushing;
+	protected bool $deferPushing;
 	/** @var bool */
-	private $parsedRegistrationContext;
+	private bool $parsedRegistrationContext;
 
-	public function __construct(IValidator $validator,
-								ILogger $logger,
-								Coordinator $coordinator) {
-		$this->validator = $validator;
-		$this->logger = $logger;
-		$this->coordinator = $coordinator;
+	public function __construct(
+		protected IValidator $validator,
+		private IUserManager $userManager,
+		ICacheFactory $cacheFactory,
+		protected IRegistry $subscription,
+		protected LoggerInterface $logger,
+		private Coordinator $coordinator,
+		private IRichTextFormatter $richTextFormatter,
+	) {
+		$this->cache = $cacheFactory->createDistributed('notifications');
 
 		$this->apps = [];
 		$this->notifiers = [];
@@ -80,33 +75,29 @@ class Manager implements IManager {
 	}
 	/**
 	 * @param string $appClass The service must implement IApp, otherwise a
-	 *                          \InvalidArgumentException is thrown later
+	 *                         \InvalidArgumentException is thrown later
 	 * @since 17.0.0
 	 */
+	#[\Override]
 	public function registerApp(string $appClass): void {
-		$this->appClasses[] = $appClass;
-	}
-
-	/**
-	 * @param \Closure $service The service must implement INotifier, otherwise a
-	 *                          \InvalidArgumentException is thrown later
-	 * @param \Closure $info    An array with the keys 'id' and 'name' containing
-	 *                          the app id and the app name
-	 * @deprecated 17.0.0 use registerNotifierService instead.
-	 * @since 8.2.0 - Parameter $info was added in 9.0.0
-	 */
-	public function registerNotifier(\Closure $service, \Closure $info) {
-		$infoData = $info();
-		$this->logger->logException(new \InvalidArgumentException(
-			'Notifier ' . $infoData['name'] . ' (id: ' . $infoData['id'] . ') is not considered because it is using the old way to register.'
-		));
+		// other apps may want to rely on the 'main' notification app so make it deterministic that
+		// the 'main' notification app adds it's notifications first and removes it's notifications last
+		/** @psalm-suppress UndefinedClass */
+		if ($appClass === App::class) {
+			// add 'main' notifications app to start of internal list of apps
+			array_unshift($this->appClasses, $appClass);
+		} else {
+			// add app to end of internal list of apps
+			$this->appClasses[] = $appClass;
+		}
 	}
 
 	/**
 	 * @param string $notifierService The service must implement INotifier, otherwise a
-	 *                          \InvalidArgumentException is thrown later
+	 *                                \InvalidArgumentException is thrown later
 	 * @since 17.0.0
 	 */
+	#[\Override]
 	public function registerNotifierService(string $notifierService): void {
 		$this->notifierClasses[] = $notifierService;
 	}
@@ -121,10 +112,10 @@ class Manager implements IManager {
 
 		foreach ($this->appClasses as $appClass) {
 			try {
-				$app = \OC::$server->query($appClass);
-			} catch (QueryException $e) {
-				$this->logger->logException($e, [
-					'message' => 'Failed to load notification app class: ' . $appClass,
+				$app = Server::get($appClass);
+			} catch (ContainerExceptionInterface $e) {
+				$this->logger->error('Failed to load notification app class: ' . $appClass, [
+					'exception' => $e,
 					'app' => 'notifications',
 				]);
 				continue;
@@ -148,15 +139,16 @@ class Manager implements IManager {
 	/**
 	 * @return INotifier[]
 	 */
+	#[\Override]
 	public function getNotifiers(): array {
 		if (!$this->parsedRegistrationContext) {
 			$notifierServices = $this->coordinator->getRegistrationContext()->getNotifierServices();
 			foreach ($notifierServices as $notifierService) {
 				try {
-					$notifier = \OC::$server->query($notifierService->getService());
-				} catch (QueryException $e) {
-					$this->logger->logException($e, [
-						'message' => 'Failed to load notification notifier class: ' . $notifierService->getService(),
+					$notifier = Server::get($notifierService->getService());
+				} catch (ContainerExceptionInterface $e) {
+					$this->logger->error('Failed to load notification notifier class: ' . $notifierService->getService(), [
+						'exception' => $e,
 						'app' => 'notifications',
 					]);
 					continue;
@@ -181,10 +173,10 @@ class Manager implements IManager {
 
 		foreach ($this->notifierClasses as $notifierClass) {
 			try {
-				$notifier = \OC::$server->query($notifierClass);
-			} catch (QueryException $e) {
-				$this->logger->logException($e, [
-					'message' => 'Failed to load notification notifier class: ' . $notifierClass,
+				$notifier = Server::get($notifierClass);
+			} catch (ContainerExceptionInterface $e) {
+				$this->logger->error('Failed to load notification notifier class: ' . $notifierClass, [
+					'exception' => $e,
 					'app' => 'notifications',
 				]);
 				continue;
@@ -209,22 +201,27 @@ class Manager implements IManager {
 	 * @return INotification
 	 * @since 8.2.0
 	 */
+	#[\Override]
 	public function createNotification(): INotification {
-		return new Notification($this->validator);
+		return new Notification($this->validator, $this->richTextFormatter);
 	}
 
 	/**
 	 * @return bool
 	 * @since 8.2.0
 	 */
+	#[\Override]
 	public function hasNotifiers(): bool {
-		return !empty($this->notifiers) || !empty($this->notifierClasses);
+		return !empty($this->notifiers)
+			|| !empty($this->notifierClasses)
+			|| (!$this->parsedRegistrationContext && !empty($this->coordinator->getRegistrationContext()->getNotifierServices()));
 	}
 
 	/**
 	 * @param bool $preparingPushNotification
 	 * @since 14.0.0
 	 */
+	#[\Override]
 	public function setPreparingPushNotification(bool $preparingPushNotification): void {
 		$this->preparingPushNotification = $preparingPushNotification;
 	}
@@ -233,6 +230,7 @@ class Manager implements IManager {
 	 * @return bool
 	 * @since 14.0.0
 	 */
+	#[\Override]
 	public function isPreparingPushNotification(): bool {
 		return $this->preparingPushNotification;
 	}
@@ -242,11 +240,12 @@ class Manager implements IManager {
 	 * @return bool
 	 * @since 20.0.0
 	 */
+	#[\Override]
 	public function defer(): bool {
 		$alreadyDeferring = $this->deferPushing;
 		$this->deferPushing = true;
 
-		$apps = $this->getApps();
+		$apps = array_reverse($this->getApps());
 
 		foreach ($apps as $app) {
 			if ($app instanceof IDeferrableApp) {
@@ -260,8 +259,9 @@ class Manager implements IManager {
 	/**
 	 * @since 20.0.0
 	 */
+	#[\Override]
 	public function flush(): void {
-		$apps = $this->getApps();
+		$apps = array_reverse($this->getApps());
 
 		foreach ($apps as $app) {
 			if (!$app instanceof IDeferrableApp) {
@@ -278,13 +278,31 @@ class Manager implements IManager {
 	}
 
 	/**
-	 * @param INotification $notification
-	 * @throws \InvalidArgumentException When the notification is not valid
-	 * @since 8.2.0
+	 * {@inheritDoc}
 	 */
+	#[\Override]
+	public function isFairUseOfFreePushService(): bool {
+		$pushAllowed = $this->cache->get('push_fair_use');
+		if ($pushAllowed === null) {
+			/**
+			 * We want to keep offering our push notification service for free, but large
+			 * users overload our infrastructure. For this reason we have to rate-limit the
+			 * use of push notifications. If you need this feature, consider using Nextcloud Enterprise.
+			 */
+			$isFairUse = $this->subscription->delegateHasValidSubscription() || $this->userManager->countSeenUsers() < 1000;
+			$pushAllowed = $isFairUse ? 'yes' : 'no';
+			$this->cache->set('push_fair_use', $pushAllowed, 3600);
+		}
+		return $pushAllowed === 'yes';
+	}
+
+	/**
+	 * {@inheritDoc}
+	 */
+	#[\Override]
 	public function notify(INotification $notification): void {
 		if (!$notification->isValid()) {
-			throw new \InvalidArgumentException('The given notification is invalid');
+			throw new IncompleteNotificationException('The given notification is invalid');
 		}
 
 		$apps = $this->getApps();
@@ -292,7 +310,10 @@ class Manager implements IManager {
 		foreach ($apps as $app) {
 			try {
 				$app->notify($notification);
+			} catch (IncompleteNotificationException) {
 			} catch (\InvalidArgumentException $e) {
+				// todo 39.0.0 Log as error
+				$this->logger->warning(get_class($app) . '::notify() threw \InvalidArgumentException which is deprecated. Throw \OCP\Notification\IncompleteNotificationException when the notification is incomplete for your app and otherwise handle all \InvalidArgumentException yourself.');
 			}
 		}
 	}
@@ -303,6 +324,7 @@ class Manager implements IManager {
 	 * @return string
 	 * @since 17.0.0
 	 */
+	#[\Override]
 	public function getID(): string {
 		return 'core';
 	}
@@ -313,48 +335,68 @@ class Manager implements IManager {
 	 * @return string
 	 * @since 17.0.0
 	 */
+	#[\Override]
 	public function getName(): string {
 		return 'core';
 	}
 
 	/**
-	 * @param INotification $notification
-	 * @param string $languageCode The code of the language that should be used to prepare the notification
-	 * @return INotification
-	 * @throws \InvalidArgumentException When the notification was not prepared by a notifier
-	 * @throws AlreadyProcessedException When the notification is not needed anymore and should be deleted
-	 * @since 8.2.0
+	 * {@inheritDoc}
 	 */
+	#[\Override]
 	public function prepare(INotification $notification, string $languageCode): INotification {
 		$notifiers = $this->getNotifiers();
 
 		foreach ($notifiers as $notifier) {
 			try {
 				$notification = $notifier->prepare($notification, $languageCode);
-			} catch (\InvalidArgumentException $e) {
-				continue;
 			} catch (AlreadyProcessedException $e) {
 				$this->markProcessed($notification);
-				throw new \InvalidArgumentException('The given notification has been processed');
+				throw $e;
+			} catch (UnknownNotificationException) {
+				continue;
+			} catch (\InvalidArgumentException $e) {
+				// todo 39.0.0 Log as error
+				$this->logger->warning(get_class($notifier) . '::prepare() threw \InvalidArgumentException which is deprecated. Throw \OCP\Notification\UnknownNotificationException when the notification is not known to your notifier and otherwise handle all \InvalidArgumentException yourself.');
+				continue;
 			}
 
-			if (!($notification instanceof INotification) || !$notification->isValidParsed()) {
-				throw new \InvalidArgumentException('The given notification has not been handled');
+			if (!$notification->isValidParsed()) {
+				$this->logger->info('Notification was claimed to be parsed, but was not fully parsed by ' . get_class($notifier) . ' [app: ' . $notification->getApp() . ', subject: ' . $notification->getSubject() . ']');
+				throw new IncompleteParsedNotificationException();
 			}
 		}
 
-		if (!($notification instanceof INotification) || !$notification->isValidParsed()) {
-			throw new \InvalidArgumentException('The given notification has not been handled');
+		if (!$notification->isValidParsed()) {
+			$this->logger->info('Notification was not parsed by any notifier [app: ' . $notification->getApp() . ', subject: ' . $notification->getSubject() . ']');
+			throw new IncompleteParsedNotificationException();
 		}
 
 		return $notification;
 	}
 
+	#[\Override]
+	public function preloadDataForParsing(
+		array $notifications,
+		string $languageCode,
+		NotificationPreloadReason $reason,
+	): void {
+		$notifiers = $this->getNotifiers();
+		foreach ($notifiers as $notifier) {
+			if (!($notifier instanceof IPreloadableNotifier)) {
+				continue;
+			}
+
+			$notifier->preloadDataForParsing($notifications, $languageCode, $reason);
+		}
+	}
+
 	/**
 	 * @param INotification $notification
 	 */
+	#[\Override]
 	public function markProcessed(INotification $notification): void {
-		$apps = $this->getApps();
+		$apps = array_reverse($this->getApps());
 
 		foreach ($apps as $app) {
 			$app->markProcessed($notification);
@@ -365,8 +407,9 @@ class Manager implements IManager {
 	 * @param INotification $notification
 	 * @return int
 	 */
+	#[\Override]
 	public function getCount(INotification $notification): int {
-		$apps = $this->getApps();
+		$apps = array_reverse($this->getApps());
 
 		$count = 0;
 		foreach ($apps as $app) {
@@ -376,6 +419,10 @@ class Manager implements IManager {
 		return $count;
 	}
 
+	/**
+	 * {@inheritDoc}
+	 */
+	#[\Override]
 	public function dismissNotification(INotification $notification): void {
 		$notifiers = $this->getNotifiers();
 
@@ -383,7 +430,11 @@ class Manager implements IManager {
 			if ($notifier instanceof IDismissableNotifier) {
 				try {
 					$notifier->dismissNotification($notification);
+				} catch (UnknownNotificationException) {
+					continue;
 				} catch (\InvalidArgumentException $e) {
+					// todo 39.0.0 Log as error
+					$this->logger->warning(get_class($notifier) . '::dismissNotification() threw \InvalidArgumentException which is deprecated. Throw \OCP\Notification\UnknownNotificationException when the notification is not known to your notifier and otherwise handle all \InvalidArgumentException yourself.');
 					continue;
 				}
 			}

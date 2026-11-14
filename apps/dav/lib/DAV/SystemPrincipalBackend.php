@@ -1,25 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\DAV;
 
 use Sabre\DAVACL\PrincipalBackend\AbstractBackend;
@@ -42,6 +28,7 @@ class SystemPrincipalBackend extends AbstractBackend {
 	 * @param string $prefixPath
 	 * @return array
 	 */
+	#[\Override]
 	public function getPrincipalsByPrefix($prefixPath) {
 		$principals = [];
 
@@ -60,13 +47,14 @@ class SystemPrincipalBackend extends AbstractBackend {
 	}
 
 	/**
-	 * Returns a specific principal, specified by it's path.
+	 * Returns a specific principal, specified by its path.
 	 * The returned structure should be the exact same as from
 	 * getPrincipalsByPrefix.
 	 *
 	 * @param string $path
 	 * @return array
 	 */
+	#[\Override]
 	public function getPrincipalByPath($path) {
 		if ($path === 'principals/system/system') {
 			$principal = [
@@ -87,7 +75,7 @@ class SystemPrincipalBackend extends AbstractBackend {
 	}
 
 	/**
-	 * Updates one ore more webdav properties on a principal.
+	 * Updates one or more webdav properties on a principal.
 	 *
 	 * The list of mutations is stored in a Sabre\DAV\PropPatch object.
 	 * To do the actual updates, you must tell this object which properties
@@ -102,6 +90,7 @@ class SystemPrincipalBackend extends AbstractBackend {
 	 * @param \Sabre\DAV\PropPatch $propPatch
 	 * @return void
 	 */
+	#[\Override]
 	public function updatePrincipal($path, \Sabre\DAV\PropPatch $propPatch) {
 	}
 
@@ -134,6 +123,7 @@ class SystemPrincipalBackend extends AbstractBackend {
 	 * @param string $test
 	 * @return array
 	 */
+	#[\Override]
 	public function searchPrincipals($prefixPath, array $searchProperties, $test = 'allof') {
 		return [];
 	}
@@ -144,6 +134,7 @@ class SystemPrincipalBackend extends AbstractBackend {
 	 * @param string $principal
 	 * @return array
 	 */
+	#[\Override]
 	public function getGroupMemberSet($principal) {
 		// TODO: for now the group principal has only one member, the user itself
 		$principal = $this->getPrincipalByPath($principal);
@@ -160,6 +151,7 @@ class SystemPrincipalBackend extends AbstractBackend {
 	 * @param string $principal
 	 * @return array
 	 */
+	#[\Override]
 	public function getGroupMembership($principal) {
 		[$prefix, ] = \Sabre\Uri\split($principal);
 
@@ -183,6 +175,7 @@ class SystemPrincipalBackend extends AbstractBackend {
 	 * @param array $members
 	 * @return void
 	 */
+	#[\Override]
 	public function setGroupMemberSet($principal, array $members) {
 		throw new \Sabre\DAV\Exception('Setting members of the group is not supported yet');
 	}

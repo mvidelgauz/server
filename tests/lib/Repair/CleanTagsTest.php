@@ -1,45 +1,42 @@
 <?php
+
 /**
- * Copyright (c) 2015 Joas Schilling <nickvergessen@owncloud.com>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Repair;
 
+use OC\Repair\CleanTags;
 use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\IDBConnection;
 use OCP\IUserManager;
 use OCP\Migration\IOutput;
+use OCP\Server;
+use PHPUnit\Framework\MockObject\MockObject;
 
 /**
  * Tests for the cleaning the tags tables
  *
- * @group DB
  *
  * @see \OC\Repair\CleanTags
  */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class CleanTagsTest extends \Test\TestCase {
 
-	/** @var \OC\Repair\CleanTags */
-	protected $repair;
+	private ?int $createdFile = null;
+	private CleanTags $repair;
+	private IDBConnection $connection;
 
-	/** @var \OCP\IDBConnection */
-	protected $connection;
+	private IUserManager&MockObject $userManager;
+	private IOutput&MockObject $outputMock;
 
-	/** @var \OCP\IUserManager|\PHPUnit\Framework\MockObject\MockObject */
-	protected $userManager;
-
-	/** @var int */
-	protected $createdFile;
-
-	/** @var IOutput */
-	private $outputMock;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->outputMock = $this->getMockBuilder('\OCP\Migration\IOutput')
+		$this->outputMock = $this->getMockBuilder(IOutput::class)
 			->disableOriginalConstructor()
 			->getMock();
 
@@ -47,11 +44,12 @@ class CleanTagsTest extends \Test\TestCase {
 			->disableOriginalConstructor()
 			->getMock();
 
-		$this->connection = \OC::$server->getDatabaseConnection();
-		$this->repair = new \OC\Repair\CleanTags($this->connection, $this->userManager);
+		$this->connection = Server::get(IDBConnection::class);
+		$this->repair = new CleanTags($this->connection, $this->userManager);
 		$this->cleanUpTables();
 	}
 
+	#[\Override]
 	protected function tearDown(): void {
 		$this->cleanUpTables();
 
@@ -61,16 +59,17 @@ class CleanTagsTest extends \Test\TestCase {
 	protected function cleanUpTables() {
 		$qb = $this->connection->getQueryBuilder();
 		$qb->delete('vcategory')
-			->execute();
+			->executeStatement();
 
 		$qb->delete('vcategory_to_object')
-			->execute();
+			->executeStatement();
 
 		$qb->delete('filecache')
-			->execute();
+			->runAcrossAllShards()
+			->executeStatement();
 	}
 
-	public function testRun() {
+	public function testRun(): void {
 		$cat1 = $this->addTagCategory('TestRepairCleanTags', 'files'); // Retained
 		$cat2 = $this->addTagCategory('TestRepairCleanTags2', 'files'); // Deleted: Category will be empty
 		$this->addTagCategory('TestRepairCleanTags3', 'files'); // Deleted: Category is empty
@@ -96,7 +95,6 @@ class CleanTagsTest extends \Test\TestCase {
 		$this->assertEntryCount('vcategory_to_object', 2, 'Assert tag entries count after cleaning category entries');
 		$this->assertEntryCount('vcategory', 2, 'Assert tag categories count after cleaning category entries');
 
-
 		$this->addTagCategory('TestRepairCleanTags', 'contacts', 'userExists'); // Retained
 		$this->assertEntryCount('vcategory', 3, 'Assert tag categories count before cleaning categories by users');
 
@@ -120,7 +118,7 @@ class CleanTagsTest extends \Test\TestCase {
 		$qb = $this->connection->getQueryBuilder();
 		$result = $qb->select($qb->func()->count('*'))
 			->from($tableName)
-			->execute();
+			->executeQuery();
 
 		$this->assertEquals($expected, $result->fetchOne(), $message);
 	}
@@ -141,9 +139,9 @@ class CleanTagsTest extends \Test\TestCase {
 				'category' => $qb->createNamedParameter($category),
 				'type' => $qb->createNamedParameter($type),
 			])
-			->execute();
+			->executeStatement();
 
-		return (int) $this->getLastInsertID('vcategory', 'id');
+		return $qb->getLastInsertId();
 	}
 
 	/**
@@ -160,7 +158,7 @@ class CleanTagsTest extends \Test\TestCase {
 				'categoryid' => $qb->createNamedParameter($category, IQueryBuilder::PARAM_INT),
 				'type' => $qb->createNamedParameter($type),
 			])
-			->execute();
+			->executeStatement();
 	}
 
 	/**
@@ -168,7 +166,7 @@ class CleanTagsTest extends \Test\TestCase {
 	 * @return int
 	 */
 	protected function getFileID() {
-		if ($this->createdFile) {
+		if ($this->createdFile !== null) {
 			return $this->createdFile;
 		}
 
@@ -178,28 +176,21 @@ class CleanTagsTest extends \Test\TestCase {
 		$fileName = $this->getUniqueID('TestRepairCleanTags', 12);
 		$qb->insert('filecache')
 			->values([
+				'storage' => $qb->createNamedParameter(1, IQueryBuilder::PARAM_INT),
 				'path' => $qb->createNamedParameter($fileName),
 				'path_hash' => $qb->createNamedParameter(md5($fileName)),
 			])
-			->execute();
+			->executeStatement();
 		$fileName = $this->getUniqueID('TestRepairCleanTags', 12);
 		$qb->insert('filecache')
 			->values([
+				'storage' => $qb->createNamedParameter(1, IQueryBuilder::PARAM_INT),
 				'path' => $qb->createNamedParameter($fileName),
 				'path_hash' => $qb->createNamedParameter(md5($fileName)),
 			])
-			->execute();
+			->executeStatement();
 
-		$this->createdFile = (int) $this->getLastInsertID('filecache', 'fileid');
+		$this->createdFile = $qb->getLastInsertId();
 		return $this->createdFile;
-	}
-
-	/**
-	 * @param $tableName
-	 * @param $idName
-	 * @return int
-	 */
-	protected function getLastInsertID($tableName, $idName) {
-		return $this->connection->lastInsertId("*PREFIX*$tableName");
 	}
 }

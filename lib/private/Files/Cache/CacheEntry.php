@@ -1,25 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files\Cache;
 
 use OCP\Files\Cache\ICacheEntry;
@@ -28,27 +14,31 @@ use OCP\Files\Cache\ICacheEntry;
  * meta data for a file or folder
  */
 class CacheEntry implements ICacheEntry {
-	/**
-	 * @var array
-	 */
-	private $data;
-
-	public function __construct(array $data) {
-		$this->data = $data;
+	public function __construct(
+		private array $data,
+	) {
 	}
 
-	public function offsetSet($offset, $value) {
+	#[\Override]
+	public function offsetSet($offset, $value): void {
 		$this->data[$offset] = $value;
 	}
 
-	public function offsetExists($offset) {
+	#[\Override]
+	public function offsetExists($offset): bool {
 		return isset($this->data[$offset]);
 	}
 
-	public function offsetUnset($offset) {
+	#[\Override]
+	public function offsetUnset($offset): void {
 		unset($this->data[$offset]);
 	}
 
+	/**
+	 * @return mixed
+	 */
+	#[\Override]
+	#[\ReturnTypeWillChange]
 	public function offsetGet($offset) {
 		if (isset($this->data[$offset])) {
 			return $this->data[$offset];
@@ -57,68 +47,84 @@ class CacheEntry implements ICacheEntry {
 		}
 	}
 
+	#[\Override]
 	public function getId() {
 		return (int)$this->data['fileid'];
 	}
 
+	#[\Override]
 	public function getStorageId() {
 		return $this->data['storage'];
 	}
 
-
+	#[\Override]
 	public function getPath() {
 		return (string)$this->data['path'];
 	}
 
-
+	#[\Override]
 	public function getName() {
 		return $this->data['name'];
 	}
 
-
-	public function getMimeType() {
-		return $this->data['mimetype'];
+	#[\Override]
+	public function getMimeType(): string {
+		return $this->data['mimetype'] ?? 'application/octet-stream';
 	}
 
-
+	#[\Override]
 	public function getMimePart() {
 		return $this->data['mimepart'];
 	}
 
+	#[\Override]
 	public function getSize() {
 		return $this->data['size'];
 	}
 
+	#[\Override]
 	public function getMTime() {
 		return $this->data['mtime'];
 	}
 
+	#[\Override]
 	public function getStorageMTime() {
 		return $this->data['storage_mtime'];
 	}
 
+	#[\Override]
 	public function getEtag() {
 		return $this->data['etag'];
 	}
 
-	public function getPermissions() {
+	#[\Override]
+	public function getPermissions(): int {
 		return $this->data['permissions'];
 	}
 
+	#[\Override]
 	public function isEncrypted() {
 		return isset($this->data['encrypted']) && $this->data['encrypted'];
 	}
 
+	#[\Override]
 	public function getMetadataEtag(): ?string {
-		return $this->data['metadata_etag'];
+		return $this->data['metadata_etag'] ?? null;
 	}
 
+	#[\Override]
 	public function getCreationTime(): ?int {
-		return $this->data['creation_time'];
+		return $this->data['creation_time'] ?? null;
 	}
 
+	#[\Override]
 	public function getUploadTime(): ?int {
-		return $this->data['upload_time'];
+		return $this->data['upload_time'] ?? null;
+	}
+
+	#[\Override]
+	public function getParentId(): int {
+		return $this->data['parent'];
 	}
 
 	public function getData() {
@@ -127,5 +133,14 @@ class CacheEntry implements ICacheEntry {
 
 	public function __clone() {
 		$this->data = array_merge([], $this->data);
+	}
+
+	#[\Override]
+	public function getUnencryptedSize(): int {
+		if ($this->data['encrypted'] && isset($this->data['unencrypted_size'])) {
+			return $this->data['unencrypted_size'];
+		} else {
+			return $this->data['size'] ?? 0;
+		}
 	}
 }

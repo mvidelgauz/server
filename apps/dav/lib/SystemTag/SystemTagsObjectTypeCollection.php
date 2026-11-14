@@ -1,28 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\SystemTag;
 
 use OCP\IGroupManager;
@@ -38,77 +21,38 @@ use Sabre\DAV\ICollection;
  * Collection containing object ids by object type
  */
 class SystemTagsObjectTypeCollection implements ICollection {
-
-	/**
-	 * @var string
-	 */
-	private $objectType;
-
-	/**
-	 * @var ISystemTagManager
-	 */
-	private $tagManager;
-
-	/**
-	 * @var ISystemTagObjectMapper
-	 */
-	private $tagMapper;
-
-	/**
-	 * @var IGroupManager
-	 */
-	private $groupManager;
-
-	/**
-	 * @var IUserSession
-	 */
-	private $userSession;
-
-	/**
-	 * @var \Closure
-	 **/
-	protected $childExistsFunction;
-
-	/**
-	 * Constructor
-	 *
-	 * @param string $objectType object type
-	 * @param ISystemTagManager $tagManager
-	 * @param ISystemTagObjectMapper $tagMapper
-	 * @param IUserSession $userSession
-	 * @param IGroupManager $groupManager
-	 * @param \Closure $childExistsFunction
-	 */
 	public function __construct(
-		$objectType,
-		ISystemTagManager $tagManager,
-		ISystemTagObjectMapper $tagMapper,
-		IUserSession $userSession,
-		IGroupManager $groupManager,
-		\Closure $childExistsFunction
+		private string $objectType,
+		private ISystemTagManager $tagManager,
+		private ISystemTagObjectMapper $tagMapper,
+		private IUserSession $userSession,
+		private IGroupManager $groupManager,
+		protected \Closure $childExistsFunction,
+		protected \Closure $childWriteAccessFunction,
 	) {
-		$this->tagManager = $tagManager;
-		$this->tagMapper = $tagMapper;
-		$this->objectType = $objectType;
-		$this->userSession = $userSession;
-		$this->groupManager = $groupManager;
-		$this->childExistsFunction = $childExistsFunction;
 	}
 
 	/**
 	 * @param string $name
 	 * @param resource|string $data Initial payload
-	 * @return null|string
+	 *
+	 * @return never
+	 *
 	 * @throws Forbidden
 	 */
+	#[\Override]
 	public function createFile($name, $data = null) {
 		throw new Forbidden('Permission denied to create nodes');
 	}
 
 	/**
 	 * @param string $name
+	 *
 	 * @throws Forbidden
+	 *
+	 * @return never
 	 */
+	#[\Override]
 	public function createDirectory($name) {
 		throw new Forbidden('Permission denied to create collections');
 	}
@@ -119,6 +63,7 @@ class SystemTagsObjectTypeCollection implements ICollection {
 	 * @return SystemTagsObjectMappingCollection
 	 * @throws NotFound
 	 */
+	#[\Override]
 	public function getChild($objectName) {
 		// make sure the object exists and is reachable
 		if (!$this->childExists($objectName)) {
@@ -129,10 +74,15 @@ class SystemTagsObjectTypeCollection implements ICollection {
 			$this->objectType,
 			$this->userSession->getUser(),
 			$this->tagManager,
-			$this->tagMapper
+			$this->tagMapper,
+			$this->childWriteAccessFunction,
 		);
 	}
 
+	/**
+	 * @return never
+	 */
+	#[\Override]
 	public function getChildren() {
 		// do not list object ids
 		throw new MethodNotAllowed();
@@ -144,22 +94,32 @@ class SystemTagsObjectTypeCollection implements ICollection {
 	 * @param string $name
 	 * @return bool
 	 */
+	#[\Override]
 	public function childExists($name) {
 		return call_user_func($this->childExistsFunction, $name);
 	}
 
+	/**
+	 * @return never
+	 */
+	#[\Override]
 	public function delete() {
 		throw new Forbidden('Permission denied to delete this collection');
 	}
 
+	#[\Override]
 	public function getName() {
 		return $this->objectType;
 	}
 
 	/**
 	 * @param string $name
+	 *
 	 * @throws Forbidden
+	 *
+	 * @return never
 	 */
+	#[\Override]
 	public function setName($name) {
 		throw new Forbidden('Permission denied to rename this collection');
 	}
@@ -167,8 +127,9 @@ class SystemTagsObjectTypeCollection implements ICollection {
 	/**
 	 * Returns the last modification time, as a unix timestamp
 	 *
-	 * @return int
+	 * @return null
 	 */
+	#[\Override]
 	public function getLastModified() {
 		return null;
 	}

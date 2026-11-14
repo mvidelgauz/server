@@ -1,16 +1,18 @@
 <?php
+
 /**
- * Copyright (c) 2014 Robin Appelman <icewind@owncloud.com>
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2020-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\BackgroundJob;
 
-class TestJob extends \OC\BackgroundJob\Job {
-	private $testCase;
+use OCP\AppFramework\Utility\ITimeFactory;
+use OCP\BackgroundJob\Job;
+use OCP\Server;
 
+class TestJob extends Job {
 	/**
 	 * @var callable $callback
 	 */
@@ -20,11 +22,16 @@ class TestJob extends \OC\BackgroundJob\Job {
 	 * @param JobTest $testCase
 	 * @param callable $callback
 	 */
-	public function __construct($testCase = null, $callback = null) {
-		$this->testCase = $testCase;
+	public function __construct(
+		?ITimeFactory $time = null,
+		private $testCase = null,
+		$callback = null,
+	) {
+		parent::__construct($time ?? Server::get(ITimeFactory::class));
 		$this->callback = $callback;
 	}
 
+	#[\Override]
 	public function run($argument) {
 		$this->testCase->markRun();
 		$callback = $this->callback;

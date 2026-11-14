@@ -1,23 +1,9 @@
 <?php
+
 /**
- * @author Bernhard Posselt <dev@bernhard-posselt.com>
- * @author Lukas Reschke <lukas@owncloud.com>
- *
- * @copyright Copyright (c) 2015, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Test\AppFramework\Middleware\Security;
@@ -26,6 +12,7 @@ use OC\AppFramework\Http;
 use OC\AppFramework\Http\Request;
 use OC\AppFramework\Middleware\Security\Exceptions\AppNotEnabledException;
 use OC\AppFramework\Middleware\Security\Exceptions\CrossSiteRequestForgeryException;
+use OC\AppFramework\Middleware\Security\Exceptions\ExAppRequiredException;
 use OC\AppFramework\Middleware\Security\Exceptions\NotAdminException;
 use OC\AppFramework\Middleware\Security\Exceptions\NotLoggedInException;
 use OC\AppFramework\Middleware\Security\Exceptions\SecurityException;
@@ -33,63 +20,64 @@ use OC\Appframework\Middleware\Security\Exceptions\StrictCookieMissingException;
 use OC\AppFramework\Middleware\Security\SecurityMiddleware;
 use OC\AppFramework\Utility\ControllerMethodReflector;
 use OC\Settings\AuthorizedGroupMapper;
+use OC\User\Session;
 use OCP\App\IAppManager;
-use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\AppFramework\Http\RedirectResponse;
 use OCP\AppFramework\Http\TemplateResponse;
+use OCP\Group\ISubAdmin;
 use OCP\IConfig;
+use OCP\IGroupManager;
 use OCP\IL10N;
 use OCP\INavigationManager;
 use OCP\IRequest;
+use OCP\IRequestId;
+use OCP\ISession;
 use OCP\IURLGenerator;
+use OCP\IUser;
 use OCP\IUserSession;
-use OCP\Security\ISecureRandom;
+use OCP\Security\Ip\IRemoteAddress;
+use OCP\Server;
+use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Log\LoggerInterface;
+use Test\AppFramework\Middleware\Security\Mock\NormalController;
+use Test\AppFramework\Middleware\Security\Mock\OCSController;
+use Test\AppFramework\Middleware\Security\Mock\SecurityMiddlewareController;
 
 class SecurityMiddlewareTest extends \Test\TestCase {
+	private SecurityMiddleware $middleware;
+	private ControllerMethodReflector $reader;
+	private SecurityMiddlewareController $controller;
+	private SecurityException $secAjaxException;
+	private IRequest|MockObject $request;
+	private LoggerInterface&MockObject $logger;
+	private INavigationManager&MockObject $navigationManager;
+	private IURLGenerator&MockObject $urlGenerator;
+	private IAppManager&MockObject $appManager;
+	private IL10N&MockObject $l10n;
+	private IUserSession&MockObject $userSession;
+	private AuthorizedGroupMapper&MockObject $authorizedGroupMapper;
 
-	/** @var SecurityMiddleware|\PHPUnit\Framework\MockObject\MockObject */
-	private $middleware;
-	/** @var Controller|\PHPUnit\Framework\MockObject\MockObject */
-	private $controller;
-	/** @var SecurityException */
-	private $secException;
-	/** @var SecurityException */
-	private $secAjaxException;
-	/** @var IRequest|\PHPUnit\Framework\MockObject\MockObject */
-	private $request;
-	/** @var ControllerMethodReflector */
-	private $reader;
-	/** @var LoggerInterface|\PHPUnit\Framework\MockObject\MockObject */
-	private $logger;
-	/** @var INavigationManager|\PHPUnit\Framework\MockObject\MockObject */
-	private $navigationManager;
-	/** @var IURLGenerator|\PHPUnit\Framework\MockObject\MockObject */
-	private $urlGenerator;
-	/** @var IAppManager|\PHPUnit\Framework\MockObject\MockObject */
-	private $appManager;
-	/** @var IL10N|\PHPUnit\Framework\MockObject\MockObject */
-	private $l10n;
-	/** @var IUserSession|\PHPUnit\Framework\MockObject\MockObject */
-	private $userSession;
-	/** @var AuthorizedGroupMapper|\PHPUnit\Framework\MockObject\MockObject */
-	private $authorizedGroupMapper;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
 		$this->authorizedGroupMapper = $this->createMock(AuthorizedGroupMapper::class);
-		$this->userSession = $this->createMock(IUserSession::class);
-		$this->controller = $this->createMock(Controller::class);
-		$this->reader = new ControllerMethodReflector();
+		$this->userSession = $this->createMock(Session::class);
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('test');
+		$this->userSession->method('getUser')->willReturn($user);
+		$this->request = $this->createMock(IRequest::class);
+		$this->controller = new SecurityMiddlewareController(
+			'test',
+			$this->request
+		);
+		$this->reader = new ControllerMethodReflector(Server::get(LoggerInterface::class));
 		$this->logger = $this->createMock(LoggerInterface::class);
 		$this->navigationManager = $this->createMock(INavigationManager::class);
 		$this->urlGenerator = $this->createMock(IURLGenerator::class);
-		$this->request = $this->createMock(IRequest::class);
 		$this->l10n = $this->createMock(IL10N::class);
 		$this->middleware = $this->getMiddleware(true, true, false);
-		$this->secException = new SecurityException('hey', false);
 		$this->secAjaxException = new SecurityException('hey', true);
 	}
 
@@ -98,6 +86,15 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 		$this->appManager->expects($this->any())
 			->method('isEnabledForUser')
 			->willReturn($isAppEnabledForUser);
+		$remoteIpAddress = $this->createMock(IRemoteAddress::class);
+		$remoteIpAddress->method('allowsAdminActions')->willReturn(true);
+
+		$groupManager = $this->createMock(IGroupManager::class);
+		$groupManager->method('isAdmin')
+			->willReturn($isAdminUser);
+		$subAdminManager = $this->createMock(ISubAdmin::class);
+		$subAdminManager->method('isSubAdmin')
+			->willReturn($isSubAdmin);
 
 		return new SecurityMiddleware(
 			$this->request,
@@ -107,29 +104,94 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 			$this->logger,
 			'files',
 			$isLoggedIn,
-			$isAdminUser,
-			$isSubAdmin,
+			$groupManager,
+			$subAdminManager,
 			$this->appManager,
 			$this->l10n,
 			$this->authorizedGroupMapper,
-			$this->userSession
+			$this->userSession,
+			$remoteIpAddress
 		);
 	}
 
+	public static function dataNoCSRFRequiredPublicPage(): array {
+		return [
+			['testAnnotationNoCSRFRequiredPublicPage'],
+			['testAnnotationNoCSRFRequiredAttributePublicPage'],
+			['testAnnotationPublicPageAttributeNoCSRFRequired'],
+			['testAttributeNoCSRFRequiredPublicPage'],
+		];
+	}
 
-	/**
-	 * @PublicPage
-	 * @NoCSRFRequired
-	 */
-	public function testSetNavigationEntry() {
+	public static function dataPublicPage(): array {
+		return [
+			['testAnnotationPublicPage'],
+			['testAttributePublicPage'],
+		];
+	}
+
+	public static function dataNoCSRFRequired(): array {
+		return [
+			['testAnnotationNoCSRFRequired'],
+			['testAttributeNoCSRFRequired'],
+		];
+	}
+
+	public static function dataPublicPageStrictCookieRequired(): array {
+		return [
+			['testAnnotationPublicPageStrictCookieRequired'],
+			['testAnnotationStrictCookieRequiredAttributePublicPage'],
+			['testAnnotationPublicPageAttributeStrictCookiesRequired'],
+			['testAttributePublicPageStrictCookiesRequired'],
+		];
+	}
+
+	public static function dataNoCSRFRequiredPublicPageStrictCookieRequired(): array {
+		return [
+			['testAnnotationNoCSRFRequiredPublicPageStrictCookieRequired'],
+			['testAttributeNoCSRFRequiredPublicPageStrictCookiesRequired'],
+		];
+	}
+
+	public static function dataNoAdminRequiredNoCSRFRequired(): array {
+		return [
+			['testAnnotationNoAdminRequiredNoCSRFRequired'],
+			['testAttributeNoAdminRequiredNoCSRFRequired'],
+		];
+	}
+
+	public static function dataNoAdminRequiredNoCSRFRequiredPublicPage(): array {
+		return [
+			['testAnnotationNoAdminRequiredNoCSRFRequiredPublicPage'],
+			['testAttributeNoAdminRequiredNoCSRFRequiredPublicPage'],
+		];
+	}
+
+	public static function dataNoCSRFRequiredSubAdminRequired(): array {
+		return [
+			['testAnnotationNoCSRFRequiredSubAdminRequired'],
+			['testAnnotationNoCSRFRequiredAttributeSubAdminRequired'],
+			['testAnnotationSubAdminRequiredAttributeNoCSRFRequired'],
+			['testAttributeNoCSRFRequiredSubAdminRequired'],
+		];
+	}
+
+	public static function dataExAppRequired(): array {
+		return [
+			['testAnnotationExAppRequired'],
+			['testAttributeExAppRequired'],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequiredPublicPage')]
+	public function testSetNavigationEntry(string $method): void {
 		$this->navigationManager->expects($this->once())
 			->method('setActiveEntry')
 			->with($this->equalTo('files'));
 
-		$this->reader->reflect(__CLASS__, __FUNCTION__);
-		$this->middleware->beforeController($this->controller, __FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
+		$this->middleware->beforeController($this->controller, $method);
 	}
-
 
 	/**
 	 * @param string $method
@@ -147,7 +209,7 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 		$sec = $this->getMiddleware($isLoggedIn, $isAdminUser, false);
 
 		try {
-			$this->reader->reflect(__CLASS__, $method);
+			$this->reader->reflect($this->controller, $method);
 			$sec->beforeController($this->controller, $method);
 		} catch (SecurityException $ex) {
 			$this->assertEquals($status, $ex->getCode());
@@ -160,74 +222,62 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 		}
 	}
 
-	public function testAjaxStatusLoggedInCheck() {
+	public function testAjaxStatusLoggedInCheck(): void {
 		$this->ajaxExceptionStatus(
-			__FUNCTION__,
+			'testNoAnnotationNorAttribute',
 			'isLoggedIn',
 			Http::STATUS_UNAUTHORIZED
 		);
 	}
 
-	/**
-	 * @NoCSRFRequired
-	 */
-	public function testAjaxNotAdminCheck() {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequired')]
+	public function testAjaxNotAdminCheck(string $method): void {
 		$this->ajaxExceptionStatus(
-			__FUNCTION__,
+			$method,
 			'isAdminUser',
 			Http::STATUS_FORBIDDEN
 		);
 	}
 
-	/**
-	 * @PublicPage
-	 */
-	public function testAjaxStatusCSRFCheck() {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPublicPage')]
+	public function testAjaxStatusCSRFCheck(string $method): void {
 		$this->ajaxExceptionStatus(
-			__FUNCTION__,
+			$method,
 			'passesCSRFCheck',
 			Http::STATUS_PRECONDITION_FAILED
 		);
 	}
 
-	/**
-	 * @PublicPage
-	 * @NoCSRFRequired
-	 */
-	public function testAjaxStatusAllGood() {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequiredPublicPage')]
+	public function testAjaxStatusAllGood(string $method): void {
 		$this->ajaxExceptionStatus(
-			__FUNCTION__,
+			$method,
 			'isLoggedIn',
 			0
 		);
 		$this->ajaxExceptionStatus(
-			__FUNCTION__,
+			$method,
 			'isAdminUser',
 			0
 		);
 		$this->ajaxExceptionStatus(
-			__FUNCTION__,
+			$method,
 			'passesCSRFCheck',
 			0
 		);
 	}
 
-
-	/**
-	 * @PublicPage
-	 * @NoCSRFRequired
-	 */
-	public function testNoChecks() {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequiredPublicPage')]
+	public function testNoChecks(string $method): void {
 		$this->request->expects($this->never())
 			->method('passesCSRFCheck')
 			->willReturn(false);
 
 		$sec = $this->getMiddleware(false, false, false);
 
-		$this->reader->reflect(__CLASS__, __FUNCTION__);
-		$sec->beforeController($this->controller, __FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
+		$sec->beforeController($this->controller, $method);
 	}
-
 
 	/**
 	 * @param string $method
@@ -251,16 +301,13 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 			$this->addToAssertionCount(1);
 		}
 
-		$this->reader->reflect(__CLASS__, $method);
+		$this->reader->reflect($this->controller, $method);
 		$sec->beforeController($this->controller, $method);
 	}
 
-
-	/**
-	 * @PublicPage
-	 */
-	public function testCsrfCheck() {
-		$this->expectException(\OC\AppFramework\Middleware\Security\Exceptions\CrossSiteRequestForgeryException::class);
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPublicPage')]
+	public function testCsrfCheck(string $method): void {
+		$this->expectException(CrossSiteRequestForgeryException::class);
 
 		$this->request->expects($this->once())
 			->method('passesCSRFCheck')
@@ -268,28 +315,22 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 		$this->request->expects($this->once())
 			->method('passesStrictCookieCheck')
 			->willReturn(true);
-		$this->reader->reflect(__CLASS__, __FUNCTION__);
-		$this->middleware->beforeController($this->controller, __FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
+		$this->middleware->beforeController($this->controller, $method);
 	}
 
-
-	/**
-	 * @PublicPage
-	 * @NoCSRFRequired
-	 */
-	public function testNoCsrfCheck() {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequiredPublicPage')]
+	public function testNoCsrfCheck(string $method): void {
 		$this->request->expects($this->never())
 			->method('passesCSRFCheck')
 			->willReturn(false);
 
-		$this->reader->reflect(__CLASS__, __FUNCTION__);
-		$this->middleware->beforeController($this->controller, __FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
+		$this->middleware->beforeController($this->controller, $method);
 	}
 
-	/**
-	 * @PublicPage
-	 */
-	public function testPassesCsrfCheck() {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPublicPage')]
+	public function testPassesCsrfCheck(string $method): void {
 		$this->request->expects($this->once())
 			->method('passesCSRFCheck')
 			->willReturn(true);
@@ -297,15 +338,13 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 			->method('passesStrictCookieCheck')
 			->willReturn(true);
 
-		$this->reader->reflect(__CLASS__, __FUNCTION__);
-		$this->middleware->beforeController($this->controller, __FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
+		$this->middleware->beforeController($this->controller, $method);
 	}
 
-	/**
-	 * @PublicPage
-	 */
-	public function testFailCsrfCheck() {
-		$this->expectException(\OC\AppFramework\Middleware\Security\Exceptions\CrossSiteRequestForgeryException::class);
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPublicPage')]
+	public function testFailCsrfCheck(string $method): void {
+		$this->expectException(CrossSiteRequestForgeryException::class);
 
 		$this->request->expects($this->once())
 			->method('passesCSRFCheck')
@@ -314,16 +353,13 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 			->method('passesStrictCookieCheck')
 			->willReturn(true);
 
-		$this->reader->reflect(__CLASS__, __FUNCTION__);
-		$this->middleware->beforeController($this->controller, __FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
+		$this->middleware->beforeController($this->controller, $method);
 	}
 
-	/**
-	 * @PublicPage
-	 * @StrictCookieRequired
-	 */
-	public function testStrictCookieRequiredCheck() {
-		$this->expectException(\OC\Appframework\Middleware\Security\Exceptions\StrictCookieMissingException::class);
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataPublicPageStrictCookieRequired')]
+	public function testStrictCookieRequiredCheck(string $method): void {
+		$this->expectException(\OC\AppFramework\Middleware\Security\Exceptions\StrictCookieMissingException::class);
 
 		$this->request->expects($this->never())
 			->method('passesCSRFCheck');
@@ -331,68 +367,53 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 			->method('passesStrictCookieCheck')
 			->willReturn(false);
 
-		$this->reader->reflect(__CLASS__, __FUNCTION__);
-		$this->middleware->beforeController($this->controller, __FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
+		$this->middleware->beforeController($this->controller, $method);
 	}
 
-
-	/**
-	 * @PublicPage
-	 * @NoCSRFRequired
-	 */
-	public function testNoStrictCookieRequiredCheck() {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequiredPublicPage')]
+	public function testNoStrictCookieRequiredCheck(string $method): void {
 		$this->request->expects($this->never())
 			->method('passesStrictCookieCheck')
 			->willReturn(false);
 
-		$this->reader->reflect(__CLASS__, __FUNCTION__);
-		$this->middleware->beforeController($this->controller, __FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
+		$this->middleware->beforeController($this->controller, $method);
 	}
 
-	/**
-	 * @PublicPage
-	 * @NoCSRFRequired
-	 * @StrictCookieRequired
-	 */
-	public function testPassesStrictCookieRequiredCheck() {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequiredPublicPageStrictCookieRequired')]
+	public function testPassesStrictCookieRequiredCheck(string $method): void {
 		$this->request
 			->expects($this->once())
 			->method('passesStrictCookieCheck')
 			->willReturn(true);
 
-		$this->reader->reflect(__CLASS__, __FUNCTION__);
-		$this->middleware->beforeController($this->controller, __FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
+		$this->middleware->beforeController($this->controller, $method);
 	}
 
-	public function dataCsrfOcsController() {
-		$controller = $this->getMockBuilder('OCP\AppFramework\Controller')
-			->disableOriginalConstructor()
-			->getMock();
-		$ocsController = $this->getMockBuilder('OCP\AppFramework\OCSController')
-			->disableOriginalConstructor()
-			->getMock();
-
+	public static function dataCsrfOcsController(): array {
 		return [
-			[$controller, false, false, true],
-			[$controller, false,  true, true],
-			[$controller,  true, false, true],
-			[$controller,  true,  true, true],
+			[NormalController::class, false, false, true],
+			[NormalController::class, false,  true, true],
+			[NormalController::class,  true, false, true],
+			[NormalController::class,  true,  true, true],
 
-			[$ocsController, false, false,  true],
-			[$ocsController, false,  true, false],
-			[$ocsController,  true, false, false],
-			[$ocsController,  true,  true, false],
+			[OCSController::class, false, false,  true],
+			[OCSController::class, false,  true, false],
+			[OCSController::class,  true, false, false],
+			[OCSController::class,  true,  true, false],
 		];
 	}
 
 	/**
-	 * @dataProvider dataCsrfOcsController
-	 * @param Controller $controller
+	 * @param string $controllerClass
 	 * @param bool $hasOcsApiHeader
 	 * @param bool $hasBearerAuth
 	 * @param bool $exception
 	 */
-	public function testCsrfOcsController(Controller $controller, bool $hasOcsApiHeader, bool $hasBearerAuth, bool $exception) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataCsrfOcsController')]
+	public function testCsrfOcsController(string $controllerClass, bool $hasOcsApiHeader, bool $hasBearerAuth, bool $exception): void {
 		$this->request
 			->method('getHeader')
 			->willReturnCallback(function ($header) use ($hasOcsApiHeader, $hasBearerAuth) {
@@ -408,6 +429,9 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 			->method('passesStrictCookieCheck')
 			->willReturn(true);
 
+		$controller = new $controllerClass('test', $this->request);
+		$this->reader->reflect($controller, 'foo');
+
 		try {
 			$this->middleware->beforeController($controller, 'foo');
 			$this->assertFalse($exception);
@@ -416,91 +440,114 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 		}
 	}
 
-	/**
-	 * @NoCSRFRequired
-	 * @NoAdminRequired
-	 */
-	public function testLoggedInCheck() {
-		$this->securityCheck(__FUNCTION__, 'isLoggedIn');
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoAdminRequiredNoCSRFRequired')]
+	public function testLoggedInCheck(string $method): void {
+		$this->securityCheck($method, 'isLoggedIn');
 	}
 
-
-	/**
-	 * @NoCSRFRequired
-	 * @NoAdminRequired
-	 */
-	public function testFailLoggedInCheck() {
-		$this->securityCheck(__FUNCTION__, 'isLoggedIn', true);
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoAdminRequiredNoCSRFRequired')]
+	public function testFailLoggedInCheck(string $method): void {
+		$this->securityCheck($method, 'isLoggedIn', true);
 	}
 
-
-	/**
-	 * @NoCSRFRequired
-	 */
-	public function testIsAdminCheck() {
-		$this->securityCheck(__FUNCTION__, 'isAdminUser');
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequired')]
+	public function testIsAdminCheck(string $method): void {
+		$this->securityCheck($method, 'isAdminUser');
 	}
 
-	/**
-	 * @NoCSRFRequired
-	 * @SubAdminRequired
-	 */
-	public function testIsNotSubAdminCheck() {
-		$this->reader->reflect(__CLASS__,__FUNCTION__);
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequiredSubAdminRequired')]
+	public function testIsNotSubAdminCheck(string $method): void {
+		$this->reader->reflect($this->controller, $method);
 		$sec = $this->getMiddleware(true, false, false);
 
 		$this->expectException(SecurityException::class);
-		$sec->beforeController($this, __METHOD__);
+		$sec->beforeController($this->controller, $method);
 	}
 
-	/**
-	 * @NoCSRFRequired
-	 * @SubAdminRequired
-	 */
-	public function testIsSubAdminCheck() {
-		$this->reader->reflect(__CLASS__,__FUNCTION__);
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequiredSubAdminRequired')]
+	#[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
+	public function testIsSubAdminCheck(string $method): void {
+		$this->reader->reflect($this->controller, $method);
 		$sec = $this->getMiddleware(true, false, true);
 
-		$sec->beforeController($this, __METHOD__);
-		$this->addToAssertionCount(1);
+		$sec->beforeController($this->controller, $method);
 	}
 
-	/**
-	 * @NoCSRFRequired
-	 * @SubAdminRequired
-	 */
-	public function testIsSubAdminAndAdminCheck() {
-		$this->reader->reflect(__CLASS__,__FUNCTION__);
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequiredSubAdminRequired')]
+	#[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
+	public function testIsSubAdminAndAdminCheck(string $method): void {
+		$this->reader->reflect($this->controller, $method);
 		$sec = $this->getMiddleware(true, true, true);
 
-		$sec->beforeController($this, __METHOD__);
-		$this->addToAssertionCount(1);
+		$sec->beforeController($this->controller, $method);
 	}
 
-	/**
-	 * @NoCSRFRequired
-	 */
-	public function testFailIsAdminCheck() {
-		$this->securityCheck(__FUNCTION__, 'isAdminUser', true);
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoCSRFRequired')]
+	public function testFailIsAdminCheck(string $method): void {
+		$this->securityCheck($method, 'isAdminUser', true);
 	}
 
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoAdminRequiredNoCSRFRequiredPublicPage')]
+	public function testRestrictedAppLoggedInPublicPage(string $method): void {
+		$middleware = $this->getMiddleware(true, false, false);
+		$this->reader->reflect($this->controller, $method);
 
-	public function testAfterExceptionNotCaughtThrowsItAgain() {
+		$this->appManager->method('getAppPath')
+			->with('files')
+			->willReturn('foo');
+
+		$this->appManager->method('isEnabledForUser')
+			->with('files')
+			->willReturn(false);
+
+		$middleware->beforeController($this->controller, $method);
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoAdminRequiredNoCSRFRequiredPublicPage')]
+	public function testRestrictedAppNotLoggedInPublicPage(string $method): void {
+		$middleware = $this->getMiddleware(false, false, false);
+		$this->reader->reflect($this->controller, $method);
+
+		$this->appManager->method('getAppPath')
+			->with('files')
+			->willReturn('foo');
+
+		$this->appManager->method('isEnabledForUser')
+			->with('files')
+			->willReturn(false);
+
+		$middleware->beforeController($this->controller, $method);
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataNoAdminRequiredNoCSRFRequired')]
+	public function testRestrictedAppLoggedIn(string $method): void {
+		$middleware = $this->getMiddleware(true, false, false, false);
+		$this->reader->reflect($this->controller, $method);
+
+		$this->appManager->method('getAppPath')
+			->with('files')
+			->willReturn('foo');
+
+		$this->expectException(AppNotEnabledException::class);
+		$middleware->beforeController($this->controller, $method);
+	}
+
+	public function testAfterExceptionNotCaughtThrowsItAgain(): void {
 		$ex = new \Exception();
 		$this->expectException(\Exception::class);
 		$this->middleware->afterException($this->controller, 'test', $ex);
 	}
 
-	public function testAfterExceptionReturnsRedirectForNotLoggedInUser() {
+	public function testAfterExceptionReturnsRedirectForNotLoggedInUser(): void {
 		$this->request = new Request(
 			[
-				'server' =>
-					[
+				'server'
+					=> [
 						'HTTP_ACCEPT' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 						'REQUEST_URI' => 'nextcloud/index.php/apps/specialapp'
 					]
 			],
-			$this->createMock(ISecureRandom::class),
+			$this->createMock(IRequestId::class),
 			$this->createMock(IConfig::class)
 		);
 		$this->middleware = $this->getMiddleware(false, false, false);
@@ -523,10 +570,10 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 			new NotLoggedInException()
 		);
 		$expected = new RedirectResponse('http://localhost/nextcloud/index.php/login?redirect_url=nextcloud/index.php/apps/specialapp');
-		$this->assertEquals($expected , $response);
+		$this->assertEquals($expected, $response);
 	}
 
-	public function testAfterExceptionRedirectsToWebRootAfterStrictCookieFail() {
+	public function testAfterExceptionRedirectsToWebRootAfterStrictCookieFail(): void {
 		$this->request = new Request(
 			[
 				'server' => [
@@ -534,7 +581,7 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 					'REQUEST_URI' => 'nextcloud/index.php/apps/specialapp',
 				],
 			],
-			$this->createMock(ISecureRandom::class),
+			$this->createMock(IRequestId::class),
 			$this->createMock(IConfig::class)
 		);
 
@@ -546,14 +593,13 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 		);
 
 		$expected = new RedirectResponse(\OC::$WEBROOT . '/');
-		$this->assertEquals($expected , $response);
+		$this->assertEquals($expected, $response);
 	}
-
 
 	/**
 	 * @return array
 	 */
-	public function exceptionProvider() {
+	public static function exceptionProvider(): array {
 		return [
 			[
 				new AppNotEnabledException(),
@@ -568,19 +614,19 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 	}
 
 	/**
-	 * @dataProvider exceptionProvider
 	 * @param SecurityException $exception
 	 */
-	public function testAfterExceptionReturnsTemplateResponse(SecurityException $exception) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('exceptionProvider')]
+	public function testAfterExceptionReturnsTemplateResponse(SecurityException $exception): void {
 		$this->request = new Request(
 			[
-				'server' =>
-					[
+				'server'
+					=> [
 						'HTTP_ACCEPT' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 						'REQUEST_URI' => 'nextcloud/index.php/apps/specialapp'
 					]
 			],
-			$this->createMock(ISecureRandom::class),
+			$this->createMock(IRequestId::class),
 			$this->createMock(IConfig::class)
 		);
 		$this->middleware = $this->getMiddleware(false, false, false);
@@ -594,84 +640,45 @@ class SecurityMiddlewareTest extends \Test\TestCase {
 		);
 		$expected = new TemplateResponse('core', '403', ['message' => $exception->getMessage()], 'guest');
 		$expected->setStatus($exception->getCode());
-		$this->assertEquals($expected , $response);
+		$this->assertEquals($expected, $response);
 	}
 
-	public function testAfterAjaxExceptionReturnsJSONError() {
+	public function testAfterAjaxExceptionReturnsJSONError(): void {
 		$response = $this->middleware->afterException($this->controller, 'test',
 			$this->secAjaxException);
 
 		$this->assertTrue($response instanceof JSONResponse);
 	}
 
-	public function dataRestrictedApp() {
-		return [
-			[false, false, false,],
-			[false, false,  true,],
-			[false,  true, false,],
-			[false,  true,  true,],
-			[ true, false, false,],
-			[ true, false,  true,],
-			[ true,  true, false,],
-			[ true,  true,  true,],
-		];
-	}
-
-	/**
-	 * @PublicPage
-	 * @NoAdminRequired
-	 * @NoCSRFRequired
-	 */
-	public function testRestrictedAppLoggedInPublicPage() {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataExAppRequired')]
+	public function testExAppRequired(string $method): void {
 		$middleware = $this->getMiddleware(true, false, false);
-		$this->reader->reflect(__CLASS__,__FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
 
-		$this->appManager->method('getAppPath')
-			->with('files')
-			->willReturn('foo');
+		$session = $this->createMock(ISession::class);
+		$session->method('get')->with('app_api')->willReturn(true);
+		$this->userSession->method('getSession')->willReturn($session);
 
-		$this->appManager->method('isEnabledForUser')
-			->with('files')
-			->willReturn(false);
+		$this->request->expects($this->once())
+			->method('passesStrictCookieCheck')
+			->willReturn(true);
+		$this->request->expects($this->once())
+			->method('passesCSRFCheck')
+			->willReturn(true);
 
-		$middleware->beforeController($this->controller, __FUNCTION__);
-		$this->addToAssertionCount(1);
+		$middleware->beforeController($this->controller, $method);
 	}
 
-	/**
-	 * @PublicPage
-	 * @NoAdminRequired
-	 * @NoCSRFRequired
-	 */
-	public function testRestrictedAppNotLoggedInPublicPage() {
-		$middleware = $this->getMiddleware(false, false, false);
-		$this->reader->reflect(__CLASS__,__FUNCTION__);
-
-		$this->appManager->method('getAppPath')
-			->with('files')
-			->willReturn('foo');
-
-		$this->appManager->method('isEnabledForUser')
-			->with('files')
-			->willReturn(false);
-
-		$middleware->beforeController($this->controller, __FUNCTION__);
-		$this->addToAssertionCount(1);
-	}
-
-	/**
-	 * @NoAdminRequired
-	 * @NoCSRFRequired
-	 */
-	public function testRestrictedAppLoggedIn() {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataExAppRequired')]
+	public function testExAppRequiredError(string $method): void {
 		$middleware = $this->getMiddleware(true, false, false, false);
-		$this->reader->reflect(__CLASS__,__FUNCTION__);
+		$this->reader->reflect($this->controller, $method);
 
-		$this->appManager->method('getAppPath')
-			->with('files')
-			->willReturn('foo');
+		$session = $this->createMock(ISession::class);
+		$session->method('get')->with('app_api')->willReturn(false);
+		$this->userSession->method('getSession')->willReturn($session);
 
-		$this->expectException(AppNotEnabledException::class);
-		$middleware->beforeController($this->controller, __FUNCTION__);
+		$this->expectException(ExAppRequiredException::class);
+		$middleware->beforeController($this->controller, $method);
 	}
 }

@@ -1,196 +1,269 @@
+<!--
+  - SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 <template>
-	<div v-click-outside="hideDelete" class="check" @click="showDelete">
-		<Multiselect ref="checkSelector"
-			v-model="currentOption"
+	<div ref="checkElement" :class="$style.check" @click="showDelete">
+		<NcSelect
+			ref="checkSelector"
+			:aria-label-combobox="t('workflowengine', 'Filter')"
+			:class="$style.filter"
+			:clearable="false"
+			:modelValue="currentOption"
 			:options="options"
-			label="name"
-			track-by="class"
-			:allow-empty="false"
 			:placeholder="t('workflowengine', 'Select a filter')"
-			@input="updateCheck" />
-		<Multiselect v-model="currentOperator"
-			:disabled="!currentOption"
-			:options="operators"
-			class="comparator"
 			label="name"
-			track-by="operator"
-			:allow-empty="false"
-			:placeholder="t('workflowengine', 'Select a comparator')"
-			@input="updateCheck" />
-		<component :is="currentOption.component"
-			v-if="currentOperator && currentComponent"
-			v-model="check.value"
+			@update:modelValue="onFilterChange" />
+		<NcSelect
+			:aria-label-combobox="t('workflowengine', 'Comparator')"
+			:class="$style.comparator"
+			:clearable="false"
 			:disabled="!currentOption"
-			:check="check"
-			class="option"
-			@input="updateCheck"
-			@valid="(valid=true) && validate()"
-			@invalid="!(valid=false) && validate()" />
-		<input v-else
-			v-model="check.value"
-			type="text"
-			:class="{ invalid: !valid }"
+			:modelValue="currentOperator"
+			:options="operators"
+			:placeholder="t('workflowengine', 'Select a comparator')"
+			label="name"
+			@update:modelValue="onComparatorChange" />
+		<!-- A custom element takes hyphenated attributes. `disabled` has to fall
+			away entirely when it does not apply: on a dashed tag Vue writes the
+			literal string "false", which the element would read as truthy. -->
+		<!-- eslint-disable vue/attribute-hyphenation -->
+		<component
+			:is="currentElement"
+			v-if="currentElement"
+			ref="valueElement"
+			:class="$style.option"
+			:disabled="!currentOption || undefined"
+			:model-value="check.value"
+			:operator="check.operator" />
+		<!-- eslint-enable vue/attribute-hyphenation -->
+		<input
+			v-else
+			:class="[$style.option, { [$style.invalid]: !valid }]"
 			:disabled="!currentOption"
 			:placeholder="valuePlaceholder"
-			class="option"
-			@input="updateCheck">
-		<Actions v-if="deleteVisible || !currentOption">
-			<ActionButton icon="icon-close" @click="$emit('remove')" />
-		</Actions>
+			:value="check.value"
+			type="text"
+			@input="onValueInput">
+		<NcActions v-if="deleteVisible || !currentOption">
+			<NcActionButton :title="t('workflowengine', 'Remove filter')" @click="emit('remove')">
+				<template #icon>
+					<NcIconSvgWrapper :path="mdiClose" :size="20" />
+				</template>
+			</NcActionButton>
+		</NcActions>
 	</div>
 </template>
 
-<script>
-import Multiselect from '@nextcloud/vue/dist/Components/Multiselect'
-import Actions from '@nextcloud/vue/dist/Components/Actions'
-import ActionButton from '@nextcloud/vue/dist/Components/ActionButton'
-import ClickOutside from 'vue-click-outside'
+<script setup lang="ts">
+/* eslint vue/multi-word-component-names: "warn" */
 
-export default {
-	name: 'Check',
-	components: {
-		ActionButton,
-		Actions,
-		Multiselect,
-	},
-	directives: {
-		ClickOutside,
-	},
-	props: {
-		check: {
-			type: Object,
-			required: true,
-		},
-		rule: {
-			type: Object,
-			required: true,
-		},
-	},
-	data() {
-		return {
-			deleteVisible: false,
-			currentOption: null,
-			currentOperator: null,
-			options: [],
-			valid: false,
-		}
-	},
-	computed: {
-		checks() {
-			return this.$store.getters.getChecksForEntity(this.rule.entity)
-		},
-		operators() {
-			if (!this.currentOption) { return [] }
-			const operators = this.checks[this.currentOption.class].operators
-			if (typeof operators === 'function') {
-				return operators(this.check)
-			}
-			return operators
-		},
-		currentComponent() {
-			if (!this.currentOption) { return [] }
-			return this.checks[this.currentOption.class].component
-		},
-		valuePlaceholder() {
-			if (this.currentOption && this.currentOption.placeholder) {
-				return this.currentOption.placeholder(this.check)
-			}
-			return ''
-		},
-	},
-	watch: {
-		'check.operator'() {
-			this.validate()
-		},
-	},
-	mounted() {
-		this.options = Object.values(this.checks)
-		this.currentOption = this.checks[this.check.class]
-		this.currentOperator = this.operators.find((operator) => operator.operator === this.check.operator)
+import type { CheckPlugin, Check as CheckType, Comparison, Rule } from '../types.ts'
 
-		if (this.check.class === null) {
-			this.$nextTick(() => this.$refs.checkSelector.$el.focus())
-		}
-		this.validate()
-	},
-	methods: {
-		showDelete() {
-			this.deleteVisible = true
-		},
-		hideDelete() {
-			this.deleteVisible = false
-		},
-		validate() {
-			this.valid = true
-			if (this.currentOption && this.currentOption.validate) {
-				this.valid = !!this.currentOption.validate(this.check)
-			}
-			// eslint-disable-next-line vue/no-mutating-props
-			this.check.invalid = !this.valid
-			this.$emit('validate', this.valid)
-		},
-		updateCheck() {
-			const matchingOperator = this.operators.findIndex((operator) => this.check.operator === operator.operator)
-			if (this.check.class !== this.currentOption.class || matchingOperator === -1) {
-				this.currentOperator = this.operators[0]
-			}
-			// eslint-disable-next-line vue/no-mutating-props
-			this.check.class = this.currentOption.class
-			// eslint-disable-next-line vue/no-mutating-props
-			this.check.operator = this.currentOperator.operator
+import { mdiClose } from '@mdi/js'
+import { t } from '@nextcloud/l10n'
+import { onClickOutside } from '@vueuse/core'
+import { computed, onMounted, ref, useTemplateRef, watch } from 'vue'
+import NcActionButton from '@nextcloud/vue/components/NcActionButton'
+import NcActions from '@nextcloud/vue/components/NcActions'
+import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
+import NcSelect from '@nextcloud/vue/components/NcSelect'
+import { useCustomElementEvents } from '../composables/useCustomElementEvents.ts'
+import { logger } from '../logger.ts'
+import { useWorkflowStore } from '../store.ts'
 
-			this.validate()
+const props = defineProps<{
+	check: CheckType
+	rule: Rule
+}>()
 
-			this.$emit('update', this.check)
-		},
-	},
+const emit = defineEmits<{
+	update: [check: CheckType]
+	validate: [valid: boolean]
+	remove: []
+}>()
+
+const store = useWorkflowStore()
+
+const checkElement = useTemplateRef<HTMLDivElement>('checkElement')
+const valueElement = useTemplateRef<Element>('valueElement')
+const checkSelector = useTemplateRef<{ focus?: () => void }>('checkSelector')
+
+const deleteVisible = ref(false)
+const valid = ref(false)
+/** Undefined until a custom element reports on its own value. */
+const elementValid = ref<boolean | undefined>(undefined)
+
+const checks = computed(() => store.checksForEntity(props.rule.entity))
+const options = computed(() => Object.values(checks.value))
+
+/**
+ * Both selections are derived from the check itself, so a row always shows what
+ * it actually holds — including after a neighbouring row was removed and this
+ * component was reused for a different check.
+ */
+const currentOption = computed<CheckPlugin | null>(() => (props.check.class === null ? null : checks.value[props.check.class] ?? null))
+
+const operators = computed<Comparison[]>(() => {
+	if (!currentOption.value) {
+		return []
+	}
+	const { operators } = currentOption.value
+	return typeof operators === 'function' ? operators(props.check) : operators
+})
+
+const currentOperator = computed<Comparison | null>(() => operators.value.find((operator) => operator.operator === props.check.operator) ?? null)
+
+const currentElement = computed(() => {
+	if (props.check.class === null) {
+		return undefined
+	}
+	return checks.value[props.check.class]?.element
+})
+
+const valuePlaceholder = computed(() => currentOption.value?.placeholder?.(props.check) ?? '')
+
+function showDelete(): void {
+	deleteVisible.value = true
 }
+
+onClickOutside(checkElement, () => {
+	deleteVisible.value = false
+})
+
+/**
+ * A check is valid unless the plugin says otherwise. Only when the plugin
+ * brings no validator does the verdict of its custom element count, so a
+ * plugin validator always wins.
+ */
+function validate(): void {
+	if (currentOption.value?.validate) {
+		valid.value = Boolean(currentOption.value.validate(props.check))
+	} else {
+		valid.value = elementValid.value ?? true
+	}
+	store.updateCheck(props.check, { invalid: !valid.value })
+	emit('validate', valid.value)
+}
+
+/**
+ * @param patch - The fields of the check to change
+ */
+function update(patch: Partial<CheckType>): void {
+	store.updateCheck(props.check, patch)
+	validate()
+	emit('update', props.check)
+}
+
+/**
+ * @param option - The filter that was picked
+ */
+function onFilterChange(option: CheckPlugin | null): void {
+	if (option === null) {
+		return
+	}
+	if (!option.element && !option.validate && (option as { component?: unknown }).component) {
+		logger.error(`Check plugin "${option.class}" only provides the removed "component" option. `
+			+ 'Provide a custom element through "element" instead.')
+	}
+
+	const available = typeof option.operators === 'function' ? option.operators(props.check) : option.operators
+	// the comparison of the previous filter may not exist for the new one
+	const operator = available.some((item) => item.operator === props.check.operator)
+		? props.check.operator
+		: available[0]?.operator ?? null
+
+	if (option.class !== props.check.class) {
+		elementValid.value = undefined
+	}
+	update({ class: option.class, operator })
+}
+
+/**
+ * @param comparison - The comparison that was picked
+ */
+function onComparatorChange(comparison: Comparison | null): void {
+	if (comparison !== null) {
+		update({ operator: comparison.operator })
+	}
+}
+
+/**
+ * @param event - The change a custom element reported
+ */
+function onElementValue(event: CustomEvent<unknown[]>): void {
+	update({ value: event.detail[0] as string })
+}
+
+/**
+ * @param reported - What the custom element reported about its own value
+ */
+function onElementValidity(reported: boolean): void {
+	elementValid.value = reported
+	validate()
+}
+
+/**
+ * @param event - The input event of the plain value field
+ */
+function onValueInput(event: Event): void {
+	update({ value: (event.target as HTMLInputElement).value })
+}
+
+useCustomElementEvents(valueElement, {
+	'update:model-value': onElementValue,
+	valid: () => onElementValidity(true),
+	invalid: () => onElementValidity(false),
+})
+
+watch(() => props.check.operator, validate)
+
+onMounted(() => {
+	if (props.check.class === null) {
+		checkSelector.value?.focus?.()
+	}
+	validate()
+})
 </script>
 
-<style scoped lang="scss">
-	.check {
-		display: flex;
-		flex-wrap: wrap;
-		width: 100%;
-		padding-right: 20px;
-		& > *:not(.close) {
-			width: 180px;
-		}
-		& > .comparator {
-			min-width: 130px;
-			width: 130px;
-		}
-		& > .option {
-			min-width: 230px;
-			width: 230px;
-		}
-		& > .multiselect,
-		& > input[type=text] {
-			margin-right: 5px;
-			margin-bottom: 5px;
-		}
+<style module lang="scss">
+.check {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start; // to not stretch components vertically
+	width: 100%;
+	padding-inline-end: 20px;
 
-		.multiselect::v-deep .multiselect__content-wrapper li>span,
-		.multiselect::v-deep .multiselect__single {
-			display: block;
-			white-space: nowrap;
-			overflow: hidden;
-			text-overflow: ellipsis;
-		}
+	& > * {
+		margin-inline-end: 5px;
+		margin-bottom: 5px;
 	}
-	input[type=text] {
-		margin: 0;
+}
+
+.filter {
+	width: 180px;
+}
+
+.comparator {
+	min-width: 200px;
+	width: 200px;
+}
+
+.option {
+	min-width: 260px;
+	width: 260px;
+	min-height: 48px;
+
+	input[type='text'] {
+		min-height: 48px;
 	}
-	::placeholder {
-		font-size: 10px;
-	}
-	button.action-item.action-item--single.icon-close {
-		height: 44px;
-		width: 44px;
-		margin-top: -5px;
-		margin-bottom: -5px;
-	}
-	.invalid {
-		border: 1px solid var(--color-error) !important;
-	}
+}
+
+input.option {
+	margin-top: 0;
+}
+
+.invalid {
+	border-color: var(--color-border-error) !important;
+}
 </style>

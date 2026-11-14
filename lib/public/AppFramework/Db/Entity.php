@@ -1,53 +1,39 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bernhard Posselt <dev@bernhard-posselt.com>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCP\AppFramework\Db;
 
+use OCP\DB\Schema\ColumnType;
+use OCP\DB\Types;
 use function lcfirst;
 use function substr;
 
 /**
- * @method integer getId()
- * @method void setId(integer $id)
+ * @method int getId()
+ * @method void setId(int $id)
  * @since 7.0.0
+ * @psalm-consistent-constructor
  */
 abstract class Entity {
+	/** @var int $id */
 	public $id;
-
-	private $_updatedFields = [];
-	private $_fieldTypes = ['id' => 'integer'];
-
+	/** @var array<string, true> $_updatedFields */
+	private array $_updatedFields = [];
+	/** @var array<string, ColumnType> $_fieldTypes */
+	protected array $_fieldTypes = ['id' => ColumnType::Integer];
 
 	/**
 	 * Simple alternative constructor for building entities from a request
 	 * @param array $params the array which was obtained via $this->params('key')
-	 * in the controller
-	 * @return Entity
+	 *                      in the controller
 	 * @since 7.0.0
 	 */
-	public static function fromParams(array $params) {
+	public static function fromParams(array $params): static {
 		$instance = new static();
 
 		foreach ($params as $key => $value) {
@@ -58,19 +44,17 @@ abstract class Entity {
 		return $instance;
 	}
 
-
 	/**
 	 * Maps the keys of the row array to the attributes
 	 * @param array $row the row to map onto the entity
 	 * @since 7.0.0
 	 */
-	public static function fromRow(array $row) {
+	public static function fromRow(array $row): static {
 		$instance = new static();
 
 		foreach ($row as $key => $value) {
-			$prop = ucfirst($instance->columnToProperty($key));
-			$setter = 'set' . $prop;
-			$instance->$setter($value);
+			$prop = $instance->columnToProperty($key);
+			$instance->setter($prop, [$value]);
 		}
 
 		$instance->resetUpdatedFields();
@@ -78,73 +62,101 @@ abstract class Entity {
 		return $instance;
 	}
 
-
 	/**
-	 * @return array with attribute and type
+	 * @return array<string, 'bigint'|'binary'|'blob'|'boolean'|'date'|'date_immutable'|'datetime'|'datetime_immutable'|'datetimetz'|'datetimetz_immutable'|'decimal'|'float'|'guid'|'integer'|'json'|'smallint'|'string'|'text'|'time'|'time_immutable'|'timestamp_immutable'|'tinyint'> with attribute and type
 	 * @since 7.0.0
 	 */
-	public function getFieldTypes() {
-		return $this->_fieldTypes;
+	public function getFieldTypes(): array {
+		return array_map(fn (ColumnType $type) => $type->value, $this->_fieldTypes);
 	}
-
 
 	/**
 	 * Marks the entity as clean needed for setting the id after the insertion
 	 * @since 7.0.0
 	 */
-	public function resetUpdatedFields() {
+	public function resetUpdatedFields(): void {
 		$this->_updatedFields = [];
 	}
 
 	/**
 	 * Generic setter for properties
+	 *
+	 * @throws \InvalidArgumentException
 	 * @since 7.0.0
+	 *
 	 */
-	protected function setter($name, $args) {
+	protected function setter(string $name, array $args): void {
 		// setters should only work for existing attributes
-		if (property_exists($this, $name)) {
-			if ($this->$name === $args[0]) {
-				return;
-			}
-			$this->markFieldUpdated($name);
+		if (!property_exists($this, $name)) {
+			throw new \BadFunctionCallException($name . ' is not a valid attribute');
+		}
 
-			// if type definition exists, cast to correct type
-			if ($args[0] !== null && array_key_exists($name, $this->_fieldTypes)) {
-				$type = $this->_fieldTypes[$name];
-				if ($type === 'blob') {
-					// (B)LOB is treated as string when we read from the DB
-					$type = 'string';
+		if ($args[0] === $this->$name) {
+			return;
+		}
+		$this->markFieldUpdated($name);
+
+		// if type definition exists, cast to correct type
+		if ($args[0] !== null && array_key_exists($name, $this->_fieldTypes)) {
+			$type = $this->_fieldTypes[$name];
+			if ($type === ColumnType::Blob) {
+				// (B)LOB is treated as string when we read from the DB
+				if (is_resource($args[0])) {
+					$args[0] = stream_get_contents($args[0]);
 				}
+				$type = ColumnType::String;
+			}
 
-				if ($type === 'datetime') {
+			switch ($type) {
+				case ColumnType::Bigint:
+				case ColumnType::Smallint:
+					settype($args[0], Types::INTEGER);
+					break;
+				case ColumnType::Binary:
+				case ColumnType::Decimal:
+				case ColumnType::Text:
+					settype($args[0], Types::STRING);
+					break;
+				case ColumnType::Time:
+				case ColumnType::Date:
+				case ColumnType::Datetime:
+				case ColumnType::DatetimeTz:
 					if (!$args[0] instanceof \DateTime) {
 						$args[0] = new \DateTime($args[0]);
 					}
-				} else {
-					settype($args[0], $type);
-				}
+					break;
+				case ColumnType::TimeImmutable:
+				case ColumnType::DateImmutable:
+				case ColumnType::DatetimeImmutable:
+				case ColumnType::DatetimeTzImmutable:
+					if (!$args[0] instanceof \DateTimeImmutable) {
+						$args[0] = new \DateTimeImmutable($args[0]);
+					}
+					break;
+				case ColumnType::Json:
+					if (!is_array($args[0])) {
+						$args[0] = json_decode($args[0], true);
+					}
+					break;
+				default:
+					settype($args[0], $type->value);
 			}
-			$this->$name = $args[0];
-		} else {
-			throw new \BadFunctionCallException($name .
-				' is not a valid attribute');
 		}
+		$this->$name = $args[0];
 	}
 
 	/**
 	 * Generic getter for properties
 	 * @since 7.0.0
 	 */
-	protected function getter($name) {
+	protected function getter(string $name): mixed {
 		// getters should only work for existing attributes
 		if (property_exists($this, $name)) {
 			return $this->$name;
 		} else {
-			throw new \BadFunctionCallException($name .
-				' is not a valid attribute');
+			throw new \BadFunctionCallException($name . ' is not a valid attribute');
 		}
 	}
-
 
 	/**
 	 * Each time a setter is called, push the part after set
@@ -153,16 +165,15 @@ abstract class Entity {
 	 * getter method
 	 * @since 7.0.0
 	 */
-	public function __call($methodName, $args) {
-		if (strpos($methodName, 'set') === 0) {
+	public function __call(string $methodName, array $args) {
+		if (str_starts_with($methodName, 'set')) {
 			$this->setter(lcfirst(substr($methodName, 3)), $args);
-		} elseif (strpos($methodName, 'get') === 0) {
+		} elseif (str_starts_with($methodName, 'get')) {
 			return $this->getter(lcfirst(substr($methodName, 3)));
 		} elseif ($this->isGetterForBoolProperty($methodName)) {
 			return $this->getter(lcfirst(substr($methodName, 2)));
 		} else {
-			throw new \BadFunctionCallException($methodName .
-				' does not exist');
+			throw new \BadFunctionCallException($methodName . ' does not exist');
 		}
 	}
 
@@ -172,9 +183,9 @@ abstract class Entity {
 	 * @since 18.0.0
 	 */
 	protected function isGetterForBoolProperty(string $methodName): bool {
-		if (strpos($methodName, 'is') === 0) {
+		if (str_starts_with($methodName, 'is')) {
 			$fieldName = lcfirst(substr($methodName, 2));
-			return isset($this->_fieldTypes[$fieldName]) && strpos($this->_fieldTypes[$fieldName], 'bool') === 0;
+			return isset($this->_fieldTypes[$fieldName]) && str_starts_with($this->_fieldTypes[$fieldName]->value, 'bool');
 		}
 		return false;
 	}
@@ -184,23 +195,23 @@ abstract class Entity {
 	 * @param string $attribute the name of the attribute
 	 * @since 7.0.0
 	 */
-	protected function markFieldUpdated($attribute) {
+	protected function markFieldUpdated(string $attribute): void {
 		$this->_updatedFields[$attribute] = true;
 	}
 
-
 	/**
 	 * Transform a database columnname to a property
+	 *
 	 * @param string $columnName the name of the column
 	 * @return string the property name
 	 * @since 7.0.0
 	 */
-	public function columnToProperty($columnName) {
+	public function columnToProperty(string $columnName) {
 		$parts = explode('_', $columnName);
-		$property = null;
+		$property = '';
 
 		foreach ($parts as $part) {
-			if ($property === null) {
+			if ($property === '') {
 				$property = $part;
 			} else {
 				$property .= ucfirst($part);
@@ -210,19 +221,19 @@ abstract class Entity {
 		return $property;
 	}
 
-
 	/**
 	 * Transform a property to a database column name
+	 *
 	 * @param string $property the name of the property
 	 * @return string the column name
 	 * @since 7.0.0
 	 */
-	public function propertyToColumn($property) {
+	public function propertyToColumn(string $property): string {
 		$parts = preg_split('/(?=[A-Z])/', $property);
-		$column = null;
 
+		$column = '';
 		foreach ($parts as $part) {
-			if ($column === null) {
+			if ($column === '') {
 				$column = $part;
 			} else {
 				$column .= '_' . lcfirst($part);
@@ -232,36 +243,53 @@ abstract class Entity {
 		return $column;
 	}
 
-
 	/**
-	 * @return array array of updated fields for update query
+	 * @return array<string, true> array of updated fields for update query
 	 * @since 7.0.0
 	 */
-	public function getUpdatedFields() {
+	public function getUpdatedFields(): array {
 		return $this->_updatedFields;
 	}
 
-
 	/**
-	 * Adds type information for a field so that its automatically casted to
+	 * Adds type information for a field so that it's automatically cast to
 	 * that value once its being returned from the database
+	 *
 	 * @param string $fieldName the name of the attribute
-	 * @param string $type the type which will be used to call settype()
+	 * @param Types::*|ColumnType $type the type which will be used to match a cast
+	 * @since 31.0.0 Parameter $type is now restricted to {@see Types} constants. The formerly accidentally supported types 'int'|'bool'|'double' are mapped to Types::INTEGER|Types::BOOLEAN|Types::FLOAT accordingly.
+	 * @since 35.0.0 Parameter $type now prefers using one of the {@see ColumnType} enum values.
 	 * @since 7.0.0
 	 */
-	protected function addType($fieldName, $type) {
+	protected function addType(string $fieldName, string|ColumnType $type): void {
+		/** @psalm-suppress TypeDoesNotContainType */
+		if (in_array($type, ['bool', 'double', 'int', 'array', 'object'], true)) {
+			// Mapping legacy strings to the actual types
+			$type = match ($type) {
+				'int' => ColumnType::Integer,
+				'bool' => ColumnType::Boolean,
+				'double' => ColumnType::Float,
+				'array', 'object' => ColumnType::String,
+			};
+		}
+
+		if (is_string($type)) {
+			$type = ColumnType::from($type);
+		}
+
 		$this->_fieldTypes[$fieldName] = $type;
 	}
-
 
 	/**
 	 * Slugify the value of a given attribute
 	 * Warning: This doesn't result in a unique value
+	 *
 	 * @param string $attributeName the name of the attribute, which value should be slugified
 	 * @return string slugified value
 	 * @since 7.0.0
+	 * @deprecated 24.0.0
 	 */
-	public function slugify($attributeName) {
+	public function slugify(string $attributeName): string {
 		// toSlug should only work for existing attributes
 		if (property_exists($this, $attributeName)) {
 			$value = $this->$attributeName;
@@ -270,9 +298,8 @@ abstract class Entity {
 			$value = strtolower($value);
 			// trim '-'
 			return trim($value, '-');
-		} else {
-			throw new \BadFunctionCallException($attributeName .
-				' is not a valid attribute');
 		}
+
+		throw new \BadFunctionCallException($attributeName . ' is not a valid attribute');
 	}
 }

@@ -1,10 +1,11 @@
 { "translations": {
+    "Files" : "Fail",
     "__language_name__" : "Bahasa Melayu",
-    "Help" : "Bantuan",
-    "Apps" : "Aplikasi",
-    "Settings" : "Tetapan",
-    "Log out" : "Log keluar",
-    "Users" : "Pengguna",
+    "Email" : "Email",
+    "Phone" : "Telefon",
+    "Address" : "Alamat",
+    "Profile picture" : "Gambar profil",
+    "About" : "Mengenai",
     "Sunday" : "Ahad",
     "Monday" : "Isnin",
     "Tuesday" : "Selasa",
@@ -43,6 +44,10 @@
     "Oct." : "Okt.",
     "Nov." : "Nov.",
     "Dec." : "Dis.",
+    "Apps" : "Aplikasi",
+    "Settings" : "Tetapan",
+    "Log out" : "Log keluar",
+    "Accounts" : "Accounts",
     "Authentication error" : "Ralat pengesahan"
 },"pluralForm" :"nplurals=1; plural=0;"
 }

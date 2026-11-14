@@ -1,169 +1,198 @@
+<!--
+  - SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 <template>
-	<div id="workflowengine">
-		<div class="section">
-			<h2>{{ t('workflowengine', 'Available flows') }}</h2>
-
-			<p v-if="scope === 0" class="settings-hint">
+	<div :class="$style.workflowengine">
+		<NcSettingsSection
+			:docUrl="workflowDocUrl"
+			:name="t('workflowengine', 'Available flows')">
+			<p v-if="isAdminScope" class="settings-hint">
 				<a href="https://nextcloud.com/developer/">{{ t('workflowengine', 'For details on how to write your own flow, check out the development documentation.') }}</a>
 			</p>
 
-			<transition-group name="slide" tag="div" class="actions">
-				<Operation v-for="operation in getMainOperations"
+			<NcEmptyContent
+				v-if="!isUserAdmin && mainOperations.length === 0"
+				:description="t('workflowengine', 'Ask your administrator to install new flows.')"
+				:name="t('workflowengine', 'No flows installed')">
+				<template #icon>
+					<NcIconSvgWrapper :svg="WorkflowOffSvg" :size="20" />
+				</template>
+			</NcEmptyContent>
+			<TransitionGroup
+				v-else
+				v-bind="slideTransition"
+				:class="$style.actions"
+				tag="div">
+				<Operation
+					v-for="operation in mainOperations"
 					:key="operation.id"
+					:class="$style.card"
 					:operation="operation"
-					@click.native="createNewRule(operation)" />
-
-				<a v-if="showAppStoreHint"
-					:key="'add'"
-					:href="appstoreUrl"
-					class="actions__item colored more">
-					<div class="icon icon-add" />
-					<div class="actions__item__description">
+					colored
+					@click="createNewRule(operation)" />
+				<a
+					v-if="showAppStoreHint"
+					key="add"
+					:class="[$style.card, $style.more]"
+					:href="appstoreUrl">
+					<NcIconSvgWrapper :class="$style.moreIcon" :path="mdiPlus" :size="50" />
+					<div>
 						<h3>{{ t('workflowengine', 'More flows') }}</h3>
 						<small>{{ t('workflowengine', 'Browse the App Store') }}</small>
 					</div>
 				</a>
-			</transition-group>
+			</TransitionGroup>
 
-			<div v-if="hasMoreOperations" class="actions__more">
-				<button class="icon"
-					:class="showMoreOperations ? 'icon-triangle-n' : 'icon-triangle-s'"
-					@click="showMoreOperations=!showMoreOperations">
+			<div v-if="hasMoreOperations" :class="$style.showMore">
+				<NcButton @click="showMoreOperations = !showMoreOperations">
+					<template #icon>
+						<NcIconSvgWrapper :path="showMoreOperations ? mdiMenuUp : mdiMenuDown" :size="20" />
+					</template>
 					{{ showMoreOperations ? t('workflowengine', 'Show less') : t('workflowengine', 'Show more') }}
-				</button>
+				</NcButton>
 			</div>
+		</NcSettingsSection>
 
-			<h2 v-if="scope === 0" class="configured-flows">
-				{{ t('workflowengine', 'Configured flows') }}
-			</h2>
-			<h2 v-else class="configured-flows">
-				{{ t('workflowengine', 'Your flows') }}
-			</h2>
-		</div>
-
-		<transition-group v-if="rules.length > 0" name="slide">
-			<Rule v-for="rule in rules" :key="rule.id" :rule="rule" />
-		</transition-group>
+		<NcSettingsSection
+			v-if="mainOperations.length > 0"
+			:name="isAdminScope ? t('workflowengine', 'Configured flows') : t('workflowengine', 'Your flows')"
+			:class="$style.operations">
+			<TransitionGroup v-if="rules.length > 0" v-bind="slideTransition">
+				<Rule v-for="rule in rules" :key="rule.id" :rule="rule" />
+			</TransitionGroup>
+			<NcEmptyContent v-else :name="t('workflowengine', 'No flows configured')">
+				<template #icon>
+					<NcIconSvgWrapper :svg="WorkflowOffSvg" :size="20" />
+				</template>
+			</NcEmptyContent>
+		</NcSettingsSection>
 	</div>
 </template>
 
-<script>
-import Rule from './Rule'
-import Operation from './Operation'
-import { mapGetters, mapState } from 'vuex'
+<script setup lang="ts">
+/* eslint vue/multi-word-component-names: "warn" */
+
+import type { OperatorPlugin } from '../types.ts'
+
+import { mdiMenuDown, mdiMenuUp, mdiPlus } from '@mdi/js'
+import { getCurrentUser } from '@nextcloud/auth'
+import { loadState } from '@nextcloud/initial-state'
+import { t } from '@nextcloud/l10n'
 import { generateUrl } from '@nextcloud/router'
+import { computed, onMounted, ref, useCssModule } from 'vue'
+import NcButton from '@nextcloud/vue/components/NcButton'
+import NcEmptyContent from '@nextcloud/vue/components/NcEmptyContent'
+import NcIconSvgWrapper from '@nextcloud/vue/components/NcIconSvgWrapper'
+import NcSettingsSection from '@nextcloud/vue/components/NcSettingsSection'
+import Operation from './Operation.vue'
+import Rule from './Rule.vue'
+import WorkflowOffSvg from '../../img/workflow-off.svg?raw'
+import { useWorkflowStore } from '../store.ts'
+import { Scope } from '../types.ts'
 
 const ACTION_LIMIT = 3
 
-export default {
-	name: 'Workflow',
-	components: {
-		Operation,
-		Rule,
-	},
-	data() {
-		return {
-			showMoreOperations: false,
-			appstoreUrl: generateUrl('settings/apps/workflow'),
-		}
-	},
-	computed: {
-		...mapGetters({
-			rules: 'getRules',
-		}),
-		...mapState({
-			appstoreEnabled: 'appstoreEnabled',
-			scope: 'scope',
-			operations: 'operations',
-		}),
-		hasMoreOperations() {
-			return Object.keys(this.operations).length > ACTION_LIMIT
-		},
-		getMainOperations() {
-			if (this.showMoreOperations) {
-				return Object.values(this.operations)
-			}
-			return Object.values(this.operations).slice(0, ACTION_LIMIT)
-		},
-		showAppStoreHint() {
-			return this.scope === 0 && this.appstoreEnabled && OC.isUserAdmin()
-		},
-	},
-	mounted() {
-		this.$store.dispatch('fetchRules')
-	},
-	methods: {
-		createNewRule(operation) {
-			this.$store.dispatch('createNewRule', operation)
-		},
-	},
+const store = useWorkflowStore()
+const style = useCssModule()
+
+const showMoreOperations = ref(false)
+const appstoreUrl = generateUrl('settings/apps/workflow')
+const workflowDocUrl = loadState<string>('workflowengine', 'doc-url')
+
+const isUserAdmin = Boolean(getCurrentUser()?.isAdmin)
+
+const rules = computed(() => store.configuredRules)
+const operations = computed(() => store.operations)
+
+const hasMoreOperations = computed(() => Object.keys(operations.value).length > ACTION_LIMIT)
+
+const mainOperations = computed(() => {
+	const all = Object.values(operations.value)
+	return showMoreOperations.value ? all : all.slice(0, ACTION_LIMIT)
+})
+
+const isAdminScope = computed(() => store.scope === Scope.ADMIN)
+const showAppStoreHint = computed(() => store.appstoreEnabled && isUserAdmin)
+
+// transition classes have to be passed explicitly, css modules rename them
+const slideTransition = {
+	enterActiveClass: style.slideEnterActive,
+	leaveActiveClass: style.slideLeaveActive,
+	enterFromClass: style.slideEnterFrom,
+	enterToClass: style.slideEnterTo,
+	leaveFromClass: style.slideLeaveFrom,
+	leaveToClass: style.slideLeaveTo,
 }
+
+/**
+ * @param operation - The operation to configure a new flow for
+ */
+function createNewRule(operation: OperatorPlugin): void {
+	store.createNewRule(operation)
+}
+
+onMounted(() => {
+	store.fetchRules()
+})
 </script>
 
-<style scoped lang="scss">
-	#workflowengine {
-		border-bottom: 1px solid var(--color-border);
-	}
-	.section {
-		max-width: 100vw;
+<style module lang="scss">
+@use "./../styles/operation.scss" as *;
 
-		h2.configured-flows {
-			margin-top: 50px;
-			margin-bottom: 0;
-		}
-	}
-	.actions {
-		display: flex;
-		flex-wrap: wrap;
-		max-width: 1200px;
-		.actions__item {
-			max-width: 280px;
-			flex-basis: 250px;
-		}
-	}
+.operations {
+	width: calc(100% - var(--default-grid-baseline) * 7 * 2) !important;
+}
 
-	button.icon {
-		padding-left: 32px;
-		background-position: 10px center;
-	}
+.workflowengine {
+	border-bottom: 1px solid var(--color-border);
+}
 
-	.slide-enter-active {
-		-moz-transition-duration: 0.3s;
-		-webkit-transition-duration: 0.3s;
-		-o-transition-duration: 0.3s;
-		transition-duration: 0.3s;
-		-moz-transition-timing-function: ease-in;
-		-webkit-transition-timing-function: ease-in;
-		-o-transition-timing-function: ease-in;
-		transition-timing-function: ease-in;
-	}
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	max-width: 1200px;
+}
 
-	.slide-leave-active {
-		-moz-transition-duration: 0.3s;
-		-webkit-transition-duration: 0.3s;
-		-o-transition-duration: 0.3s;
-		transition-duration: 0.3s;
-		-moz-transition-timing-function: cubic-bezier(0, 1, 0.5, 1);
-		-webkit-transition-timing-function: cubic-bezier(0, 1, 0.5, 1);
-		-o-transition-timing-function: cubic-bezier(0, 1, 0.5, 1);
-		transition-timing-function: cubic-bezier(0, 1, 0.5, 1);
-	}
+.card {
+	max-width: 280px;
+	flex-basis: 250px;
+}
 
-	.slide-enter-to, .slide-leave {
-		max-height: 500px;
-		overflow: hidden;
-	}
+.more {
+	background-color: var(--color-background-dark);
+	text-align: center;
+}
 
-	.slide-enter, .slide-leave-to {
-		overflow: hidden;
-		max-height: 0;
-		padding-top: 0;
-		padding-bottom: 0;
-	}
+.moreIcon {
+	margin-block: 10px;
+}
 
-	@import "./../styles/operation";
+.showMore {
+	margin-bottom: 10px;
+}
 
-	.actions__item.more {
-		background-color: var(--color-background-dark);
-	}
+.slideEnterActive {
+	transition-duration: 0.3s;
+	transition-timing-function: ease-in;
+}
+
+.slideLeaveActive {
+	transition-duration: 0.3s;
+	transition-timing-function: cubic-bezier(0, 1, 0.5, 1);
+}
+
+.slideEnterTo,
+.slideLeaveFrom {
+	max-height: 500px;
+	overflow: hidden;
+}
+
+.slideEnterFrom,
+.slideLeaveTo {
+	overflow: hidden;
+	max-height: 0;
+	padding-top: 0;
+	padding-bottom: 0;
+}
 </style>

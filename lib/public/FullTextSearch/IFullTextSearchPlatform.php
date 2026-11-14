@@ -1,28 +1,11 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright 2018
- *
- * @author Maxence Lange <maxence@artificial-owl.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\FullTextSearch;
 
 use OCP\FullTextSearch\Model\IDocumentAccess;
@@ -70,8 +53,6 @@ use OCP\FullTextSearch\Model\ISearchResult;
  *
  */
 interface IFullTextSearchPlatform {
-
-
 	/**
 	 * Must returns a unique Id used to identify the Search Platform.
 	 * Id must contains only alphanumeric chars, with no space.
@@ -81,7 +62,6 @@ interface IFullTextSearchPlatform {
 	 * @return string
 	 */
 	public function getId(): string;
-
 
 	/**
 	 * Must returns a descriptive name of the Search Platform.
@@ -94,7 +74,6 @@ interface IFullTextSearchPlatform {
 	 */
 	public function getName(): string;
 
-
 	/**
 	 * should returns the current configuration of the Search Platform.
 	 * This is used to display the configuration when using the
@@ -105,7 +84,6 @@ interface IFullTextSearchPlatform {
 	 * @return array
 	 */
 	public function getConfiguration(): array;
-
 
 	/**
 	 * Set the wrapper of the currently executed process.
@@ -123,14 +101,12 @@ interface IFullTextSearchPlatform {
 	 */
 	public function setRunner(IRunner $runner);
 
-
 	/**
 	 * Called when FullTextSearch is loading your Search Platform.
 	 *
 	 * @since 15.0.0
 	 */
 	public function loadPlatform();
-
 
 	/**
 	 * Called to check that your Search Platform is correctly configured and that
@@ -142,7 +118,6 @@ interface IFullTextSearchPlatform {
 	 */
 	public function testPlatform(): bool;
 
-
 	/**
 	 * Called before an index is initiated.
 	 * Best place to initiate some stuff on the Search Server (mapping, ...)
@@ -150,7 +125,6 @@ interface IFullTextSearchPlatform {
 	 * @since 15.0.0
 	 */
 	public function initializeIndex();
-
 
 	/**
 	 * Reset the indexes for a specific providerId.
@@ -162,7 +136,6 @@ interface IFullTextSearchPlatform {
 	 */
 	public function resetIndex(string $providerId);
 
-
 	/**
 	 * Deleting some IIndex, sent in an array
 	 *
@@ -173,7 +146,6 @@ interface IFullTextSearchPlatform {
 	 * @param IIndex[] $indexes
 	 */
 	public function deleteIndexes(array $indexes);
-
 
 	/**
 	 * Indexing a document.
@@ -188,7 +160,6 @@ interface IFullTextSearchPlatform {
 	 */
 	public function indexDocument(IIndexDocument $document): IIndex;
 
-
 	/**
 	 * Searching documents, ISearchResult should be updated with the result of
 	 * the search.
@@ -199,7 +170,6 @@ interface IFullTextSearchPlatform {
 	 * @param IDocumentAccess $access
 	 */
 	public function searchRequest(ISearchResult $result, IDocumentAccess $access);
-
 
 	/**
 	 * Return a document based on its Id and the Provider.

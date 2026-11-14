@@ -3,30 +3,15 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2018, ownCloud GmbH
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2018 ownCloud GmbH
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\Command;
 
 use OCA\DAV\Connector\Sabre\Principal;
+use OCA\DAV\DAV\RemoteUserPrincipalBackend;
 use OCP\IDBConnection;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -37,51 +22,48 @@ use Symfony\Component\Console\Output\OutputInterface;
  * have no matching principal. Happened because of a bug in the calendar app.
  */
 class RemoveInvalidShares extends Command {
-
-	/** @var IDBConnection */
-	private $connection;
-	/** @var Principal */
-	private $principalBackend;
-
-	public function __construct(IDBConnection $connection,
-								Principal $principalBackend) {
+	public function __construct(
+		private IDBConnection $connection,
+		private Principal $principalBackend,
+		private RemoteUserPrincipalBackend $remoteUserPrincipalBackend,
+	) {
 		parent::__construct();
-
-		$this->connection = $connection;
-		$this->principalBackend = $principalBackend;
 	}
 
-	protected function configure() {
+	#[\Override]
+	protected function configure(): void {
 		$this
 			->setName('dav:remove-invalid-shares')
 			->setDescription('Remove invalid dav shares');
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$query = $this->connection->getQueryBuilder();
 		$result = $query->selectDistinct('principaluri')
 			->from('dav_shares')
-			->execute();
+			->executeQuery();
 
-		while ($row = $result->fetch()) {
+		while ($row = $result->fetchAssociative()) {
 			$principaluri = $row['principaluri'];
-			$p = $this->principalBackend->getPrincipalByPath($principaluri);
+			$p = $this->principalBackend->getPrincipalByPath($principaluri)
+				?? $this->remoteUserPrincipalBackend->getPrincipalByPath($principaluri);
 			if ($p === null) {
 				$this->deleteSharesForPrincipal($principaluri);
 			}
 		}
 
 		$result->closeCursor();
-		return 0;
+		return self::SUCCESS;
 	}
 
 	/**
 	 * @param string $principaluri
 	 */
-	private function deleteSharesForPrincipal($principaluri) {
+	private function deleteSharesForPrincipal($principaluri): void {
 		$delete = $this->connection->getQueryBuilder();
 		$delete->delete('dav_shares')
 			->where($delete->expr()->eq('principaluri', $delete->createNamedParameter($principaluri)));
-		$delete->execute();
+		$delete->executeStatement();
 	}
 }

@@ -1,43 +1,23 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bart Visscher <bartv@thisnet.nl>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Ole Ostergaard <ole.c.ostergaard@gmail.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 // use OCP namespace for all classes that are considered public.
-// This means that they should be used by apps instead of the internal ownCloud classes
+// This means that they should be used by apps instead of the internal Nextcloud classes
 
 namespace OCP;
 
 use Doctrine\DBAL\Schema\Schema;
+use OC\DB\QueryBuilder\Sharded\CrossShardMoveHelper;
+use OC\DB\QueryBuilder\Sharded\ShardDefinition;
 use OCP\DB\Exception;
 use OCP\DB\IPreparedStatement;
 use OCP\DB\IResult;
 use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\DB\QueryBuilder\ITypedQueryBuilder;
 
 /**
  * Interface IDBConnection
@@ -46,48 +26,51 @@ use OCP\DB\QueryBuilder\IQueryBuilder;
  */
 interface IDBConnection {
 	/**
-	 * @deprecated 22.0.0 this is an internal event
+	 * @since 28.0.0
 	 */
-	public const ADD_MISSING_INDEXES_EVENT = self::class . '::ADD_MISSING_INDEXES';
+	public const PLATFORM_MYSQL = 'mysql';
 
 	/**
-	 * @deprecated 22.0.0 this is an internal event
+	 * @since 28.0.0
 	 */
-	public const CHECK_MISSING_INDEXES_EVENT = self::class . '::CHECK_MISSING_INDEXES';
+	public const PLATFORM_ORACLE = 'oracle';
 
 	/**
-	 * @deprecated 22.0.0 this is an internal event
+	 * @since 28.0.0
 	 */
-	public const ADD_MISSING_PRIMARY_KEYS_EVENT = self::class . '::ADD_MISSING_PRIMARY_KEYS';
+	public const PLATFORM_POSTGRES = 'postgres';
 
 	/**
-	 * @deprecated 22.0.0 this is an internal event
+	 * @since 28.0.0
 	 */
-	public const CHECK_MISSING_PRIMARY_KEYS_EVENT = self::class . '::CHECK_MISSING_PRIMARY_KEYS';
+	public const PLATFORM_SQLITE = 'sqlite';
 
 	/**
-	 * @deprecated 22.0.0 this is an internal event
+	 * @since 32.0.0
 	 */
-	public const ADD_MISSING_COLUMNS_EVENT = self::class . '::ADD_MISSING_COLUMNS';
-
-	/**
-	 * @deprecated 22.0.0 this is an internal event
-	 */
-	public const CHECK_MISSING_COLUMNS_EVENT = self::class . '::CHECK_MISSING_COLUMNS';
+	public const PLATFORM_MARIADB = 'mariadb';
 
 	/**
 	 * Gets the QueryBuilder for the connection.
 	 *
 	 * @return \OCP\DB\QueryBuilder\IQueryBuilder
 	 * @since 8.2.0
+	 * @note Since 34.0.0 prefer using {@see self::getTypedQueryBuilder()} instead.
 	 */
 	public function getQueryBuilder();
 
 	/**
-	 * Used to abstract the ownCloud database access away
+	 * Gets the ITypedQueryBuilder for the connection.
+	 *
+	 * @since 34.0.0
+	 */
+	public function getTypedQueryBuilder(): ITypedQueryBuilder;
+
+	/**
+	 * Used to abstract the Nextcloud database access away
 	 * @param string $sql the sql query with ? placeholder for params
-	 * @param int $limit the maximum number of rows
-	 * @param int $offset from which row we want to start
+	 * @param int|null $limit the maximum number of rows
+	 * @param int|null $offset from which row we want to start
 	 * @return IPreparedStatement The prepared statement.
 	 * @since 6.0.0
 	 * @throws Exception since 21.0.0
@@ -167,15 +150,14 @@ interface IDBConnection {
 	 * @param string $table The table name (will replace *PREFIX* with the actual prefix)
 	 * @param array $input data that should be inserted into the table  (column name => value)
 	 * @param array|null $compare List of values that should be checked for "if not exists"
-	 *				If this is null or an empty array, all keys of $input will be compared
-	 *				Please note: text fields (clob) must not be used in the compare array
+	 *                            If this is null or an empty array, all keys of $input will be compared
+	 *                            Please note: text fields (clob) must not be used in the compare array
 	 * @return int number of inserted rows
 	 * @throws Exception used to be the removed dbal exception, since 21.0.0 it's \OCP\DB\Exception
 	 * @since 6.0.0 - parameter $compare was added in 8.1.0, return type changed from boolean in 8.1.0
-	 * @deprecated 15.0.0 - use unique index and "try { $db->insert() } catch (UniqueConstraintViolationException $e) {}" instead, because it is more reliable and does not have the risk for deadlocks - see https://github.com/nextcloud/server/pull/12371
+	 * @deprecated 15.0.0 - use unique index and "try { $db->insert() } catch (\OCP\DB\Exception $e) { if ($e->getReason() === \OCP\DB\Exception::REASON_CONSTRAINT_VIOLATION) {} }" instead, because it is more reliable and does not have the risk for deadlocks - see https://github.com/nextcloud/server/pull/12371
 	 */
-	public function insertIfNotExist(string $table, array $input, array $compare = null);
-
+	public function insertIfNotExist(string $table, array $input, ?array $compare = null);
 
 	/**
 	 *
@@ -188,7 +170,7 @@ interface IDBConnection {
 	 * @return int number of inserted rows
 	 * @since 16.0.0
 	 */
-	public function insertIgnoreConflict(string $table,array $values) : int;
+	public function insertIgnoreConflict(string $table, array $values) : int;
 
 	/**
 	 * Insert or update a row value
@@ -199,7 +181,7 @@ interface IDBConnection {
 	 * @param array $updatePreconditionValues ensure values match preconditions (column name => value)
 	 * @return int number of new rows
 	 * @throws Exception used to be the removed dbal exception, since 21.0.0 it's \OCP\DB\Exception
-	 * @throws PreconditionNotMetException
+	 * @throws PreConditionNotMetException
 	 * @since 9.0.0
 	 */
 	public function setValues($table, array $keys, array $values, array $updatePreconditionValues = []): int;
@@ -311,6 +293,7 @@ interface IDBConnection {
 	 *
 	 * @return \Doctrine\DBAL\Platforms\AbstractPlatform The database platform.
 	 * @since 8.0.0
+	 * @deprecated 30.0.0 Please use {@see self::getDatabaseProvider()} and compare to self::PLATFORM_* constants
 	 */
 	public function getDatabasePlatform();
 
@@ -324,6 +307,21 @@ interface IDBConnection {
 	 * @psalm-taint-sink sql $table
 	 */
 	public function dropTable(string $table): void;
+
+	/**
+	 * Truncate a table data if it exists
+	 *
+	 * Cascade is not supported on many platforms but would optionally cascade the truncate by
+	 * following the foreign keys.
+	 *
+	 * @param string $table table name without the prefix
+	 * @param bool $cascade whether to truncate cascading
+	 * @throws Exception
+	 * @since 32.0.0
+	 *
+	 * @psalm-taint-sink sql $table
+	 */
+	public function truncateTable(string $table, bool $cascade): void;
 
 	/**
 	 * Check if a table exists
@@ -369,4 +367,33 @@ interface IDBConnection {
 	 * @since 13.0.0
 	 */
 	public function migrateToSchema(Schema $toSchema): void;
+
+	/**
+	 * Returns the database provider name
+	 *
+	 * @link https://github.com/nextcloud/server/issues/30877
+	 *
+	 * @param bool $strict differentiate between database flavors, e.g. MySQL vs MariaDB
+	 * @return self::PLATFORM_MYSQL|self::PLATFORM_ORACLE|self::PLATFORM_POSTGRES|self::PLATFORM_SQLITE|self::PLATFORM_MARIADB
+	 * @since 32.0.0 Optional parameter $strict was added
+	 * @since 28.0.0
+	 */
+	public function getDatabaseProvider(bool $strict = false): string;
+
+	/**
+	 * Get the shard definition by name, if configured
+	 *
+	 * @param string $name
+	 * @return ShardDefinition|null
+	 * @since 30.0.0
+	 */
+	public function getShardDefinition(string $name): ?ShardDefinition;
+
+	/**
+	 * Get a helper class for implementing cross-shard moves
+	 *
+	 * @return CrossShardMoveHelper
+	 * @since 30.0.0
+	 */
+	public function getCrossShardMoveHelper(): CrossShardMoveHelper;
 }

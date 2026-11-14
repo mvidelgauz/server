@@ -1,71 +1,92 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bart Visscher <bartv@thisnet.nl>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 // use OCP namespace for all classes that are considered public.
-// This means that they should be used by apps instead of the internal ownCloud classes
+// This means that they should be used by apps instead of the internal Nextcloud classes
 
 namespace OCP;
 
+use OCP\AppFramework\Attribute\Consumable;
+use OCP\AppFramework\Attribute\ExceptionalImplementable;
+
 /**
- * Manages the ownCloud navigation
+ * Manages the Nextcloud navigation
+ *
  * @since 6.0.0
+ *
+ * @psalm-type NavigationEntry = array{
+ *     id: string,
+ *     order: int,
+ *     href: string,
+ *     name: string,
+ *     app?: string,
+ *     icon?: string,
+ *     color?: string,
+ *     classes?: string,
+ *     type?: 'link'|'action'|'settings'|'guest'|'quota',
+ * }
+ * @psalm-type NavigationEntryOutput = array{
+ *     id: string,
+ *     order?: int,
+ *     href: string,
+ *     icon: string,
+ *     color?: string,
+ *     type: 'link'|'action'|'settings'|'guest'|'quota',
+ *     name: string,
+ *     app?: string,
+ *     default?: bool,
+ *     active: bool,
+ *     classes: string,
+ *     unread: int,
+ * }
  */
+#[Consumable(since: '6.0.0')]
+#[ExceptionalImplementable(app: 'guest')]
 interface INavigationManager {
+	/**
+	 * All navigation entries
+	 * @since 33.0.0
+	 */
+	public const string TYPE_ALL = 'all';
+
+	/**
+	 * Navigation entries for actions of the app menu
+	 * @since 35.0.0
+	 */
+	public const string TYPE_ACTION = 'action';
 
 	/**
 	 * Navigation entries of the app navigation
 	 * @since 16.0.0
 	 */
-	public const TYPE_APPS = 'link';
+	public const string TYPE_APPS = 'link';
 
 	/**
 	 * Navigation entries of the settings navigation
 	 * @since 16.0.0
 	 */
-	public const TYPE_SETTINGS = 'settings';
+	public const string TYPE_SETTINGS = 'settings';
 
 	/**
 	 * Navigation entries for public page footer navigation
 	 * @since 16.0.0
 	 */
-	public const TYPE_GUEST = 'guest';
+	public const string TYPE_GUEST = 'guest';
 
 	/**
 	 * Creates a new navigation entry
 	 *
-	 * @param array|\Closure $entry Array containing: id, name, order, icon and href key
-	 *					The use of a closure is preferred, because it will avoid
-	 * 					loading the routing of your app, unless required.
+	 * @param NavigationEntry|callable():?NavigationEntry $entry If a menu entry (type = 'link') is added, you shall also set app to the app that
+	 *                                                           added the entry. The use of a closure is preferred, because it will avoid loading
+	 *                                                           the routing of your app, unless required.
 	 * @return void
 	 * @since 6.0.0
 	 */
-	public function add($entry);
+	public function add(array|callable $entry): void;
 
 	/**
 	 * Sets the current navigation entry of the currently running app
@@ -73,20 +94,20 @@ interface INavigationManager {
 	 * @return void
 	 * @since 6.0.0
 	 */
-	public function setActiveEntry($appId);
+	public function setActiveEntry(string $appId): void;
 
 	/**
 	 * Get the current navigation entry of the currently running app
-	 * @return string
+	 * @return ?string
 	 * @since 20.0.0
 	 */
-	public function getActiveEntry();
+	public function getActiveEntry(): ?string;
 
 	/**
 	 * Get a list of navigation entries
 	 *
-	 * @param string $type type of the navigation entries
-	 * @return array
+	 * @param self::TYPE_* $type type of the navigation entries
+	 * @return array<string, NavigationEntryOutput>
 	 * @since 14.0.0
 	 */
 	public function getAll(string $type = self::TYPE_APPS): array;
@@ -99,4 +120,42 @@ interface INavigationManager {
 	 * @since 22.0.0
 	 */
 	public function setUnreadCounter(string $id, int $unreadCounter): void;
+
+	/**
+	 * Get a navigation entry by id.
+	 *
+	 * @param string $id ID of the navigation entry
+	 * @since 31.0.0
+	 */
+	public function get(string $id): ?array;
+
+	/**
+	 * Returns the id of the user's default entry
+	 *
+	 * If `user` is not passed, the currently logged-in user will be used
+	 *
+	 * @param ?IUser $user User to query default entry for
+	 * @param bool $withFallbacks Include fallback values if no default entry was configured manually
+	 *                            Before falling back to predefined default entries,
+	 *                            the user defined entry order is considered and the first entry would be used as the fallback.
+	 * @since 31.0.0
+	 */
+	public function getDefaultEntryIdForUser(?IUser $user = null, bool $withFallbacks = true): string;
+
+	/**
+	 * Get the global default entries with fallbacks
+	 *
+	 * @return string[] The default entries
+	 * @since 31.0.0
+	 */
+	public function getDefaultEntryIds(): array;
+
+	/**
+	 * Set the global default entries with fallbacks
+	 *
+	 * @param string[] $ids
+	 * @throws \InvalidArgumentException If any of the entries is not available
+	 * @since 31.0.0
+	 */
+	public function setDefaultEntryIds(array $ids): void;
 }

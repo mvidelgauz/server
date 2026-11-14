@@ -1,25 +1,14 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2018-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_External\Lib;
+
+use OCP\Files\Storage\IStorage;
 
 /**
  * Polyfill for checking dependencies using legacy Storage::checkDependencies()
@@ -27,7 +16,7 @@ namespace OCA\Files_External\Lib;
 trait LegacyDependencyCheckPolyfill {
 
 	/**
-	 * @return string
+	 * @return class-string<IStorage>
 	 */
 	abstract public function getStorageClass();
 
@@ -54,7 +43,7 @@ trait LegacyDependencyCheckPolyfill {
 						$module = $key;
 						$message = $value;
 					}
-					$value = new MissingDependency($module, $this);
+					$value = new MissingDependency($module);
 					$value->setMessage($message);
 				}
 				$ret[] = $value;

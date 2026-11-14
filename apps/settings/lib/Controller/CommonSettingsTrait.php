@@ -1,41 +1,32 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Settings\Controller;
 
+use InvalidArgumentException;
+use OC\AppFramework\Middleware\Security\Exceptions\NotAdminException;
+use OCA\Settings\AppInfo\Application;
 use OCP\AppFramework\Http\TemplateResponse;
+use OCP\AppFramework\Services\IInitialState;
 use OCP\Group\ISubAdmin;
 use OCP\IGroupManager;
 use OCP\INavigationManager;
 use OCP\IUserSession;
+use OCP\Settings\IDeclarativeManager;
+use OCP\Settings\IDeclarativeSettingsForm;
+use OCP\Settings\IIconSection;
 use OCP\Settings\IManager as ISettingsManager;
 use OCP\Settings\ISettings;
+use OCP\Util;
 
+/**
+ * @psalm-import-type DeclarativeSettingsFormSchemaWithValues from IDeclarativeSettingsForm
+ * @psalm-import-type DeclarativeSettingsFormSchemaWithoutValues from IDeclarativeSettingsForm
+ */
 trait CommonSettingsTrait {
 
 	/** @var ISettingsManager */
@@ -53,29 +44,18 @@ trait CommonSettingsTrait {
 	/** @var ISubAdmin */
 	private $subAdmin;
 
+	private IDeclarativeManager $declarativeSettingsManager;
+
+	/** @var IInitialState */
+	private $initialState;
+
 	/**
-	 * @param string $currentSection
-	 * @return array
+	 * @param IIconSection[][] $sections
+	 * @psalm-param 'admin'|'personal' $type
+	 * @return list<array{id: string, name: string, active: bool, icon: string}>
 	 */
-	private function getNavigationParameters($currentType, $currentSection) {
-		$templateParameters = [
-			'personal' => $this->formatPersonalSections($currentType, $currentSection),
-			'admin' => []
-		];
-
-		$templateParameters['admin'] = $this->formatAdminSections(
-				$currentType,
-				$currentSection
-			);
-
-		return [
-			'forms' => $templateParameters
-		];
-	}
-
 	protected function formatSections(array $sections, string $currentSection, string $type, string $currentType): array {
 		$templateParameters = [];
-		/** @var \OCP\Settings\IIconSection[] $prioritizedSections */
 		foreach ($sections as $prioritizedSections) {
 			foreach ($prioritizedSections as $section) {
 				if ($type === 'admin') {
@@ -83,7 +63,11 @@ trait CommonSettingsTrait {
 				} elseif ($type === 'personal') {
 					$settings = $this->settingsManager->getPersonalSettings($section->getID());
 				}
-				if (empty($settings) && !($section->getID() === 'additional' && count(\OC_App::getForms('admin')) > 0)) {
+
+				/** @psalm-suppress PossiblyNullArgument */
+				$declarativeFormIDs = $this->declarativeSettingsManager->getFormIDs($this->userSession->getUser(), $type, $section->getID());
+
+				if (empty($settings) && empty($declarativeFormIDs)) {
 					continue;
 				}
 
@@ -93,8 +77,8 @@ trait CommonSettingsTrait {
 					&& $type === $currentType;
 
 				$templateParameters[] = [
-					'anchor' => $section->getID(),
-					'section-name' => $section->getName(),
+					'id' => $section->getID(),
+					'name' => $section->getName(),
 					'active' => $active,
 					'icon' => $icon,
 				];
@@ -103,44 +87,104 @@ trait CommonSettingsTrait {
 		return $templateParameters;
 	}
 
-	protected function formatPersonalSections(string $currentType, string $currentSections): array {
+	/**
+	 * @return list<array{id: string, name: string, active: bool, icon: string}>
+	 */
+	protected function formatPersonalSections(string $currentType, string $currentSection): array {
 		$sections = $this->settingsManager->getPersonalSections();
-		$templateParameters = $this->formatSections($sections, $currentSections, 'personal', $currentType);
-
-		return $templateParameters;
-	}
-
-	protected function formatAdminSections(string $currentType, string $currentSections): array {
-		$sections = $this->settingsManager->getAdminSections();
-		$templateParameters = $this->formatSections($sections, $currentSections, 'admin', $currentType);
-
-		return $templateParameters;
+		return $this->formatSections($sections, $currentSection, 'personal', $currentType);
 	}
 
 	/**
-	 * @param array<int, list<\OCP\Settings\ISettings>> $settings
-	 * @return array
+	 * @return list<array{id: string, name: string, active: bool, icon: string}>
 	 */
-	private function formatSettings(array $settings): array {
+	protected function formatAdminSections(string $currentType, string $currentSection): array {
+		$sections = $this->settingsManager->getAdminSections();
+		return $this->formatSections($sections, $currentSection, 'admin', $currentType);
+	}
+
+	/**
+	 * @param list<ISettings> $settings
+	 * @param list<DeclarativeSettingsFormSchemaWithValues> $declarativeSettings
+	 * @return array{content: string}
+	 */
+	private function formatSettings(array $settings, array $declarativeSettings): array {
+		$settings = array_merge($settings, $declarativeSettings);
+
+		usort($settings, function ($first, $second) {
+			$priorityOne = $first instanceof ISettings ? $first->getPriority() : $first['priority'];
+			$priorityTwo = $second instanceof ISettings ? $second->getPriority() : $second['priority'];
+			return $priorityOne - $priorityTwo;
+		});
+
 		$html = '';
-		foreach ($settings as $prioritizedSettings) {
-			foreach ($prioritizedSettings as $setting) {
-				/** @var ISettings $setting */
+		foreach ($settings as $setting) {
+			if ($setting instanceof ISettings) {
 				$form = $setting->getForm();
 				$html .= $form->renderAs('')->render();
+			} else {
+				$html .= '<div id="' . $setting['app'] . '_' . $setting['id'] . '"></div>';
 			}
 		}
 		return ['content' => $html];
 	}
 
-	private function getIndexResponse($type, $section) {
-		$this->navigationManager->setActiveEntry('settings');
-		$templateParams = [];
-		$templateParams = array_merge($templateParams, $this->getNavigationParameters($type, $section));
-		$templateParams = array_merge($templateParams, $this->getSettings($section));
+	/**
+	 * @psalm-param 'admin'|'personal' $type
+	 */
+	private function getIndexResponse(string $type, string $section): TemplateResponse {
+		$user = $this->userSession->getUser();
+		assert($user !== null, 'No user logged in for settings');
 
+		$this->declarativeSettingsManager->loadSchemas();
+		$declarativeSettings = $this->declarativeSettingsManager->getFormsWithValues($user, $type, $section);
+
+		foreach ($declarativeSettings as &$form) {
+			foreach ($form['fields'] as &$field) {
+				if (isset($field['sensitive']) && $field['sensitive'] === true && !empty($field['value'])) {
+					$field['value'] = 'dummySecret';
+				}
+			}
+		}
+
+		if ($type === 'personal') {
+			$settings = array_values($this->settingsManager->getPersonalSettings($section));
+			if ($section === 'theming') {
+				$this->navigationManager->setActiveEntry('accessibility_settings');
+			} else {
+				$this->navigationManager->setActiveEntry('settings_personal');
+			}
+		} elseif ($type === 'admin') {
+			$settings = array_values($this->settingsManager->getAllowedAdminSettings($section, $user));
+			if (empty($settings) && empty($declarativeSettings)) {
+				throw new NotAdminException('Logged in user does not have permission to access these settings.');
+			}
+			$this->navigationManager->setActiveEntry('settings_administration');
+		} else {
+			throw new InvalidArgumentException('$type must be either "admin" or "personal"');
+		}
+
+		if (!empty($declarativeSettings)) {
+			Util::addScript(Application::APP_ID, 'declarative-settings-forms');
+			$this->initialState->provideInitialState('declarative-settings-forms', $declarativeSettings);
+		}
+
+		$this->initialState->provideInitialState('sections', [
+			'personal' => $this->formatPersonalSections($type, $section),
+			'admin' => $this->formatAdminSections($type, $section),
+		]);
+
+		$settings = array_merge(...$settings);
+		$templateParams = $this->formatSettings($settings, $declarativeSettings);
+
+		$activeSection = $this->settingsManager->getSection($type, $section);
+		if ($activeSection) {
+			$templateParams['pageTitle'] = $activeSection->getName();
+			$templateParams['activeSectionId'] = $activeSection->getID();
+			$templateParams['activeSectionType'] = $type;
+		}
+
+		Util::addScript(Application::APP_ID, 'main', prepend: true);
 		return new TemplateResponse('settings', 'settings/frame', $templateParams);
 	}
-
-	abstract protected function getSettings($section);
 }

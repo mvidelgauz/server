@@ -1,74 +1,32 @@
 <!--
-  - @copyright Copyright (c) 2019 Julius Härtl <jus@bitgrid.net>
-  -
-  - @author Julius Härtl <jus@bitgrid.net>
-  -
-  - @license GNU AGPL version 3 or any later version
-  -
-  - This program is free software: you can redistribute it and/or modify
-  - it under the terms of the GNU Affero General Public License as
-  - published by the Free Software Foundation, either version 3 of the
-  - License, or (at your option) any later version.
-  -
-  - This program is distributed in the hope that it will be useful,
-  - but WITHOUT ANY WARRANTY; without even the implied warranty of
-  - MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-  - GNU Affero General Public License for more details.
-  -
-  - You should have received a copy of the GNU Affero General Public License
-  - along with this program. If not, see <http://www.gnu.org/licenses/>.
-  -
-  -->
-
+  - SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 <template>
-	<MultiselectTag v-model="newValue"
+	<NcSelectTags
+		v-model="newValue"
+		:aria-label-combobox="t('workflowengine', 'Tag')"
+		:limit="null"
 		:multiple="false"
-		:label="t('workflowengine', 'Select a tag')"
-		@input="update" />
+		@update:modelValue="emitValue()" />
 </template>
 
-<script>
-import { MultiselectTag } from './MultiselectTag'
+<script setup lang="ts">
+import { t } from '@nextcloud/l10n'
+import NcSelectTags from '@nextcloud/vue/components/NcSelectTags'
+import { useCheckValue } from '../../composables/useCheckValue.ts'
 
-export default {
-	name: 'FileSystemTag',
-	components: {
-		MultiselectTag,
+const props = withDefaults(defineProps<{ modelValue?: string }>(), { modelValue: '' })
+
+const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
+
+const { newValue, emitValue } = useCheckValue<number | null>(
+	() => props.modelValue,
+	(value) => emit('update:modelValue', value),
+	{
+		// NcSelectTags works on numeric tag ids, a rule stores the id as a string
+		parse: (modelValue) => (modelValue === '' ? null : Number.parseInt(modelValue)),
+		format: (value) => String(value || ''),
 	},
-	props: {
-		value: {
-			type: String,
-			default: '',
-		},
-	},
-	data() {
-		return {
-			newValue: [],
-		}
-	},
-	watch: {
-		value() {
-			this.updateValue()
-		},
-	},
-	beforeMount() {
-		this.updateValue()
-	},
-	methods: {
-		updateValue() {
-			if (this.value !== '') {
-				this.newValue = this.value
-			} else {
-				this.newValue = null
-			}
-		},
-		update() {
-			this.$emit('input', this.newValue || '')
-		},
-	},
-}
+)
 </script>
-
-<style scoped>
-
-</style>

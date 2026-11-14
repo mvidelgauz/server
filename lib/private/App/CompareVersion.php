@@ -3,36 +3,20 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2018 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\App;
 
 use InvalidArgumentException;
 use function explode;
 
 class CompareVersion {
-	private const REGEX_MAJOR = '/^\d+$/';
-	private const REGEX_MAJOR_MINOR = '/^\d+\.\d+$/';
-	private const REGEX_MAJOR_MINOR_PATCH = '/^\d+\.\d+\.\d+(?!\.\d+)/';
-	private const REGEX_ACTUAL = '/^\d+(\.\d+){1,2}/';
+	private const string REGEX_MAJOR = '/^\d+$/';
+	private const string REGEX_MAJOR_MINOR = '/^\d+\.\d+$/';
+	private const string REGEX_MAJOR_MINOR_PATCH = '/^\d+\.\d+\.\d+(?!\.\d+)/';
+	private const string REGEX_ACTUAL = '/^\d+(\.\d+){1,2}/';
 
 	/**
 	 * Checks if the given server version fulfills the given (app) version requirements.
@@ -41,7 +25,7 @@ class CompareVersion {
 	 * so '13.0.1', '13.0' and '13' are valid.
 	 *
 	 * @param string $actual version as major.minor.patch notation
-	 * @param string $required version where major is requried and minor and patch are optional
+	 * @param string $required version where major is required and minor and patch are optional
 	 * @param string $comparator passed to `version_compare`
 	 * @return bool whether the requirement is fulfilled
 	 * @throws InvalidArgumentException if versions specified in an invalid format

@@ -1,25 +1,10 @@
 <?php
+
 /**
- * @copyright 2018, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_External\Lib\Auth\PublicKey;
 
 use OCA\Files_External\Lib\Auth\AuthMechanism;
@@ -28,38 +13,57 @@ use OCA\Files_External\Lib\StorageConfig;
 use OCP\IConfig;
 use OCP\IL10N;
 use OCP\IUser;
-use phpseclib\Crypt\RSA as RSACrypt;
+use phpseclib3\Crypt\PublicKeyLoader;
+use phpseclib3\Crypt\RSA;
+use phpseclib3\Exception\NoKeyLoadedException;
 
 /**
  * RSA public key authentication
  */
 class RSAPrivateKey extends AuthMechanism {
 
-	/** @var IConfig */
-	private $config;
-
-	public function __construct(IL10N $l, IConfig $config) {
-		$this->config = $config;
-
+	public function __construct(
+		IL10N $l,
+		private IConfig $config,
+	) {
 		$this
 			->setIdentifier('publickey::rsa_private')
 			->setScheme(self::SCHEME_PUBLICKEY)
 			->setText($l->t('RSA private key'))
 			->addParameters([
-				new DefinitionParameter('user', $l->t('Username')),
+				new DefinitionParameter('user', $l->t('Login')),
 				(new DefinitionParameter('password', $l->t('Password')))
 					->setFlag(DefinitionParameter::FLAG_OPTIONAL)
 					->setType(DefinitionParameter::VALUE_PASSWORD),
-				new DefinitionParameter('private_key', $l->t('Private key')),
+				(new DefinitionParameter('private_key', $l->t('Private key')))
+					->setType(DefinitionParameter::VALUE_PASSWORD),
 			]);
 	}
 
-	public function manipulateStorageConfig(StorageConfig &$storage, IUser $user = null) {
-		$auth = new RSACrypt();
-		$auth->setPassword($this->config->getSystemValue('secret', ''));
-		if (!$auth->loadKey($storage->getBackendOption('private_key'))) {
-			throw new \RuntimeException('unable to load private key');
+	/**
+	 * @return void
+	 */
+	#[\Override]
+	public function manipulateStorageConfig(StorageConfig &$storage, ?IUser $user = null) {
+
+		try {
+			$auth = PublicKeyLoader::load(
+				$storage->getBackendOption('private_key'),
+				$this->config->getSystemValue('secret', ''),
+			);
+		} catch (NoKeyLoadedException) {
+			// Add fallback routine for a time where secret was not enforced to be exists
+			$auth = PublicKeyLoader::load(
+				$storage->getBackendOption('private_key'),
+				'',
+			);
 		}
+
+		if (!$auth instanceof RSA\PrivateKey) {
+			throw new \RuntimeException('Loaded key is not a private key');
+		}
+
+		$auth = $auth->withPassword('');
 		$storage->setBackendOption('public_key_auth', $auth);
 	}
 }

@@ -1,43 +1,34 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_Sharing\AppInfo;
 
-use OC\AppFramework\Utility\SimpleContainer;
+use OC\Group\DisplayNameCache as GroupDisplayNameCache;
+use OC\User\DisplayNameCache;
+use OCA\Files\Event\LoadAdditionalScriptsEvent;
+use OCA\Files\Event\LoadSidebar;
 use OCA\Files_Sharing\Capabilities;
-use OCA\Files_Sharing\Event\BeforeTemplateRenderedEvent;
+use OCA\Files_Sharing\Config\ConfigLexicon;
+use OCA\Files_Sharing\Event\UserShareAccessUpdatedEvent;
 use OCA\Files_Sharing\External\Manager;
-use OCA\Files_Sharing\Listener\LegacyBeforeTemplateRenderedListener;
+use OCA\Files_Sharing\External\MountProvider as ExternalMountProvider;
+use OCA\Files_Sharing\Helper;
+use OCA\Files_Sharing\Listener\BeforeDirectFileDownloadListener;
+use OCA\Files_Sharing\Listener\BeforeNodeReadListener;
+use OCA\Files_Sharing\Listener\BeforeZipCreatedListener;
 use OCA\Files_Sharing\Listener\LoadAdditionalListener;
+use OCA\Files_Sharing\Listener\LoadPublicFileRequestAuthListener;
 use OCA\Files_Sharing\Listener\LoadSidebarListener;
+use OCA\Files_Sharing\Listener\RestrictInteractionListener;
 use OCA\Files_Sharing\Listener\ShareInteractionListener;
+use OCA\Files_Sharing\Listener\SharesUpdatedListener;
 use OCA\Files_Sharing\Listener\UserAddedToGroupListener;
+use OCA\Files_Sharing\Listener\UserHomeSetupListener;
 use OCA\Files_Sharing\Listener\UserShareAcceptanceListener;
 use OCA\Files_Sharing\Middleware\OCSShareAPIMiddleware;
 use OCA\Files_Sharing\Middleware\ShareInfoMiddleware;
@@ -45,204 +36,138 @@ use OCA\Files_Sharing\Middleware\SharingCheckMiddleware;
 use OCA\Files_Sharing\MountProvider;
 use OCA\Files_Sharing\Notification\Listener;
 use OCA\Files_Sharing\Notification\Notifier;
-use OCA\Files\Event\LoadAdditionalScriptsEvent;
-use OCA\Files\Event\LoadSidebar;
 use OCP\AppFramework\App;
+use OCP\AppFramework\Bootstrap\IBootContext;
+use OCP\AppFramework\Bootstrap\IBootstrap;
+use OCP\AppFramework\Bootstrap\IRegistrationContext;
+use OCP\AppFramework\Http\Events\BeforeTemplateRenderedEvent;
+use OCP\Collaboration\Resources\LoadAdditionalScriptsEvent as ResourcesLoadAdditionalScriptsEvent;
 use OCP\EventDispatcher\IEventDispatcher;
 use OCP\Federation\ICloudIdManager;
 use OCP\Files\Config\IMountProviderCollection;
+use OCP\Files\Events\BeforeDirectFileDownloadEvent;
+use OCP\Files\Events\BeforeZipCreatedEvent;
+use OCP\Files\Events\Node\BeforeNodeReadEvent;
+use OCP\Files\Events\UserHomeSetupEvent;
+use OCP\Group\Events\BeforeGroupDeletedEvent;
+use OCP\Group\Events\GroupChangedEvent;
+use OCP\Group\Events\GroupDeletedEvent;
 use OCP\Group\Events\UserAddedEvent;
+use OCP\Group\Events\UserRemovedEvent;
+use OCP\IConfig;
 use OCP\IDBConnection;
-use OCP\IGroup;
-use OCP\IServerContainer;
-use OCP\IUserSession;
+use OCP\Interaction\RestrictInteractionEvent;
+use OCP\Share\Events\BeforeShareDeletedEvent;
 use OCP\Share\Events\ShareCreatedEvent;
-use OCP\Share\IManager;
+use OCP\Share\Events\ShareMovedEvent;
+use OCP\Share\Events\ShareTransferredEvent;
+use OCP\User\Events\UserChangedEvent;
+use OCP\User\Events\UserDeletedEvent;
 use OCP\Util;
 use Psr\Container\ContainerInterface;
-use Psr\Log\LoggerInterface;
-use Symfony\Component\EventDispatcher\EventDispatcherInterface;
-use Symfony\Component\EventDispatcher\GenericEvent;
 
-class Application extends App {
+class Application extends App implements IBootstrap {
 	public const APP_ID = 'files_sharing';
 
 	public function __construct(array $urlParams = []) {
 		parent::__construct(self::APP_ID, $urlParams);
+	}
 
-		$container = $this->getContainer();
-
-		/** @var IServerContainer $server */
-		$server = $container->getServer();
-
-		/** @var IEventDispatcher $dispatcher */
-		$dispatcher = $container->query(IEventDispatcher::class);
-		$oldDispatcher = $container->getServer()->getEventDispatcher();
-		$mountProviderCollection = $server->getMountProviderCollection();
-		$notifications = $server->getNotificationManager();
-
-		/**
-		 * Core class wrappers
-		 */
-		$container->registerService(Manager::class, function (SimpleContainer $c) use ($server) {
-			$user = $server->getUserSession()->getUser();
-			$uid = $user ? $user->getUID() : null;
-			return new \OCA\Files_Sharing\External\Manager(
-				$server->getDatabaseConnection(),
-				\OC\Files\Filesystem::getMountManager(),
-				\OC\Files\Filesystem::getLoader(),
-				$server->getHTTPClientService(),
-				$server->getNotificationManager(),
-				$server->query(\OCP\OCS\IDiscoveryService::class),
-				$server->getCloudFederationProviderManager(),
-				$server->getCloudFederationFactory(),
-				$server->getGroupManager(),
-				$server->getUserManager(),
-				$uid,
-				$server->query(IEventDispatcher::class),
-				$server->get(LoggerInterface::class)
+	#[\Override]
+	public function register(IRegistrationContext $context): void {
+		$context->registerService(ExternalMountProvider::class, function (ContainerInterface $c) {
+			return new ExternalMountProvider(
+				$c->get(IDBConnection::class),
+				function () use ($c) {
+					return $c->get(Manager::class);
+				},
+				$c->get(ICloudIdManager::class),
+				$c->get(IConfig::class),
 			);
 		});
 
 		/**
 		 * Middleware
 		 */
-		$container->registerMiddleWare(SharingCheckMiddleware::class);
-		$container->registerMiddleWare(OCSShareAPIMiddleware::class);
-		$container->registerMiddleWare(ShareInfoMiddleware::class);
+		$context->registerMiddleWare(SharingCheckMiddleware::class);
+		$context->registerMiddleWare(OCSShareAPIMiddleware::class);
+		$context->registerMiddleWare(ShareInfoMiddleware::class);
 
-		$container->registerService('ExternalMountProvider', function (ContainerInterface $c) {
-			return new \OCA\Files_Sharing\External\MountProvider(
-				$c->get(IDBConnection::class),
-				function () use ($c) {
-					return $c->get(Manager::class);
-				},
-				$c->get(ICloudIdManager::class)
-			);
-		});
+		$context->registerCapability(Capabilities::class);
 
-		/**
-		 * Register capabilities
-		 */
-		$container->registerCapability(Capabilities::class);
+		$context->registerNotifierService(Notifier::class);
+		$context->registerEventListener(UserChangedEvent::class, DisplayNameCache::class);
+		$context->registerEventListener(UserDeletedEvent::class, DisplayNameCache::class);
+		$context->registerEventListener(GroupChangedEvent::class, GroupDisplayNameCache::class);
+		$context->registerEventListener(GroupDeletedEvent::class, GroupDisplayNameCache::class);
 
-		$notifications->registerNotifierService(Notifier::class);
+		// Sidebar and files scripts
+		$context->registerEventListener(LoadAdditionalScriptsEvent::class, LoadAdditionalListener::class);
+		$context->registerEventListener(LoadSidebar::class, LoadSidebarListener::class);
+		$context->registerEventListener(ShareCreatedEvent::class, ShareInteractionListener::class);
+		$context->registerEventListener(ShareCreatedEvent::class, UserShareAcceptanceListener::class);
+		$context->registerEventListener(UserAddedEvent::class, UserAddedToGroupListener::class);
 
-		$this->registerMountProviders($mountProviderCollection);
-		$this->registerEventsScripts($dispatcher, $oldDispatcher);
-		$this->setupSharingMenus();
+		// Publish activity for public download
+		$context->registerEventListener(BeforeNodeReadEvent::class, BeforeNodeReadListener::class);
+		$context->registerEventListener(BeforeZipCreatedEvent::class, BeforeNodeReadListener::class);
 
-		/**
-		 * Always add main sharing script
-		 */
-		Util::addScript(self::APP_ID, 'dist/main');
+		// Handle download events for view only checks. Priority higher than 0 to run early.
+		$context->registerEventListener(BeforeZipCreatedEvent::class, BeforeZipCreatedListener::class, 5);
+		$context->registerEventListener(BeforeDirectFileDownloadEvent::class, BeforeDirectFileDownloadListener::class, 5);
+
+		// File request auth
+		$context->registerEventListener(BeforeTemplateRenderedEvent::class, LoadPublicFileRequestAuthListener::class);
+
+		// Update mounts
+		$context->registerEventListener(ShareCreatedEvent::class, SharesUpdatedListener::class);
+		$context->registerEventListener(BeforeShareDeletedEvent::class, SharesUpdatedListener::class);
+		$context->registerEventListener(ShareTransferredEvent::class, SharesUpdatedListener::class);
+		$context->registerEventListener(UserAddedEvent::class, SharesUpdatedListener::class);
+		$context->registerEventListener(UserRemovedEvent::class, SharesUpdatedListener::class);
+		$context->registerEventListener(BeforeGroupDeletedEvent::class, SharesUpdatedListener::class);
+		$context->registerEventListener(GroupDeletedEvent::class, SharesUpdatedListener::class);
+		$context->registerEventListener(UserShareAccessUpdatedEvent::class, SharesUpdatedListener::class);
+		$context->registerEventListener(ShareMovedEvent::class, SharesUpdatedListener::class);
+		$context->registerEventListener(UserHomeSetupEvent::class, UserHomeSetupListener::class);
+
+		$context->registerEventListener(UserDeletedEvent::class, SharesUpdatedListener::class);
+
+		$context->registerConfigLexicon(ConfigLexicon::class);
+
+		$context->registerEventListener(RestrictInteractionEvent::class, RestrictInteractionListener::class);
 	}
 
-	protected function registerMountProviders(IMountProviderCollection $mountProviderCollection) {
-		$mountProviderCollection->registerProvider($this->getContainer()->query(MountProvider::class));
-		$mountProviderCollection->registerProvider($this->getContainer()->query('ExternalMountProvider'));
+	#[\Override]
+	public function boot(IBootContext $context): void {
+		$context->injectFn([$this, 'registerMountProviders']);
+		$context->injectFn([$this, 'registerEventsScripts']);
+
+		Helper::registerHooks();
 	}
 
-	protected function registerEventsScripts(IEventDispatcher $dispatcher, EventDispatcherInterface $oldDispatcher) {
-		// sidebar and files scripts
-		$dispatcher->addServiceListener(LoadAdditionalScriptsEvent::class, LoadAdditionalListener::class);
-		$dispatcher->addServiceListener(BeforeTemplateRenderedEvent::class, LegacyBeforeTemplateRenderedListener::class);
-		$dispatcher->addServiceListener(LoadSidebar::class, LoadSidebarListener::class);
-		$dispatcher->addServiceListener(ShareCreatedEvent::class, ShareInteractionListener::class);
-		$dispatcher->addListener('\OCP\Collaboration\Resources::loadAdditionalScripts', function () {
-			\OCP\Util::addScript('files_sharing', 'dist/collaboration');
+	public function registerMountProviders(IMountProviderCollection $mountProviderCollection, MountProvider $mountProvider, ExternalMountProvider $externalMountProvider): void {
+		$mountProviderCollection->registerProvider($mountProvider);
+		$mountProviderCollection->registerProvider($externalMountProvider);
+	}
+
+	public function registerEventsScripts(IEventDispatcher $dispatcher): void {
+		$dispatcher->addListener(ResourcesLoadAdditionalScriptsEvent::class, function (): void {
+			Util::addStyle('files_sharing', 'collaboration');
+			Util::addScript('files_sharing', 'collaboration');
 		});
-		$dispatcher->addServiceListener(ShareCreatedEvent::class, UserShareAcceptanceListener::class);
-		$dispatcher->addServiceListener(UserAddedEvent::class, UserAddedToGroupListener::class);
+		$dispatcher->addListener(BeforeTemplateRenderedEvent::class, function (): void {
+			/**
+			 * Always add main sharing script
+			 */
+			Util::addScript(self::APP_ID, 'main');
+		});
 
 		// notifications api to accept incoming user shares
-		$oldDispatcher->addListener('OCP\Share::postShare', function (GenericEvent $event) {
+		$dispatcher->addListener(ShareCreatedEvent::class, function (ShareCreatedEvent $event): void {
 			/** @var Listener $listener */
-			$listener = $this->getContainer()->query(Listener::class);
+			$listener = $this->getContainer()->get(Listener::class);
 			$listener->shareNotification($event);
-		});
-		$oldDispatcher->addListener(IGroup::class . '::postAddUser', function (GenericEvent $event) {
-			/** @var Listener $listener */
-			$listener = $this->getContainer()->query(Listener::class);
-			$listener->userAddedToGroup($event);
-		});
-	}
-
-	protected function setupSharingMenus() {
-		/** @var IManager $shareManager */
-		$shareManager = \OC::$server->get(IManager::class);
-
-		if (!$shareManager->shareApiEnabled() || !class_exists('\OCA\Files\App')) {
-			return;
-		}
-
-		// show_Quick_Access stored as string
-		\OCA\Files\App::getNavigationManager()->add(function () use ($shareManager) {
-			$l = \OC::$server->getL10N('files_sharing');
-			/** @var IUserSession $userSession */
-			$userSession = \OC::$server->get(IUserSession::class);
-			$user = $userSession->getUser();
-			$userId = $user ? $user->getUID() : null;
-
-			$sharingSublistArray = [];
-
-			if ($shareManager->sharingDisabledForUser($userId) === false) {
-				$sharingSublistArray[] = [
-					'id' => 'sharingout',
-					'appname' => 'files_sharing',
-					'script' => 'list.php',
-					'order' => 16,
-					'name' => $l->t('Shared with others'),
-				];
-			}
-
-			$sharingSublistArray[] = [
-				'id' => 'sharingin',
-				'appname' => 'files_sharing',
-				'script' => 'list.php',
-				'order' => 15,
-				'name' => $l->t('Shared with you'),
-			];
-
-			if ($shareManager->sharingDisabledForUser($userId) === false) {
-				// Check if sharing by link is enabled
-				if ($shareManager->shareApiAllowLinks()) {
-					$sharingSublistArray[] = [
-						'id' => 'sharinglinks',
-						'appname' => 'files_sharing',
-						'script' => 'list.php',
-						'order' => 17,
-						'name' => $l->t('Shared by link'),
-					];
-				}
-			}
-
-			$sharingSublistArray[] = [
-				'id' => 'deletedshares',
-				'appname' => 'files_sharing',
-				'script' => 'list.php',
-				'order' => 19,
-				'name' => $l->t('Deleted shares'),
-			];
-
-			$sharingSublistArray[] = [
-				'id' => 'pendingshares',
-				'appname' => 'files_sharing',
-				'script' => 'list.php',
-				'order' => 19,
-				'name' => $l->t('Pending shares'),
-			];
-
-			return [
-				'id' => 'shareoverview',
-				'appname' => 'files_sharing',
-				'script' => 'list.php',
-				'order' => 18,
-				'name' => $l->t('Shares'),
-				'classes' => 'collapsible',
-				'sublist' => $sharingSublistArray,
-				'expandedState' => 'show_sharing_menu'
-			];
 		});
 	}
 }

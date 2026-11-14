@@ -1,68 +1,73 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Tobias Kaminsky <tobias@kaminsky.me>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files\AppInfo;
 
-use Closure;
-use OC\Search\Provider\File;
+use NCU\Sharing\ISharingRegistry;
+use OC\Core\Sharing\Permission\EditSharePermissionPreset;
+use OC\Core\Sharing\Permission\ViewSharePermissionPreset;
+use OC\Core\Sharing\Property\ExpirationDateSharePropertyType;
+use OC\Core\Sharing\Property\LabelSharePropertyType;
+use OC\Core\Sharing\Property\NoteSharePropertyType;
+use OC\Core\Sharing\Property\PasswordSharePropertyType;
+use OC\Core\Sharing\Recipient\TokenShareRecipientType;
+use OCA\Files\AdvancedCapabilities;
 use OCA\Files\Capabilities;
 use OCA\Files\Collaboration\Resources\Listener;
 use OCA\Files\Collaboration\Resources\ResourceProvider;
-use OCA\Files\Controller\ApiController;
-use OCA\Files\Event\LoadAdditionalScriptsEvent;
+use OCA\Files\ConfigLexicon;
+use OCA\Files\Dashboard\FavoriteWidget;
+use OCA\Files\DirectEditingCapabilities;
+use OCA\Files\Event\LoadSearchPlugins;
 use OCA\Files\Event\LoadSidebar;
-use OCA\Files\Listener\LegacyLoadAdditionalScriptsAdapter;
+use OCA\Files\Listener\BeforeAppConfigSetListener;
+use OCA\Files\Listener\LoadSearchPluginsListener;
 use OCA\Files\Listener\LoadSidebarListener;
+use OCA\Files\Listener\NodeAddedToFavoriteListener;
+use OCA\Files\Listener\NodeRemovedFromFavoriteListener;
+use OCA\Files\Listener\RenderReferenceEventListener;
+use OCA\Files\Listener\RestrictInteractionListener;
+use OCA\Files\Listener\SyncLivePhotosListener;
+use OCA\Files\Listener\UserFirstTimeLoggedInListener;
 use OCA\Files\Notification\Notifier;
+use OCA\Files\PublicCapabilities;
+use OCA\Files\Search\FileAccountScopedSearchProvider;
 use OCA\Files\Search\FilesSearchProvider;
-use OCA\Files\Service\TagService;
-use OCP\Activity\IManager as IActivityManager;
+use OCA\Files\Sharing\Permission\NodeCreateSharePermissionType;
+use OCA\Files\Sharing\Permission\NodeDeleteSharePermissionType;
+use OCA\Files\Sharing\Permission\NodeDownloadSharePermissionType;
+use OCA\Files\Sharing\Permission\NodeReadSharePermissionType;
+use OCA\Files\Sharing\Permission\NodeUpdateSharePermissionType;
+use OCA\Files\Sharing\Property\NodeGridViewSharePropertyType;
+use OCA\Files\Sharing\Source\NodeShareSourceType;
+use OCA\Files_Trashbin\Events\MoveToTrashEvent;
 use OCP\AppFramework\App;
 use OCP\AppFramework\Bootstrap\IBootContext;
 use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
+use OCP\Collaboration\Reference\RenderReferenceEvent;
 use OCP\Collaboration\Resources\IProviderManager;
-use OCP\IConfig;
-use OCP\IL10N;
-use OCP\IPreview;
-use OCP\ISearch;
-use OCP\IRequest;
-use OCP\IServerContainer;
-use OCP\ITagManager;
-use OCP\IUserSession;
-use OCP\Share\IManager as IShareManager;
-use OCP\Util;
-use Psr\Container\ContainerInterface;
+use OCP\Config\BeforeAppConfigSetEvent;
+use OCP\Files\Cache\CacheEntriesRemovedEvent;
+use OCP\Files\Events\Node\BeforeNodeCopiedEvent;
+use OCP\Files\Events\Node\BeforeNodeDeletedEvent;
+use OCP\Files\Events\Node\BeforeNodeRenamedEvent;
+use OCP\Files\Events\Node\NodeCopiedEvent;
+use OCP\Files\Events\Node\NodeDeletedEvent;
+use OCP\Files\Events\NodeAddedToFavorite;
+use OCP\Files\Events\NodeRemovedFromFavorite;
+use OCP\Interaction\RestrictInteractionEvent;
+use OCP\Server;
+use OCP\Share\Events\ShareCreatedEvent;
+use OCP\Share\Events\ShareDeletedEvent;
+use OCP\Share\Events\ShareDeletedFromSelfEvent;
+use OCP\User\Events\UserFirstTimeLoggedInEvent;
 
 class Application extends App implements IBootstrap {
 	public const APP_ID = 'files';
@@ -71,111 +76,82 @@ class Application extends App implements IBootstrap {
 		parent::__construct(self::APP_ID, $urlParams);
 	}
 
+	#[\Override]
 	public function register(IRegistrationContext $context): void {
-		/**
-		 * Controllers
-		 */
-		$context->registerService('APIController', function (ContainerInterface $c) {
-			/** @var IServerContainer $server */
-			$server = $c->get(IServerContainer::class);
-
-			return new ApiController(
-				$c->get('AppName'),
-				$c->get(IRequest::class),
-				$c->get(IUserSession::class),
-				$c->get(TagService::class),
-				$c->get(IPreview::class),
-				$c->get(IShareManager::class),
-				$c->get(IConfig::class),
-				$server->getUserFolder()
-			);
-		});
-
-		/**
-		 * Services
-		 */
-		$context->registerService(TagService::class, function (ContainerInterface $c) {
-			/** @var IServerContainer $server */
-			$server = $c->get(IServerContainer::class);
-
-			return new TagService(
-				$c->get(IUserSession::class),
-				$c->get(IActivityManager::class),
-				$c->get(ITagManager::class)->load(self::APP_ID),
-				$server->getUserFolder(),
-				$server->getEventDispatcher()
-			);
-		});
-
 		/*
 		 * Register capabilities
 		 */
 		$context->registerCapability(Capabilities::class);
+		$context->registerCapability(AdvancedCapabilities::class);
+		$context->registerCapability(DirectEditingCapabilities::class);
+		$context->registerCapability(PublicCapabilities::class);
 
-		$context->registerEventListener(LoadAdditionalScriptsEvent::class, LegacyLoadAdditionalScriptsAdapter::class);
 		$context->registerEventListener(LoadSidebar::class, LoadSidebarListener::class);
+		$context->registerEventListener(RenderReferenceEvent::class, RenderReferenceEventListener::class);
+		$context->registerEventListener(BeforeNodeRenamedEvent::class, SyncLivePhotosListener::class);
+		$context->registerEventListener(BeforeNodeDeletedEvent::class, SyncLivePhotosListener::class);
+		$context->registerEventListener(CacheEntriesRemovedEvent::class, SyncLivePhotosListener::class, 1); // Ensure this happen before the metadata are deleted.
+		$context->registerEventListener(BeforeNodeCopiedEvent::class, SyncLivePhotosListener::class);
+		$context->registerEventListener(NodeCopiedEvent::class, SyncLivePhotosListener::class);
+		$context->registerEventListener(LoadSearchPlugins::class, LoadSearchPluginsListener::class);
+		$context->registerEventListener(NodeAddedToFavorite::class, NodeAddedToFavoriteListener::class);
+		$context->registerEventListener(NodeRemovedFromFavorite::class, NodeRemovedFromFavoriteListener::class);
+		$context->registerEventListener(UserFirstTimeLoggedInEvent::class, UserFirstTimeLoggedInListener::class);
+		$context->registerEventListener(BeforeAppConfigSetEvent::class, BeforeAppConfigSetListener::class);
+
+		$context->registerEventListener(ShareCreatedEvent::class, Listener::class);
+		$context->registerEventListener(ShareDeletedEvent::class, Listener::class);
+		$context->registerEventListener(ShareDeletedFromSelfEvent::class, Listener::class);
 
 		$context->registerSearchProvider(FilesSearchProvider::class);
+		$context->registerAccountScopedSearchProvider(FileAccountScopedSearchProvider::class);
 
 		$context->registerNotifierService(Notifier::class);
+		$context->registerDashboardWidget(FavoriteWidget::class);
+
+		$context->registerConfigLexicon(ConfigLexicon::class);
+
+		$context->registerEventListener(RestrictInteractionEvent::class, RestrictInteractionListener::class);
+
+		$registry = Server::get(ISharingRegistry::class);
+
+		$registry->registerSourceType(Server::get(NodeShareSourceType::class));
+		$registry->markPropertyTypeCompatibleWithSourceType(ExpirationDateSharePropertyType::class, NodeShareSourceType::class);
+		$registry->markPropertyTypeCompatibleWithSourceType(LabelSharePropertyType::class, NodeShareSourceType::class);
+		$registry->markPropertyTypeCompatibleWithSourceType(NoteSharePropertyType::class, NodeShareSourceType::class);
+		$registry->markPropertyTypeCompatibleWithSourceType(PasswordSharePropertyType::class, NodeShareSourceType::class);
+
+		$registry->registerPropertyType(new NodeGridViewSharePropertyType());
+		$registry->markPropertyTypeCompatibleWithSourceType(NodeGridViewSharePropertyType::class, NodeShareSourceType::class);
+		$registry->markPropertyTypeCompatibleWithRecipientType(NodeGridViewSharePropertyType::class, TokenShareRecipientType::class);
+
+		$registry->registerPermissionType(NodeShareSourceType::class, Server::get(NodeCreateSharePermissionType::class));
+		$registry->markPermissionTypeCompatibleWithPermissionPreset(NodeCreateSharePermissionType::class, EditSharePermissionPreset::class);
+
+		$registry->registerPermissionType(NodeShareSourceType::class, new NodeReadSharePermissionType());
+		$registry->markPermissionTypeCompatibleWithPermissionPreset(NodeReadSharePermissionType::class, ViewSharePermissionPreset::class);
+		$registry->markPermissionTypeCompatibleWithPermissionPreset(NodeReadSharePermissionType::class, EditSharePermissionPreset::class);
+
+		$registry->registerPermissionType(NodeShareSourceType::class, Server::get(NodeUpdateSharePermissionType::class));
+		$registry->markPermissionTypeCompatibleWithPermissionPreset(NodeUpdateSharePermissionType::class, EditSharePermissionPreset::class);
+
+		$registry->registerPermissionType(NodeShareSourceType::class, Server::get(NodeDeleteSharePermissionType::class));
+		$registry->markPermissionTypeCompatibleWithPermissionPreset(NodeDeleteSharePermissionType::class, EditSharePermissionPreset::class);
+
+		$registry->registerPermissionType(NodeShareSourceType::class, Server::get(NodeDownloadSharePermissionType::class));
+		$registry->markPermissionTypeCompatibleWithPermissionPreset(NodeDownloadSharePermissionType::class, ViewSharePermissionPreset::class);
+		$registry->markPermissionTypeCompatibleWithPermissionPreset(NodeDownloadSharePermissionType::class, EditSharePermissionPreset::class);
+
+		$context->registerEventListener(NodeDeletedEvent::class, NodeShareSourceType::class);
+		$context->registerEventListener(MoveToTrashEvent::class, NodeShareSourceType::class);
 	}
 
+	#[\Override]
 	public function boot(IBootContext $context): void {
-		$context->injectFn(Closure::fromCallable([$this, 'registerCollaboration']));
-		$context->injectFn([Listener::class, 'register']);
-		$context->injectFn(Closure::fromCallable([$this, 'registerSearchProvider']));
-		$this->registerTemplates();
-		$context->injectFn(Closure::fromCallable([$this, 'registerNavigation']));
-		$this->registerHooks();
+		$context->injectFn(\Closure::fromCallable($this->registerCollaboration(...)));
 	}
 
 	private function registerCollaboration(IProviderManager $providerManager): void {
 		$providerManager->registerResourceProvider(ResourceProvider::class);
-	}
-
-	private function registerSearchProvider(ISearch $search): void {
-		$search->registerProvider(File::class, ['apps' => ['files']]);
-	}
-
-	private function registerTemplates(): void {
-		$templateManager = \OC_Helper::getFileTemplateManager();
-		$templateManager->registerTemplate('application/vnd.oasis.opendocument.presentation', 'core/templates/filetemplates/template.odp');
-		$templateManager->registerTemplate('application/vnd.oasis.opendocument.text', 'core/templates/filetemplates/template.odt');
-		$templateManager->registerTemplate('application/vnd.oasis.opendocument.spreadsheet', 'core/templates/filetemplates/template.ods');
-	}
-
-	private function registerNavigation(IL10N $l10n): void {
-		\OCA\Files\App::getNavigationManager()->add(function () use ($l10n) {
-			return [
-				'id' => 'files',
-				'appname' => 'files',
-				'script' => 'list.php',
-				'order' => 0,
-				'name' => $l10n->t('All files')
-			];
-		});
-		\OCA\Files\App::getNavigationManager()->add(function () use ($l10n) {
-			return [
-				'id' => 'recent',
-				'appname' => 'files',
-				'script' => 'recentlist.php',
-				'order' => 2,
-				'name' => $l10n->t('Recent')
-			];
-		});
-		\OCA\Files\App::getNavigationManager()->add(function () use ($l10n) {
-			return [
-				'id' => 'favorites',
-				'appname' => 'files',
-				'script' => 'simplelist.php',
-				'order' => 5,
-				'name' => $l10n->t('Favorites'),
-				'expandedState' => 'show_Quick_Access'
-			];
-		});
-	}
-
-	private function registerHooks(): void {
-		Util::connectHook('\OCP\Config', 'js', '\OCA\Files\App', 'extendJsConfig');
 	}
 }

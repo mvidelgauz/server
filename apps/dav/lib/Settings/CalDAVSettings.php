@@ -1,43 +1,32 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright 2017, Georg Ehrke <oc.list@georgehrke.com>
- *
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Thomas Citharel <nextcloud@tcit.fr>
- * @author François Freitag <mail@franek.fr>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Settings;
 
 use OCA\DAV\AppInfo\Application;
+use OCP\App\IAppManager;
 use OCP\AppFramework\Http\TemplateResponse;
-use OCP\IConfig;
 use OCP\AppFramework\Services\IInitialState;
-use OCP\Settings\ISettings;
+use OCP\IConfig;
+use OCP\IURLGenerator;
+use OCP\Settings\IDelegatedSettings;
+use OCP\Util;
 
-class CalDAVSettings implements ISettings {
+class CalDAVSettings implements IDelegatedSettings {
 
-	/** @var IConfig */
-	private $config;
-
-	/** @var IInitialState */
-	private $initialState;
+	private const array defaults = [
+		'sendInvitations' => 'yes',
+		'generateBirthdayCalendar' => 'yes',
+		'sendEventReminders' => 'yes',
+		'sendEventRemindersToSharedUsers' => 'yes',
+		'sendEventRemindersPush' => 'yes',
+	];
 
 	/**
 	 * CalDAVSettings constructor.
@@ -45,36 +34,53 @@ class CalDAVSettings implements ISettings {
 	 * @param IConfig $config
 	 * @param IInitialState $initialState
 	 */
-	public function __construct(IConfig $config, IInitialState $initialState) {
-		$this->config = $config;
-		$this->initialState = $initialState;
+	public function __construct(
+		private IConfig $config,
+		private IInitialState $initialState,
+		private IURLGenerator $urlGenerator,
+		private IAppManager $appManager,
+	) {
 	}
 
+	#[\Override]
 	public function getForm(): TemplateResponse {
-		$defaults = [
-			'sendInvitations' => 'yes',
-			'generateBirthdayCalendar' => 'yes',
-			'sendEventReminders' => 'yes',
-			'sendEventRemindersPush' => 'no',
-		];
-		foreach ($defaults as $key => $default) {
+		$this->initialState->provideInitialState('userSyncCalendarsDocUrl', $this->urlGenerator->linkToDocs('user-sync-calendars'));
+		foreach (self::defaults as $key => $default) {
 			$value = $this->config->getAppValue(Application::APP_ID, $key, $default);
 			$this->initialState->provideInitialState($key, $value === 'yes');
 		}
+
+		Util::addScript(Application::APP_ID, 'settings-admin-caldav');
+		Util::addStyle(Application::APP_ID, 'settings-admin-caldav');
 		return new TemplateResponse(Application::APP_ID, 'settings-admin-caldav');
 	}
 
-	/**
-	 * @return string
-	 */
-	public function getSection() {
+	#[\Override]
+	public function getSection(): ?string {
+		if (!$this->appManager->isBackendRequired(IAppManager::BACKEND_CALDAV)) {
+			return null;
+		}
+
 		return 'groupware';
 	}
 
 	/**
 	 * @return int
 	 */
+	#[\Override]
 	public function getPriority() {
 		return 10;
+	}
+
+	#[\Override]
+	public function getName(): ?string {
+		return null; // Only setting in this section
+	}
+
+	#[\Override]
+	public function getAuthorizedAppConfig(): array {
+		return [
+			'dav' => array_keys(self::defaults),
+		];
 	}
 }

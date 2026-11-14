@@ -1,25 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\DAV\DAV;
 
 use Sabre\DAV\Auth\Backend\BackendInterface;
@@ -66,16 +52,18 @@ class PublicAuth implements BackendInterface {
 	 * @param ResponseInterface $response
 	 * @return array
 	 */
+	#[\Override]
 	public function check(RequestInterface $request, ResponseInterface $response) {
 		if ($this->isRequestPublic($request)) {
-			return [true, "principals/system/public"];
+			return [true, 'principals/system/public'];
 		}
-		return [false, "No public access to this resource."];
+		return [false, 'No public access to this resource.'];
 	}
 
 	/**
 	 * @inheritdoc
 	 */
+	#[\Override]
 	public function challenge(RequestInterface $request, ResponseInterface $response) {
 	}
 
@@ -86,7 +74,7 @@ class PublicAuth implements BackendInterface {
 	private function isRequestPublic(RequestInterface $request) {
 		$url = $request->getPath();
 		$matchingUrls = array_filter($this->publicURLs, function ($publicUrl) use ($url) {
-			return strpos($url, $publicUrl, 0) === 0;
+			return str_starts_with($url, $publicUrl);
 		});
 		return !empty($matchingUrls);
 	}

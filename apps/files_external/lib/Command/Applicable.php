@@ -1,33 +1,18 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_External\Command;
 
 use OC\Core\Command\Base;
 use OCA\Files_External\Lib\StorageConfig;
 use OCA\Files_External\NotFoundException;
 use OCA\Files_External\Service\GlobalStoragesService;
+use OCP\AppFramework\Http;
 use OCP\IGroupManager;
 use OCP\IUserManager;
 use Symfony\Component\Console\Input\InputArgument;
@@ -36,33 +21,16 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class Applicable extends Base {
-	/**
-	 * @var GlobalStoragesService
-	 */
-	protected $globalService;
-
-	/**
-	 * @var IUserManager
-	 */
-	private $userManager;
-
-	/**
-	 * @var IGroupManager
-	 */
-	private $groupManager;
-
 	public function __construct(
-		GlobalStoragesService $globalService,
-		IUserManager $userManager,
-		IGroupManager $groupManager
+		protected GlobalStoragesService $globalService,
+		private IUserManager $userManager,
+		private IGroupManager $groupManager,
 	) {
 		parent::__construct();
-		$this->globalService = $globalService;
-		$this->userManager = $userManager;
-		$this->groupManager = $groupManager;
 	}
 
-	protected function configure() {
+	#[\Override]
+	protected function configure(): void {
 		$this
 			->setName('files_external:applicable')
 			->setDescription('Manage applicable users and groups for a mount')
@@ -99,18 +67,19 @@ class Applicable extends Base {
 		parent::configure();
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$mountId = $input->getArgument('mount_id');
 		try {
 			$mount = $this->globalService->getStorage($mountId);
 		} catch (NotFoundException $e) {
 			$output->writeln('<error>Mount with id "' . $mountId . ' not found, check "occ files_external:list" to get available mounts</error>');
-			return 404;
+			return Http::STATUS_NOT_FOUND;
 		}
 
-		if ($mount->getType() === StorageConfig::MOUNT_TYPE_PERSONAl) {
+		if ($mount->getType() === StorageConfig::MOUNT_TYPE_PERSONAL) {
 			$output->writeln('<error>Can\'t change applicables on personal mounts</error>');
-			return 1;
+			return self::FAILURE;
 		}
 
 		$addUsers = $input->getOption('add-user');
@@ -125,13 +94,13 @@ class Applicable extends Base {
 			foreach ($addUsers as $addUser) {
 				if (!$this->userManager->userExists($addUser)) {
 					$output->writeln('<error>User "' . $addUser . '" not found</error>');
-					return 404;
+					return Http::STATUS_NOT_FOUND;
 				}
 			}
 			foreach ($addGroups as $addGroup) {
 				if (!$this->groupManager->groupExists($addGroup)) {
 					$output->writeln('<error>Group "' . $addGroup . '" not found</error>');
-					return 404;
+					return Http::STATUS_NOT_FOUND;
 				}
 			}
 
@@ -153,6 +122,6 @@ class Applicable extends Base {
 			'users' => $applicableUsers,
 			'groups' => $applicableGroups
 		]);
-		return 0;
+		return self::SUCCESS;
 	}
 }

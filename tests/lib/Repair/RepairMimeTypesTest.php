@@ -1,65 +1,75 @@
 <?php
+
 /**
- * Copyright (c) 2014 Vincent Petry <pvince81@owncloud.com>
- * Copyright (c) 2014-2015 Olivier Paroz owncloud@oparoz.com
- * This file is licensed under the Affero General Public License version 3 or
- * later.
- * See the COPYING-README file.
+ * SPDX-FileCopyrightText: 2017-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Repair;
 
 use OC\Files\Storage\Temporary;
+use OC\Repair\RepairMimeTypes;
 use OCP\Files\IMimeTypeLoader;
+use OCP\IAppConfig;
 use OCP\IConfig;
+use OCP\IDBConnection;
 use OCP\Migration\IOutput;
-use OCP\Migration\IRepairStep;
+use OCP\Server;
 
 /**
  * Tests for the converting of legacy storages to home storages.
  *
- * @group DB
  *
  * @see \OC\Repair\RepairMimeTypes
  */
+#[\PHPUnit\Framework\Attributes\Group('DB')]
 class RepairMimeTypesTest extends \Test\TestCase {
 
-	/** @var IRepairStep */
-	private $repair;
+	private RepairMimeTypes $repair;
+	private Temporary $storage;
+	private IMimeTypeLoader $mimetypeLoader;
+	private IDBConnection $db;
 
-	/** @var Temporary */
-	private $storage;
-
-	/** @var IMimeTypeLoader */
-	private $mimetypeLoader;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->savedMimetypeLoader = \OC::$server->getMimeTypeLoader();
-		$this->mimetypeLoader = \OC::$server->getMimeTypeLoader();
+		$this->mimetypeLoader = Server::get(IMimeTypeLoader::class);
+		$this->db = Server::get(IDBConnection::class);
 
-		/** @var IConfig | \PHPUnit\Framework\MockObject\MockObject $config */
 		$config = $this->getMockBuilder(IConfig::class)
 			->disableOriginalConstructor()
 			->getMock();
-		$config->expects($this->any())
-			->method('getSystemValue')
+		$config->method('getSystemValueString')
 			->with('version')
 			->willReturn('11.0.0.0');
 
-		$this->storage = new \OC\Files\Storage\Temporary([]);
+		$appConfig = $this->getMockBuilder(IAppConfig::class)
+			->disableOriginalConstructor()
+			->getMock();
+		$appConfig->method('getValueString')
+			->with('files', 'mimetype_version')
+			->willReturn('11.0.0.0');
 
-		$this->repair = new \OC\Repair\RepairMimeTypes($config, \OC::$server->getDatabaseConnection());
+		$this->storage = new Temporary([]);
+		$this->storage->getScanner()->scan('');
+
+		$this->repair = new RepairMimeTypes(
+			$config,
+			$appConfig,
+			Server::get(IDBConnection::class),
+		);
 	}
 
+	#[\Override]
 	protected function tearDown(): void {
 		$this->storage->getCache()->clear();
 
-		$qb = \OC::$server->getDatabaseConnection()->getQueryBuilder();
+		$qb = $this->db->getQueryBuilder();
 		$qb->delete('storages')
 			->where($qb->expr()->eq('id', $qb->createNamedParameter($this->storage->getId())));
-		$qb->execute();
+		$qb->executeStatement();
 
 		$this->clearMimeTypes();
 
@@ -67,9 +77,9 @@ class RepairMimeTypesTest extends \Test\TestCase {
 	}
 
 	private function clearMimeTypes() {
-		$qb = \OC::$server->getDatabaseConnection()->getQueryBuilder();
+		$qb = $this->db->getQueryBuilder();
 		$qb->delete('mimetypes');
-		$qb->execute();
+		$qb->executeStatement();
 
 		$this->mimetypeLoader->reset();
 	}
@@ -115,7 +125,7 @@ class RepairMimeTypesTest extends \Test\TestCase {
 	/**
 	 * Test renaming the additional image mime types
 	 */
-	public function testRenameImageTypes() {
+	public function testRenameImageTypes(): void {
 		$currentMimeTypes = [
 			['test.jp2', 'application/octet-stream'],
 			['test.webp', 'application/octet-stream'],
@@ -130,9 +140,40 @@ class RepairMimeTypesTest extends \Test\TestCase {
 	}
 
 	/**
+	 * Test renaming AVIF images, which had no mapping and so were stored
+	 * as whatever the content sniffer made of them, or as nothing at all
+	 */
+	public function testRenameAvifType(): void {
+		$currentMimeTypes = [
+			['test.avif', 'application/octet-stream'],
+		];
+
+		$fixedMimeTypes = [
+			['test.avif', 'image/avif'],
+		];
+
+		$this->renameMimeTypes($currentMimeTypes, $fixedMimeTypes);
+	}
+
+	/**
+	 * Test renaming JPEG XL images, which had no mapping either
+	 */
+	public function testRenameJxlType(): void {
+		$currentMimeTypes = [
+			['test.jxl', 'application/octet-stream'],
+		];
+
+		$fixedMimeTypes = [
+			['test.jxl', 'image/jxl'],
+		];
+
+		$this->renameMimeTypes($currentMimeTypes, $fixedMimeTypes);
+	}
+
+	/**
 	 * Test renaming the richdocuments additional office mime types
 	 */
-	public function testRenameWindowsProgramTypes() {
+	public function testRenameWindowsProgramTypes(): void {
 		$currentMimeTypes = [
 			['test.htaccess', 'application/octet-stream'],
 			['.htaccess', 'application/octet-stream'],
@@ -154,7 +195,7 @@ class RepairMimeTypesTest extends \Test\TestCase {
 	 * Test that nothing happens and no error happens when all mimetypes are
 	 * already correct and no old ones exist..
 	 */
-	public function testDoNothingWhenOnlyNewFiles() {
+	public function testDoNothingWhenOnlyNewFiles(): void {
 		$currentMimeTypes = [
 			['test.doc', 'application/msword'],
 			['test.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
@@ -269,7 +310,7 @@ class RepairMimeTypesTest extends \Test\TestCase {
 	/**
 	 * Test that mime type renaming does not affect folders
 	 */
-	public function testDoNotChangeFolderMimeType() {
+	public function testDoNotChangeFolderMimeType(): void {
 		$currentMimeTypes = [
 			['test.conf', 'httpd/unix-directory'],
 			['test.cnf', 'httpd/unix-directory'],

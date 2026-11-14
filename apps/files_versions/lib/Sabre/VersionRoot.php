@@ -3,27 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2018, Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Files_Versions\Sabre;
 
 use OCA\Files_Versions\Versions\IVersionManager;
@@ -36,52 +19,48 @@ use Sabre\DAV\ICollection;
 
 class VersionRoot implements ICollection {
 
-	/** @var IUser */
-	private $user;
-
-	/** @var IRootFolder */
-	private $rootFolder;
-
-	/** @var IVersionManager */
-	private $versionManager;
-
-	public function __construct(IUser $user, IRootFolder $rootFolder, IVersionManager $versionManager) {
-		$this->user = $user;
-		$this->rootFolder = $rootFolder;
-		$this->versionManager = $versionManager;
+	public function __construct(
+		private IUser $user,
+		private IRootFolder $rootFolder,
+		private IVersionManager $versionManager,
+	) {
 	}
 
+	#[\Override]
 	public function delete() {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getName(): string {
 		return 'versions';
 	}
 
+	#[\Override]
 	public function setName($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function createFile($name, $data = null) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function createDirectory($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getChild($name) {
 		$userFolder = $this->rootFolder->getUserFolder($this->user->getUID());
 
 		$fileId = (int)$name;
-		$nodes = $userFolder->getById($fileId);
+		$node = $userFolder->getFirstNodeById($fileId);
 
-		if ($nodes === []) {
+		if (!$node) {
 			throw new NotFound();
 		}
-
-		$node = array_pop($nodes);
 
 		if (!$node instanceof File) {
 			throw new NotFound();
@@ -90,10 +69,12 @@ class VersionRoot implements ICollection {
 		return new VersionCollection($node, $this->user, $this->versionManager);
 	}
 
+	#[\Override]
 	public function getChildren(): array {
 		return [];
 	}
 
+	#[\Override]
 	public function childExists($name): bool {
 		try {
 			$this->getChild($name);
@@ -103,6 +84,7 @@ class VersionRoot implements ICollection {
 		}
 	}
 
+	#[\Override]
 	public function getLastModified(): int {
 		return 0;
 	}

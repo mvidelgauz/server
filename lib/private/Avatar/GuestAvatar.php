@@ -3,30 +3,17 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2018, Michael Weimann <mail@michael-weimann.eu>
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author Michael Weimann <mail@michael-weimann.eu>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Avatar;
 
+use OCP\Color;
 use OCP\Files\SimpleFS\InMemoryFile;
+use OCP\Files\SimpleFS\ISimpleFile;
+use OCP\IConfig;
+use OCP\IImage;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -34,37 +21,31 @@ use Psr\Log\LoggerInterface;
  */
 class GuestAvatar extends Avatar {
 	/**
-	 * Holds the guest user display name.
-	 *
-	 * @var string
-	 */
-	private $userDisplayName;
-
-	/**
 	 * GuestAvatar constructor.
 	 *
 	 * @param string $userDisplayName The guest user display name
-	 * @param LoggerInterface $logger The logger
 	 */
-	public function __construct(string $userDisplayName, LoggerInterface $logger) {
-		parent::__construct($logger);
-		$this->userDisplayName = $userDisplayName;
+	public function __construct(
+		private string $userDisplayName,
+		IConfig $config,
+		LoggerInterface $logger,
+	) {
+		parent::__construct($config, $logger);
 	}
 
 	/**
 	 * Tests if the user has an avatar.
-	 *
-	 * @return true Guests always have an avatar.
 	 */
-	public function exists() {
+	#[\Override]
+	public function exists(): bool {
+		// Guests always have an avatar.
 		return true;
 	}
 
 	/**
 	 * Returns the guest user display name.
-	 *
-	 * @return string
 	 */
+	#[\Override]
 	public function getDisplayName(): string {
 		return $this->userDisplayName;
 	}
@@ -72,28 +53,27 @@ class GuestAvatar extends Avatar {
 	/**
 	 * Setting avatars isn't implemented for guests.
 	 *
-	 * @param \OCP\IImage|resource|string $data
-	 * @return void
+	 * @param IImage|resource|string $data
 	 */
-	public function set($data) {
+	#[\Override]
+	public function set($data): void {
 		// unimplemented for guest user avatars
 	}
 
 	/**
 	 * Removing avatars isn't implemented for guests.
 	 */
-	public function remove() {
+	#[\Override]
+	public function remove(bool $silent = false): void {
 		// unimplemented for guest user avatars
 	}
 
 	/**
 	 * Generates an avatar for the guest.
-	 *
-	 * @param int $size The desired image size.
-	 * @return InMemoryFile
 	 */
-	public function getFile($size) {
-		$avatar = $this->generateAvatar($this->userDisplayName, $size);
+	#[\Override]
+	public function getFile(int $size, bool $darkTheme = false): ISimpleFile {
+		$avatar = $this->generateAvatar($this->userDisplayName, $size, $darkTheme);
 		return new InMemoryFile('avatar.png', $avatar);
 	}
 
@@ -103,9 +83,9 @@ class GuestAvatar extends Avatar {
 	 * @param string $feature The changed feature
 	 * @param mixed $oldValue The previous value
 	 * @param mixed $newValue The new value
-	 * @return void
 	 */
-	public function userChanged($feature, $oldValue, $newValue) {
+	#[\Override]
+	public function userChanged(string $feature, $oldValue, $newValue): void {
 		if ($feature === 'displayName') {
 			$this->userDisplayName = $newValue;
 		}
@@ -113,10 +93,18 @@ class GuestAvatar extends Avatar {
 
 	/**
 	 * Guests don't have custom avatars.
-	 *
-	 * @return bool
 	 */
+	#[\Override]
 	public function isCustomAvatar(): bool {
 		return false;
+	}
+
+	/**
+	 * Different color than for authorized user with the same name
+	 * to make it harder to impersonate people.
+	 */
+	#[\Override]
+	public function avatarBackgroundColor(string $hash): Color {
+		return parent::avatarBackgroundColor($hash . ' (guest)');
 	}
 }

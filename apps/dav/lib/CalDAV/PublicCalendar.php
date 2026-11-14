@@ -1,27 +1,10 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017, Georg Ehrke
- *
- * @author Gary Kim <gary@garykim.dev>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV;
 
 use Sabre\DAV\Exception\NotFound;
@@ -31,9 +14,9 @@ class PublicCalendar extends Calendar {
 	/**
 	 * @param string $name
 	 * @throws NotFound
-	 * @return PublicCalendarObject
 	 */
-	public function getChild($name) {
+	#[\Override]
+	public function getChild($name): PublicCalendarObject {
 		$obj = $this->caldavBackend->getCalendarObject($this->calendarInfo['id'], $name);
 
 		if (!$obj) {
@@ -50,7 +33,8 @@ class PublicCalendar extends Calendar {
 	/**
 	 * @return PublicCalendarObject[]
 	 */
-	public function getChildren() {
+	#[\Override]
+	public function getChildren(): array {
 		$objs = $this->caldavBackend->getCalendarObjects($this->calendarInfo['id']);
 		$children = [];
 		foreach ($objs as $obj) {
@@ -67,7 +51,8 @@ class PublicCalendar extends Calendar {
 	 * @param string[] $paths
 	 * @return PublicCalendarObject[]
 	 */
-	public function getMultipleChildren(array $paths) {
+	#[\Override]
+	public function getMultipleChildren(array $paths): array {
 		$objs = $this->caldavBackend->getMultipleCalendarObjects($this->calendarInfo['id'], $paths);
 		$children = [];
 		foreach ($objs as $obj) {
@@ -81,10 +66,10 @@ class PublicCalendar extends Calendar {
 	}
 
 	/**
-	 * public calendars are always shared
-	 * @return bool
+	 * Public calendars are always shared
 	 */
-	protected function isShared() {
+	#[\Override]
+	public function isShared(): bool {
 		return true;
 	}
 }

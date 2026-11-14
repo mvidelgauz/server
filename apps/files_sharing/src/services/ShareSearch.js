@@ -1,28 +1,12 @@
 /**
- * @copyright Copyright (c) 2019 John Molakvoæ <skjnldsv@protonmail.com>
- *
- * @author John Molakvoæ <skjnldsv@protonmail.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export default class ShareSearch {
+import logger from './logger.ts'
 
-	_state;
+export default class ShareSearch {
+	_state
 
 	constructor() {
 		// init empty state
@@ -30,7 +14,7 @@ export default class ShareSearch {
 
 		// init default values
 		this._state.results = []
-		console.debug('OCA.Sharing.ShareSearch initialized')
+		logger.debug('OCA.Sharing.ShareSearch initialized')
 	}
 
 	/**
@@ -38,7 +22,7 @@ export default class ShareSearch {
 	 *
 	 * @readonly
 	 * @memberof ShareSearch
-	 * @returns {Object} the data state
+	 * @return {object} the data state
 	 */
 	get state() {
 		return this._state
@@ -49,14 +33,14 @@ export default class ShareSearch {
 	 * Mostly used by the guests app.
 	 * We should consider deprecation and add results via php ?
 	 *
-	 * @param {Object} result entry to append
+	 * @param {object} result entry to append
 	 * @param {string} [result.user] entry user
 	 * @param {string} result.displayName entry first line
 	 * @param {string} [result.desc] entry second line
 	 * @param {string} [result.icon] entry icon
-	 * @param {function} result.handler function to run on entry selection
-	 * @param {function} [result.condition] condition to add entry or not
-	 * @returns {boolean}
+	 * @param {Function} result.handler function to run on entry selection
+	 * @param {Function} [result.condition] condition to add entry or not
+	 * @return {boolean}
 	 */
 	addNewResult(result) {
 		if (result.displayName.trim() !== ''
@@ -64,8 +48,7 @@ export default class ShareSearch {
 			this._state.results.push(result)
 			return true
 		}
-		console.error('Invalid search result provided', result)
+		logger.error('Invalid search result provided', { result })
 		return false
 	}
-
 }

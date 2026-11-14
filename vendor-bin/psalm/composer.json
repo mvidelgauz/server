@@ -1,10 +1,14 @@
 {
 	"config": {
 		"platform": {
-			"php": "7.3"
+			"php": "8.3.16"
+		},
+		"allow-plugins": {
+			"composer/package-versions-deprecated": true
 		}
 	},
-    "require": {
-        "vimeo/psalm": "4.8.1"
-    }
+	"require": {
+		"psalm/plugin-phpunit": "^0.19.7",
+		"vimeo/psalm": "^6.20"
+	}
 }

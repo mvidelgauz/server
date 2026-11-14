@@ -1,24 +1,9 @@
 <?php
 
 /**
- * ownCloud - App Framework
- *
- * @author Bernhard Posselt
- * @copyright 2012 Bernhard Posselt <dev@bernhard-posselt.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
- * License as published by the Free Software Foundation; either
- * version 3 of the License, or any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU AFFERO GENERAL PUBLIC LICENSE for more details.
- *
- * You should have received a copy of the GNU Affero General Public
- * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\AppFramework\Http;
@@ -28,38 +13,47 @@ use OCP\AppFramework\Http\DownloadResponse;
 class ChildDownloadResponse extends DownloadResponse {
 };
 
-
 class DownloadResponseTest extends \Test\TestCase {
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 	}
 
-	public function testHeaders() {
+	public function testHeaders(): void {
 		$response = new ChildDownloadResponse('file', 'content');
 		$headers = $response->getHeaders();
 
-		$this->assertEquals('attachment; filename="file"', $headers['Content-Disposition']);
+		$this->assertEquals('attachment; filename=file', $headers['Content-Disposition']);
 		$this->assertEquals('content', $headers['Content-Type']);
 	}
 
-	/**
-	 * @dataProvider filenameEncodingProvider
-	 */
-	public function testFilenameEncoding(string $input, string $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('filenameEncodingProvider')]
+	public function testFilenameEncoding(string $input, string $expectedDisposition): void {
 		$response = new ChildDownloadResponse($input, 'content');
 		$headers = $response->getHeaders();
 
-		$this->assertEquals('attachment; filename="'.$expected.'"', $headers['Content-Disposition']);
+		$this->assertEquals($expectedDisposition, $headers['Content-Disposition']);
 	}
 
-	public function filenameEncodingProvider() : array {
+	public static function filenameEncodingProvider(): array {
 		return [
-			['TestName.txt', 'TestName.txt'],
-			['A "Quoted" Filename.txt', 'A \\"Quoted\\" Filename.txt'],
-			['A "Quoted" Filename.txt', 'A \\"Quoted\\" Filename.txt'],
-			['A "Quoted" Filename With A Backslash \\.txt', 'A \\"Quoted\\" Filename With A Backslash \\\\.txt'],
-			['A "Very" Weird Filename \ / & <> " >\'""""\.text', 'A \\"Very\\" Weird Filename \\\\ / & <> \\" >\'\\"\\"\\"\\"\\\\.text'],
-			['\\\\\\\\\\\\', '\\\\\\\\\\\\\\\\\\\\\\\\'],
+			['TestName.txt', 'attachment; filename=TestName.txt'],
+			['A "Quoted" Filename.txt', 'attachment; filename="A \"Quoted\" Filename.txt"'],
+			['A "Quoted" Filename.txt', 'attachment; filename="A \"Quoted\" Filename.txt"'],
+			['A "Quoted" Filename With A Backslash \\.txt', 'attachment; filename="A \"Quoted\" Filename With A Backslash -.txt"'],
+			['A "Very" Weird Filename \ / & <> " >\'""""\.text', 'attachment; filename="A \"Very\" Weird Filename - - & <> \" >\'\"\"\"\"-.text"'],
+			['\\\\\\\\\\\\', 'attachment; filename=------'],
 		];
+	}
+
+	public function testSpecialCharactersInFilename(): void {
+		$filename = 'document "draft" with; special&chars.pdf';
+		$response = new ChildDownloadResponse($filename, 'application/pdf');
+		$headers = $response->getHeaders();
+
+		$this->assertEquals(
+			'attachment; filename="document \"draft\" with; special&chars.pdf"',
+			$headers['Content-Disposition']
+		);
 	}
 }

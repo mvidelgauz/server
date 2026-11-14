@@ -1,25 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\App;
 
 /**
@@ -31,24 +17,30 @@ namespace OC\App;
  * @package OC\App
  */
 class PlatformRepository {
+	private array $packages;
+
 	public function __construct() {
 		$this->packages = $this->initialize();
 	}
 
-	protected function initialize() {
+	protected function initialize(): array {
 		$loadedExtensions = get_loaded_extensions();
 		$packages = [];
 
 		// Extensions scanning
 		foreach ($loadedExtensions as $name) {
-			if (in_array($name, ['standard', 'Core'])) {
+			if (in_array($name, ['standard', 'Core'], true)) {
 				continue;
 			}
 
 			$ext = new \ReflectionExtension($name);
 			try {
 				$prettyVersion = $ext->getVersion();
-				$prettyVersion = $this->normalizeVersion($prettyVersion);
+				/** @psalm-suppress TypeDoesNotContainNull
+				 * @psalm-suppress RedundantCondition
+				 * TODO Remove these annotations once psalm fixes the method signature ( https://github.com/vimeo/psalm/pull/8655 )
+				 */
+				$prettyVersion = $this->normalizeVersion($prettyVersion ?? '0');
 			} catch (\UnexpectedValueException $e) {
 				$prettyVersion = '0';
 				$prettyVersion = $this->normalizeVersion($prettyVersion);
@@ -63,10 +55,6 @@ class PlatformRepository {
 				case 'curl':
 					$curlVersion = curl_version();
 					$prettyVersion = $curlVersion['version'];
-					break;
-
-				case 'iconv':
-					$prettyVersion = ICONV_VERSION;
 					break;
 
 				case 'intl':
@@ -113,6 +101,9 @@ class PlatformRepository {
 					continue 2;
 			}
 
+			if ($prettyVersion === null) {
+				continue;
+			}
 			try {
 				$prettyVersion = $this->normalizeVersion($prettyVersion);
 			} catch (\UnexpectedValueException $e) {
@@ -125,15 +116,11 @@ class PlatformRepository {
 		return $packages;
 	}
 
-	private function buildPackageName($name) {
+	private function buildPackageName(string $name): string {
 		return str_replace(' ', '-', $name);
 	}
 
-	/**
-	 * @param $name
-	 * @return string
-	 */
-	public function findLibrary($name) {
+	public function findLibrary(string $name): ?string {
 		$extName = $this->buildPackageName($name);
 		if (isset($this->packages[$extName])) {
 			return $this->packages[$extName];
@@ -141,21 +128,19 @@ class PlatformRepository {
 		return null;
 	}
 
-	private static $modifierRegex = '[._-]?(?:(stable|beta|b|RC|alpha|a|patch|pl|p)(?:[.-]?(\d+))?)?([.-]?dev)?';
+	private const string MODIFIER_REGEX = '[._-]?(?:(stable|beta|b|RC|alpha|a|patch|pl|p)(?:[.-]?(\d+))?)?([.-]?dev)?';
 
 	/**
 	 * Normalizes a version string to be able to perform comparisons on it
 	 *
 	 * https://github.com/composer/composer/blob/master/src/Composer/Package/Version/VersionParser.php#L94
 	 *
-	 * @param string $version
 	 * @param string $fullVersion optional complete version string to give more context
 	 * @throws \UnexpectedValueException
-	 * @return string
 	 */
-	public function normalizeVersion($version, $fullVersion = null) {
+	public function normalizeVersion(string $version, ?string $fullVersion = null): string {
 		$version = trim($version);
-		if (null === $fullVersion) {
+		if ($fullVersion === null) {
 			$fullVersion = $version;
 		}
 		// ignore aliases and just assume the alias is required instead of the source
@@ -166,20 +151,20 @@ class PlatformRepository {
 		if (preg_match('{^(?:dev-)?(?:master|trunk|default)$}i', $version)) {
 			return '9999999-dev';
 		}
-		if ('dev-' === strtolower(substr($version, 0, 4))) {
+		if (strtolower(substr($version, 0, 4)) === 'dev-') {
 			return 'dev-' . substr($version, 4);
 		}
 		// match classical versioning
-		if (preg_match('{^v?(\d{1,3})(\.\d+)?(\.\d+)?(\.\d+)?' . self::$modifierRegex . '$}i', $version, $matches)) {
+		if (preg_match('{^v?(\d{1,3})(\.\d+)?(\.\d+)?(\.\d+)?' . self::MODIFIER_REGEX . '$}i', $version, $matches)) {
 			$version = $matches[1]
 				. (!empty($matches[2]) ? $matches[2] : '.0')
 				. (!empty($matches[3]) ? $matches[3] : '.0')
 				. (!empty($matches[4]) ? $matches[4] : '.0');
 			$index = 5;
-		} elseif (preg_match('{^v?(\d{4}(?:[.:-]?\d{2}){1,6}(?:[.:-]?\d{1,3})?)' . self::$modifierRegex . '$}i', $version, $matches)) { // match date-based versioning
+		} elseif (preg_match('{^v?(\d{4}(?:[.:-]?\d{2}){1,6}(?:[.:-]?\d{1,3})?)' . self::MODIFIER_REGEX . '$}i', $version, $matches)) { // match date-based versioning
 			$version = preg_replace('{\D}', '-', $matches[1]);
 			$index = 2;
-		} elseif (preg_match('{^v?(\d{4,})(\.\d+)?(\.\d+)?(\.\d+)?' . self::$modifierRegex . '$}i', $version, $matches)) {
+		} elseif (preg_match('{^v?(\d{4,})(\.\d+)?(\.\d+)?(\.\d+)?' . self::MODIFIER_REGEX . '$}i', $version, $matches)) {
 			$version = $matches[1]
 				. (!empty($matches[2]) ? $matches[2] : '.0')
 				. (!empty($matches[3]) ? $matches[3] : '.0')
@@ -189,7 +174,7 @@ class PlatformRepository {
 		// add version modifiers if a version was matched
 		if (isset($index)) {
 			if (!empty($matches[$index])) {
-				if ('stable' === $matches[$index]) {
+				if ($matches[$index] === 'stable') {
 					return $version;
 				}
 				$version .= '-' . $this->expandStability($matches[$index]) . (!empty($matches[$index + 1]) ? $matches[$index + 1] : '');
@@ -208,10 +193,7 @@ class PlatformRepository {
 		throw new \UnexpectedValueException('Invalid version string "' . $version . '"' . $extraMessage);
 	}
 
-	/**
-	 * @param string $stability
-	 */
-	private function expandStability($stability) {
+	private function expandStability(string $stability): string {
 		$stability = strtolower($stability);
 		switch ($stability) {
 			case 'a':

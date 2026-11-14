@@ -3,54 +3,36 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2017 Lukas Reschke <lukas@statuscode.ch>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Security\RateLimiting;
 
 use OC\Security\RateLimiting\Backend\IBackend;
+use OC\Security\RateLimiting\Exception\RateLimitExceededException;
 use OC\Security\RateLimiting\Limiter;
 use OCP\IUser;
+use OCP\Security\RateLimiting\ILimiter;
+use Psr\Log\LoggerInterface;
 use Test\TestCase;
 
 class LimiterTest extends TestCase {
-	/** @var IBackend|\PHPUnit\Framework\MockObject\MockObject */
-	private $backend;
-	/** @var Limiter */
-	private $limiter;
 
+	private ILimiter $limiter;
+
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->backend = $this->createMock(IBackend::class);
-
-		$this->limiter = new Limiter(
-			$this->backend
-		);
+		$this->limiter = $this->createInstanceWithMocks(Limiter::class);
 	}
 
-
-	public function testRegisterAnonRequestExceeded() {
-		$this->expectException(\OC\Security\RateLimiting\Exception\RateLimitExceededException::class);
+	public function testRegisterAnonRequestExceeded(): void {
+		$this->expectException(RateLimitExceededException::class);
 		$this->expectExceptionMessage('Rate limit exceeded');
 
-		$this->backend
+		$this->getAutoMock(IBackend::class)
 			->expects($this->once())
 			->method('getAttempts')
 			->with(
@@ -58,12 +40,14 @@ class LimiterTest extends TestCase {
 				'4664f0d9c88dcb7552be47b37bb52ce35977b2e60e1ac13757cf625f31f87050a41f3da064887fa87d49fd042e4c8eb20de8f10464877d3959677ab011b73a47'
 			)
 			->willReturn(101);
+		$this->getAutoMock(LoggerInterface::class)->expects($this->once())
+			->method('info');
 
 		$this->limiter->registerAnonRequest('MyIdentifier', 100, 100, '127.0.0.1');
 	}
 
-	public function testRegisterAnonRequestSuccess() {
-		$this->backend
+	public function testRegisterAnonRequestSuccess(): void {
+		$this->getAutoMock(IBackend::class)
 			->expects($this->once())
 			->method('getAttempts')
 			->with(
@@ -71,7 +55,7 @@ class LimiterTest extends TestCase {
 				'4664f0d9c88dcb7552be47b37bb52ce35977b2e60e1ac13757cf625f31f87050a41f3da064887fa87d49fd042e4c8eb20de8f10464877d3959677ab011b73a47'
 			)
 			->willReturn(99);
-		$this->backend
+		$this->getAutoMock(IBackend::class)
 			->expects($this->once())
 			->method('registerAttempt')
 			->with(
@@ -79,13 +63,14 @@ class LimiterTest extends TestCase {
 				'4664f0d9c88dcb7552be47b37bb52ce35977b2e60e1ac13757cf625f31f87050a41f3da064887fa87d49fd042e4c8eb20de8f10464877d3959677ab011b73a47',
 				100
 			);
+		$this->getAutoMock(LoggerInterface::class)->expects($this->never())
+			->method('info');
 
 		$this->limiter->registerAnonRequest('MyIdentifier', 100, 100, '127.0.0.1');
 	}
 
-
-	public function testRegisterUserRequestExceeded() {
-		$this->expectException(\OC\Security\RateLimiting\Exception\RateLimitExceededException::class);
+	public function testRegisterUserRequestExceeded(): void {
+		$this->expectException(RateLimitExceededException::class);
 		$this->expectExceptionMessage('Rate limit exceeded');
 
 		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
@@ -94,7 +79,7 @@ class LimiterTest extends TestCase {
 			->expects($this->once())
 			->method('getUID')
 			->willReturn('MyUid');
-		$this->backend
+		$this->getAutoMock(IBackend::class)
 			->expects($this->once())
 			->method('getAttempts')
 			->with(
@@ -102,11 +87,13 @@ class LimiterTest extends TestCase {
 				'ddb2ec50fa973fd49ecf3d816f677c8095143e944ad10485f30fb3dac85c13a346dace4dae2d0a15af91867320957bfd38a43d9eefbb74fe6919e15119b6d805'
 			)
 			->willReturn(101);
+		$this->getAutoMock(LoggerInterface::class)->expects($this->once())
+			->method('info');
 
 		$this->limiter->registerUserRequest('MyIdentifier', 100, 100, $user);
 	}
 
-	public function testRegisterUserRequestSuccess() {
+	public function testRegisterUserRequestSuccess(): void {
 		/** @var IUser|\PHPUnit\Framework\MockObject\MockObject $user */
 		$user = $this->createMock(IUser::class);
 		$user
@@ -114,7 +101,7 @@ class LimiterTest extends TestCase {
 			->method('getUID')
 			->willReturn('MyUid');
 
-		$this->backend
+		$this->getAutoMock(IBackend::class)
 			->expects($this->once())
 			->method('getAttempts')
 			->with(
@@ -122,7 +109,7 @@ class LimiterTest extends TestCase {
 				'ddb2ec50fa973fd49ecf3d816f677c8095143e944ad10485f30fb3dac85c13a346dace4dae2d0a15af91867320957bfd38a43d9eefbb74fe6919e15119b6d805'
 			)
 			->willReturn(99);
-		$this->backend
+		$this->getAutoMock(IBackend::class)
 			->expects($this->once())
 			->method('registerAttempt')
 			->with(
@@ -130,6 +117,8 @@ class LimiterTest extends TestCase {
 				'ddb2ec50fa973fd49ecf3d816f677c8095143e944ad10485f30fb3dac85c13a346dace4dae2d0a15af91867320957bfd38a43d9eefbb74fe6919e15119b6d805',
 				100
 			);
+		$this->getAutoMock(LoggerInterface::class)->expects($this->never())
+			->method('info');
 
 		$this->limiter->registerUserRequest('MyIdentifier', 100, 100, $user);
 	}

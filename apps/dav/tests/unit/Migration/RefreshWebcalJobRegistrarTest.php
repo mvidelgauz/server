@@ -1,29 +1,11 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2018, Georg Ehrke
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Tests\unit\DAV\Migration;
 
 use OCA\DAV\BackgroundJob\RefreshWebcalJob;
@@ -33,18 +15,13 @@ use OCP\DB\IResult;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
 use OCP\Migration\IOutput;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
 
 class RefreshWebcalJobRegistrarTest extends TestCase {
-
-	/** @var IDBConnection | \PHPUnit\Framework\MockObject\MockObject */
-	private $db;
-
-	/** @var IJobList | \PHPUnit\Framework\MockObject\MockObject */
-	private $jobList;
-
-	/** @var RefreshWebcalJobRegistrar */
-	private $migration;
+	private IDBConnection&MockObject $db;
+	private IJobList&MockObject $jobList;
+	private RefreshWebcalJobRegistrar $migration;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -55,11 +32,11 @@ class RefreshWebcalJobRegistrarTest extends TestCase {
 		$this->migration = new RefreshWebcalJobRegistrar($this->db, $this->jobList);
 	}
 
-	public function testGetName() {
+	public function testGetName(): void {
 		$this->assertEquals($this->migration->getName(), 'Registering background jobs to update cache for webcal calendars');
 	}
 
-	public function testRun() {
+	public function testRun(): void {
 		$output = $this->createMock(IOutput::class);
 
 		$queryBuilder = $this->createMock(IQueryBuilder::class);
@@ -69,77 +46,69 @@ class RefreshWebcalJobRegistrarTest extends TestCase {
 			->method('getQueryBuilder')
 			->willReturn($queryBuilder);
 
-		$queryBuilder->expects($this->at(0))
+		$queryBuilder->expects($this->once())
 			->method('select')
 			->with(['principaluri', 'uri'])
 			->willReturn($queryBuilder);
-		$queryBuilder->expects($this->at(1))
+		$queryBuilder->expects($this->once())
 			->method('from')
 			->with('calendarsubscriptions')
 			->willReturn($queryBuilder);
-		$queryBuilder->expects($this->at(2))
-			->method('execute')
+		$queryBuilder->expects($this->once())
+			->method('executeQuery')
 			->willReturn($statement);
 
-		$statement->expects($this->at(0))
-			->method('fetch')
-			->with(\PDO::FETCH_ASSOC)
-			->willReturn([
-				'principaluri' => 'foo1',
-				'uri' => 'bar1',
-			]);
-		$statement->expects($this->at(1))
-			->method('fetch')
-			->with(\PDO::FETCH_ASSOC)
-			->willReturn([
-				'principaluri' => 'foo2',
-				'uri' => 'bar2',
-			]);
-		$statement->expects($this->at(2))
-			->method('fetch')
-			->with(\PDO::FETCH_ASSOC)
-			->willReturn([
-				'principaluri' => 'foo3',
-				'uri' => 'bar3',
-			]);
-		$statement->expects($this->at(0))
-			->method('fetch')
-			->with(\PDO::FETCH_ASSOC)
-			->willReturn(null);
+		$statement->expects($this->exactly(4))
+			->method('fetchAssociative')
+			->willReturnOnConsecutiveCalls(
+				[
+					'principaluri' => 'foo1',
+					'uri' => 'bar1',
+				],
+				[
+					'principaluri' => 'foo2',
+					'uri' => 'bar2',
+				],
+				[
+					'principaluri' => 'foo3',
+					'uri' => 'bar3',
+				],
+				false,
+			);
 
-		$this->jobList->expects($this->at(0))
+		$this->jobList->expects($this->exactly(3))
 			->method('has')
-			->with(RefreshWebcalJob::class, [
+			->willReturnMap([
+				[RefreshWebcalJob::class, [
+					'principaluri' => 'foo1',
+					'uri' => 'bar1',
+				], false],
+				[RefreshWebcalJob::class, [
+					'principaluri' => 'foo2',
+					'uri' => 'bar2',
+				], true ],
+				[RefreshWebcalJob::class, [
+					'principaluri' => 'foo3',
+					'uri' => 'bar3',
+				], false],
+			]);
+
+		$calls = [
+			[RefreshWebcalJob::class, [
 				'principaluri' => 'foo1',
 				'uri' => 'bar1',
-			])
-			->willReturn(false);
-		$this->jobList->expects($this->at(1))
-			->method('add')
-			->with(RefreshWebcalJob::class, [
-				'principaluri' => 'foo1',
-				'uri' => 'bar1',
-			]);
-		$this->jobList->expects($this->at(2))
-			->method('has')
-			->with(RefreshWebcalJob::class, [
-				'principaluri' => 'foo2',
-				'uri' => 'bar2',
-			])
-			->willReturn(true);
-		$this->jobList->expects($this->at(3))
-			->method('has')
-			->with(RefreshWebcalJob::class, [
+			]],
+			[RefreshWebcalJob::class, [
 				'principaluri' => 'foo3',
 				'uri' => 'bar3',
-			])
-			->willReturn(false);
-		$this->jobList->expects($this->at(4))
+			]]
+		];
+		$this->jobList->expects($this->exactly(2))
 			->method('add')
-			->with(RefreshWebcalJob::class, [
-				'principaluri' => 'foo3',
-				'uri' => 'bar3',
-			]);
+			->willReturnCallback(function () use (&$calls): void {
+				$expected = array_shift($calls);
+				$this->assertEquals($expected, func_get_args());
+			});
 
 		$output->expects($this->once())
 			->method('info')

@@ -1,31 +1,17 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bernhard Posselt <dev@bernhard-posselt.com>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\App;
 
+use OCP\IBinaryFinder;
 use OCP\IConfig;
+use OCP\Server;
+use OCP\Util;
 
 /**
  * Class Platform
@@ -35,41 +21,26 @@ use OCP\IConfig;
  * @package OC\App
  */
 class Platform {
-
-	/**
-	 * @param IConfig $config
-	 */
-	public function __construct(IConfig $config) {
-		$this->config = $config;
+	public function __construct(
+		private IConfig $config,
+	) {
 	}
 
-	/**
-	 * @return string
-	 */
-	public function getPhpVersion() {
+	public function getPhpVersion(): string {
 		return phpversion();
 	}
 
-	/**
-	 * @return int
-	 */
-	public function getIntSize() {
+	public function getIntSize(): int {
 		return PHP_INT_SIZE;
 	}
 
-	/**
-	 * @return string
-	 */
-	public function getOcVersion() {
-		$v = \OCP\Util::getVersion();
+	public function getOcVersion(): string {
+		$v = Util::getVersion();
 		return implode('.', $v);
 	}
 
-	/**
-	 * @return string
-	 */
-	public function getDatabase() {
-		$dbType = $this->config->getSystemValue('dbtype', 'sqlite');
+	public function getDatabase(): string {
+		$dbType = $this->config->getSystemValueString('dbtype', 'sqlite');
 		if ($dbType === 'sqlite3') {
 			$dbType = 'sqlite';
 		}
@@ -77,23 +48,18 @@ class Platform {
 		return $dbType;
 	}
 
-	/**
-	 * @return string
-	 */
-	public function getOS() {
+	public function getOS(): string {
 		return php_uname('s');
 	}
 
 	/**
 	 * @param $command
-	 * @return bool
 	 */
-	public function isCommandKnown($command) {
-		$path = \OC_Helper::findBinaryPath($command);
-		return ($path !== null);
+	public function isCommandKnown(string $command): bool {
+		return Server::get(IBinaryFinder::class)->findBinaryPath($command) !== false;
 	}
 
-	public function getLibraryVersion($name) {
+	public function getLibraryVersion(string $name): ?string {
 		$repo = new PlatformRepository();
 		return $repo->findLibrary($name);
 	}

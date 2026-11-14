@@ -1,34 +1,18 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bart Visscher <bartv@thisnet.nl>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\DB;
 
 class OracleConnection extends Connection {
 	/**
 	 * Quote the keys of the array
+	 * @param array<string, string> $data
+	 * @return array<string, string>
 	 */
 	private function quoteKeys(array $data) {
 		$return = [];
@@ -43,9 +27,18 @@ class OracleConnection extends Connection {
 		return $return;
 	}
 
+	#[\Override]
+	public function truncateTable(string $table, bool $cascade) {
+		if ($table[0] !== $this->getDatabasePlatform()->getIdentifierQuoteCharacter()) {
+			$table = $this->quoteIdentifier($table);
+		}
+		return parent::truncateTable($table, $cascade);
+	}
+
 	/**
 	 * {@inheritDoc}
 	 */
+	#[\Override]
 	public function insert($table, array $data, array $types = []) {
 		if ($table[0] !== $this->getDatabasePlatform()->getIdentifierQuoteCharacter()) {
 			$table = $this->quoteIdentifier($table);
@@ -57,6 +50,7 @@ class OracleConnection extends Connection {
 	/**
 	 * {@inheritDoc}
 	 */
+	#[\Override]
 	public function update($table, array $data, array $criteria, array $types = []) {
 		if ($table[0] !== $this->getDatabasePlatform()->getIdentifierQuoteCharacter()) {
 			$table = $this->quoteIdentifier($table);
@@ -69,6 +63,7 @@ class OracleConnection extends Connection {
 	/**
 	 * {@inheritDoc}
 	 */
+	#[\Override]
 	public function delete($table, array $criteria, array $types = []) {
 		if ($table[0] !== $this->getDatabasePlatform()->getIdentifierQuoteCharacter()) {
 			$table = $this->quoteIdentifier($table);
@@ -82,10 +77,11 @@ class OracleConnection extends Connection {
 	 *
 	 * @param string $table table name without the prefix
 	 */
+	#[\Override]
 	public function dropTable($table) {
 		$table = $this->tablePrefix . trim($table);
 		$table = $this->quoteIdentifier($table);
-		$schema = $this->getSchemaManager();
+		$schema = $this->createSchemaManager();
 		if ($schema->tablesExist([$table])) {
 			$schema->dropTable($table);
 		}
@@ -97,10 +93,11 @@ class OracleConnection extends Connection {
 	 * @param string $table table name without the prefix
 	 * @return bool
 	 */
+	#[\Override]
 	public function tableExists($table) {
 		$table = $this->tablePrefix . trim($table);
 		$table = $this->quoteIdentifier($table);
-		$schema = $this->getSchemaManager();
+		$schema = $this->createSchemaManager();
 		return $schema->tablesExist([$table]);
 	}
 }

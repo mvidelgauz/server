@@ -1,25 +1,10 @@
 <?php
+
 /**
- * @copyright 2019, Georg Ehrke <oc.list@georgehrke.com>
- *
- * @author Georg Ehrke <oc.list@georgehrke.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\Calendar\Room;
 
 /**
@@ -32,7 +17,6 @@ namespace OCP\Calendar\Room;
  * @since 17.0.0
  */
 interface IRoomMetadata {
-
 	/**
 	 * Type of room
 	 *
@@ -52,6 +36,17 @@ interface IRoomMetadata {
 	 * @since 17.0.0
 	 */
 	public const CAPACITY = '{http://nextcloud.com/ns}room-seating-capacity';
+
+	/**
+	 * The name of the building this room is located in
+	 *
+	 * Clients group rooms by building. Without this key they have to guess a
+	 * building from BUILDING_ADDRESS, which only works for backends that
+	 * happen to put the building name first.
+	 *
+	 * @since 35.0.0
+	 */
+	public const BUILDING_NAME = '{http://nextcloud.com/ns}room-building-name';
 
 	/**
 	 * The physical address of the building this room is located in

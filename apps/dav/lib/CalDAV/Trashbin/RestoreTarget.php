@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2021 Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\CalDAV\Trashbin;
 
 use OCA\DAV\CalDAV\IRestorable;
@@ -35,26 +19,32 @@ use Sabre\DAV\INode;
 class RestoreTarget implements ICollection, IMoveTarget {
 	public const NAME = 'restore';
 
+	#[\Override]
 	public function createFile($name, $data = null) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function createDirectory($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getChild($name) {
 		throw new NotFound();
 	}
 
+	#[\Override]
 	public function getChildren(): array {
 		return [];
 	}
 
+	#[\Override]
 	public function childExists($name): bool {
 		return false;
 	}
 
+	#[\Override]
 	public function moveInto($targetName, $sourcePath, INode $sourceNode): bool {
 		if ($sourceNode instanceof IRestorable) {
 			$sourceNode->restore();
@@ -64,18 +54,22 @@ class RestoreTarget implements ICollection, IMoveTarget {
 		return false;
 	}
 
+	#[\Override]
 	public function delete() {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getName(): string {
 		return 'restore';
 	}
 
+	#[\Override]
 	public function setName($name) {
 		throw new Forbidden();
 	}
 
+	#[\Override]
 	public function getLastModified() {
 		return 0;
 	}

@@ -1,54 +1,36 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2017 Lukas Reschke <lukas@statuscode.ch>
- *
- * @author Lukas Reschke <lukas@statuscode.ch>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\OAuth2\Db;
 
-use OCP\AppFramework\Db\Entity;
+use OCP\AppFramework\ORM\Attribute\Column;
+use OCP\AppFramework\ORM\Attribute\Entity;
+use OCP\AppFramework\ORM\Attribute\Id;
+use OCP\DB\Schema\ColumnType;
 
 /**
- * @method string getClientIdentifier()
- * @method void setClientIdentifier(string $identifier)
- * @method string getSecret()
- * @method void setSecret(string $secret)
- * @method string getRedirectUri()
- * @method void setRedirectUri(string $redirectUri)
- * @method string getName()
- * @method void setName(string $name)
+ * @psalm-suppress MissingConstructor ORM based hydration
  */
-class Client extends Entity {
-	/** @var string */
-	protected $name;
-	/** @var string */
-	protected $redirectUri;
-	/** @var string */
-	protected $clientIdentifier;
-	/** @var string */
-	protected $secret;
+#[Entity(name: 'oauth2_clients')]
+final class Client {
+	#[Id, Column(name: 'id', type: ColumnType::Integer)]
+	public int $id;
 
-	public function __construct() {
-		$this->addType('id', 'int');
-		$this->addType('name', 'string');
-		$this->addType('redirect_uri', 'string');
-		$this->addType('client_identifier', 'string');
-		$this->addType('secret', 'string');
-	}
+	#[Column(name: 'name', type: ColumnType::String, length: 64)]
+	public string $name;
+
+	#[Column(name: 'redirect_uri', type: ColumnType::String, length: 2000)]
+	public string $redirectUri;
+
+	#[Column(name: 'client_identifier', type: ColumnType::String, length: 64)]
+	public string $clientIdentifier;
+
+	#[Column(name: 'secret', type: ColumnType::String, length: 512)]
+	public string $secret;
 }

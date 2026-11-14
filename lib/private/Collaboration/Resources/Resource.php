@@ -3,27 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2018 Joas Schilling <coding@schilljs.com>
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Collaboration\Resources;
 
 use OCP\Collaboration\Resources\ICollection;
@@ -33,64 +16,38 @@ use OCP\IDBConnection;
 use OCP\IUser;
 
 class Resource implements IResource {
-
-	/** @var IManager */
-	protected $manager;
-
-	/** @var IDBConnection */
-	protected $connection;
-
-	/** @var string */
-	protected $type;
-
-	/** @var string */
-	protected $id;
-
-	/** @var IUser|null */
-	protected $userForAccess;
-
-	/** @var bool|null */
-	protected $access;
-
-	/** @var array|null */
-	protected $data;
+	protected ?array $data = null;
 
 	public function __construct(
-		IManager $manager,
-		IDBConnection $connection,
-		string $type,
-		string $id,
-		?IUser $userForAccess = null,
-		?bool $access = null
+		protected IManager $manager,
+		protected IDBConnection $connection,
+		protected string $type,
+		protected string $id,
+		protected ?IUser $userForAccess = null,
+		protected ?bool $access = null,
 	) {
-		$this->manager = $manager;
-		$this->connection = $connection;
-		$this->type = $type;
-		$this->id = $id;
-		$this->userForAccess = $userForAccess;
-		$this->access = $access;
 	}
 
 	/**
-	 * @return string
 	 * @since 16.0.0
 	 */
+	#[\Override]
 	public function getType(): string {
 		return $this->type;
 	}
 
 	/**
-	 * @return string
 	 * @since 16.0.0
 	 */
+	#[\Override]
 	public function getId(): string {
 		return $this->id;
 	}
 
 	/**
-	 * @return array
 	 * @since 16.0.0
 	 */
+	#[\Override]
 	public function getRichObject(): array {
 		if ($this->data === null) {
 			$this->data = $this->manager->getResourceRichObject($this);
@@ -102,10 +59,9 @@ class Resource implements IResource {
 	/**
 	 * Can a user/guest access the resource
 	 *
-	 * @param IUser|null $user
-	 * @return bool
 	 * @since 16.0.0
 	 */
+	#[\Override]
 	public function canAccess(?IUser $user): bool {
 		if ($user instanceof IUser) {
 			return $this->canUserAccess($user);
@@ -141,6 +97,7 @@ class Resource implements IResource {
 	 * @return ICollection[]
 	 * @since 16.0.0
 	 */
+	#[\Override]
 	public function getCollections(): array {
 		$collections = [];
 
@@ -151,9 +108,9 @@ class Resource implements IResource {
 			->where($query->expr()->eq('resource_type', $query->createNamedParameter($this->getType())))
 			->andWhere($query->expr()->eq('resource_id', $query->createNamedParameter($this->getId())));
 
-		$result = $query->execute();
-		while ($row = $result->fetch()) {
-			$collections[] = $this->manager->getCollection((int) $row['collection_id']);
+		$result = $query->executeQuery();
+		while ($row = $result->fetchAssociative()) {
+			$collections[] = $this->manager->getCollection((int)$row['collection_id']);
 		}
 		$result->closeCursor();
 

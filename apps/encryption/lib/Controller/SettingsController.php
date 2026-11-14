@@ -1,26 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2019-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Encryption\Controller;
 
 use OCA\Encryption\Crypto\Crypt;
@@ -29,43 +14,24 @@ use OCA\Encryption\Session;
 use OCA\Encryption\Util;
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http;
+use OCP\AppFramework\Http\Attribute\NoAdminRequired;
+use OCP\AppFramework\Http\Attribute\UseSession;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\Encryption\Exceptions\GenericEncryptionException;
+use OCP\EventDispatcher\IEventDispatcher;
 use OCP\IL10N;
 use OCP\IRequest;
 use OCP\ISession;
 use OCP\IUserManager;
 use OCP\IUserSession;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
 
 class SettingsController extends Controller {
-
-	/** @var IL10N */
-	private $l;
-
-	/** @var IUserManager */
-	private $userManager;
-
-	/** @var IUserSession */
-	private $userSession;
-
-	/** @var KeyManager */
-	private $keyManager;
-
-	/** @var Crypt */
-	private $crypt;
-
-	/** @var Session */
-	private $session;
-
-	/** @var ISession  */
-	private $ocSession;
-
-	/** @var  Util */
-	private $util;
 
 	/**
 	 * @param string $AppName
 	 * @param IRequest $request
-	 * @param IL10N $l10n
+	 * @param IL10N $l
 	 * @param IUserManager $userManager
 	 * @param IUserSession $userSession
 	 * @param KeyManager $keyManager
@@ -74,38 +40,30 @@ class SettingsController extends Controller {
 	 * @param ISession $ocSession
 	 * @param Util $util
 	 */
-	public function __construct($AppName,
-								IRequest $request,
-								IL10N $l10n,
-								IUserManager $userManager,
-								IUserSession $userSession,
-								KeyManager $keyManager,
-								Crypt $crypt,
-								Session $session,
-								ISession $ocSession,
-								Util $util
-) {
-		parent::__construct($AppName, $request);
-		$this->l = $l10n;
-		$this->userSession = $userSession;
-		$this->userManager = $userManager;
-		$this->keyManager = $keyManager;
-		$this->crypt = $crypt;
-		$this->session = $session;
-		$this->ocSession = $ocSession;
-		$this->util = $util;
+	public function __construct(
+		$appName,
+		IRequest $request,
+		private IL10N $l,
+		private IUserManager $userManager,
+		private IUserSession $userSession,
+		private KeyManager $keyManager,
+		private Crypt $crypt,
+		private Session $session,
+		private ISession $ocSession,
+		private Util $util,
+		private IEventDispatcher $eventDispatcher,
+	) {
+		parent::__construct($appName, $request);
 	}
 
-
-	/**
-	 * @NoAdminRequired
-	 * @UseSession
-	 *
-	 * @param string $oldPassword
-	 * @param string $newPassword
-	 * @return DataResponse
-	 */
-	public function updatePrivateKeyPassword($oldPassword, $newPassword) {
+	#[NoAdminRequired]
+	#[UseSession]
+	public function updatePrivateKeyPassword(
+		#[\SensitiveParameter]
+		string $oldPassword,
+		#[\SensitiveParameter]
+		string $newPassword,
+	): DataResponse {
 		$result = false;
 		$uid = $this->userSession->getUser()->getUID();
 		$errorMessage = $this->l->t('Could not update the private key password.');
@@ -122,7 +80,13 @@ class SettingsController extends Controller {
 
 		if ($passwordCorrect !== false) {
 			$encryptedKey = $this->keyManager->getPrivateKey($uid);
-			$decryptedKey = $this->crypt->decryptPrivateKey($encryptedKey, $oldPassword, $uid);
+			try {
+				$decryptedKey = $this->crypt->decryptPrivateKey($encryptedKey, $oldPassword, $uid);
+			} catch (GenericEncryptionException) {
+				// A wrong passphrase does not only make decrypting return false, it can
+				// also fail the signature check or the decryption itself
+				$decryptedKey = false;
+			}
 
 			if ($decryptedKey) {
 				$encryptedKey = $this->crypt->encryptPrivateKey($decryptedKey, $newPassword, $uid);
@@ -141,6 +105,12 @@ class SettingsController extends Controller {
 
 		if ($result === true) {
 			$this->session->setStatus(Session::INIT_SUCCESSFUL);
+			$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+				'Private key password of user "%s" was changed',
+				['userId' => $uid],
+				false,
+				'encryption.private_key.password_changed',
+			));
 			return new DataResponse(
 				['message' => $this->l->t('Private key password successfully updated.')]
 			);
@@ -153,13 +123,18 @@ class SettingsController extends Controller {
 	}
 
 	/**
-	 * @UseSession
-	 *
 	 * @param bool $encryptHomeStorage
 	 * @return DataResponse
 	 */
+	#[UseSession]
 	public function setEncryptHomeStorage($encryptHomeStorage) {
 		$this->util->setEncryptHomeStorage($encryptHomeStorage);
+		$this->eventDispatcher->dispatchTyped(new CriticalActionPerformedEvent(
+			'Encryption of home storages was %s',
+			['status' => $encryptHomeStorage ? 'enabled' : 'disabled'],
+			false,
+			'encryption.home_storage.updated',
+		));
 		return new DataResponse();
 	}
 }

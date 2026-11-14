@@ -1,59 +1,38 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @author Joas Schilling <nickvergessen@owncloud.com>
- *
- * @copyright Copyright (c) 2015, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Tests\Core\Command\Config\App;
 
 use OC\Core\Command\Config\App\GetConfig;
-use OCP\IConfig;
+use OCP\Exceptions\AppConfigUnknownKeyException;
+use OCP\IAppConfig;
+use PHPUnit\Framework\MockObject\MockObject;
+use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Test\TestCase;
 
 class GetConfigTest extends TestCase {
-	/** @var \PHPUnit\Framework\MockObject\MockObject */
-	protected $config;
+	protected InputInterface&MockObject $consoleInput;
+	protected OutputInterface&MockObject $consoleOutput;
+	protected Command $command;
 
-	/** @var \PHPUnit\Framework\MockObject\MockObject */
-	protected $consoleInput;
-	/** @var \PHPUnit\Framework\MockObject\MockObject */
-	protected $consoleOutput;
-
-	/** @var \Symfony\Component\Console\Command\Command */
-	protected $command;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
+		$this->consoleInput = $this->createMock(InputInterface::class);
+		$this->consoleOutput = $this->createMock(OutputInterface::class);
 
-		$config = $this->config = $this->getMockBuilder(IConfig::class)
-			->disableOriginalConstructor()
-			->getMock();
-		$this->consoleInput = $this->getMockBuilder(InputInterface::class)->getMock();
-		$this->consoleOutput = $this->getMockBuilder(OutputInterface::class)->getMock();
-
-		/** @var \OCP\IConfig $config */
-		$this->command = new GetConfig($config);
+		$this->command = $this->createInstanceWithMocks(GetConfig::class);
 	}
 
-
-	public function getData() {
+	public static function dataGet(): array {
 		return [
 			// String output as json
 			['name', 'newvalue', true, null, false, 'json', 0, json_encode('newvalue')],
@@ -91,35 +70,25 @@ class GetConfigTest extends TestCase {
 			// Associative array output as json/plain
 			['name', ['a' => 1, 'b' => 2], true, null, false, 'json', 0, json_encode(['a' => 1, 'b' => 2])],
 			['name', ['a' => 1, 'b' => 2], true, null, false, 'plain', 0, "a: 1\nb: 2"],
-
 		];
 	}
 
-	/**
-	 * @dataProvider getData
-	 *
-	 * @param string $configName
-	 * @param mixed $value
-	 * @param bool $configExists
-	 * @param mixed $defaultValue
-	 * @param bool $hasDefault
-	 * @param string $outputFormat
-	 * @param int $expectedReturn
-	 * @param string $expectedMessage
-	 */
-	public function testGet($configName, $value, $configExists, $defaultValue, $hasDefault, $outputFormat, $expectedReturn, $expectedMessage) {
-		$this->config->expects($this->atLeastOnce())
-			->method('getAppKeys')
-			->with('app-name')
-			->willReturn($configExists ? [$configName] : []);
-
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataGet')]
+	public function testGet(string $configName, mixed $value, bool $configExists, mixed $defaultValue, bool $hasDefault, string $outputFormat, int $expectedReturn, ?string $expectedMessage): void {
 		if (!$expectedReturn) {
 			if ($configExists) {
-				$this->config->expects($this->once())
-					->method('getAppValue')
+				$this->getAutoMock(IAppConfig::class)->expects($this->once())
+					->method('getDetails')
 					->with('app-name', $configName)
-					->willReturn($value);
+					->willReturn(['value' => $value]);
 			}
+		}
+
+		if (!$configExists) {
+			$this->getAutoMock(IAppConfig::class)->expects($this->once())
+				->method('getDetails')
+				->with('app-name', $configName)
+				->willThrowException(new AppConfigUnknownKeyException());
 		}
 
 		$this->consoleInput->expects($this->exactly(2))
@@ -128,14 +97,12 @@ class GetConfigTest extends TestCase {
 				['app', 'app-name'],
 				['name', $configName],
 			]);
-		$this->consoleInput->expects($this->any())
-			->method('getOption')
+		$this->consoleInput->method('getOption')
 			->willReturnMap([
 				['default-value', $defaultValue],
 				['output', $outputFormat],
 			]);
-		$this->consoleInput->expects($this->any())
-			->method('hasParameterOption')
+		$this->consoleInput->method('hasParameterOption')
 			->willReturnMap([
 				['--output', false, true],
 				['--default-value', false, $hasDefault],
@@ -145,8 +112,7 @@ class GetConfigTest extends TestCase {
 			global $output;
 
 			$output = '';
-			$this->consoleOutput->expects($this->any())
-				->method('writeln')
+			$this->consoleOutput->method('writeln')
 				->willReturnCallback(function ($value) {
 					global $output;
 					$output .= $value . "\n";
@@ -154,7 +120,7 @@ class GetConfigTest extends TestCase {
 				});
 		}
 
-		$this->assertSame($expectedReturn, $this->invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]));
+		$this->assertSame($expectedReturn, self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]));
 
 		if ($expectedMessage !== null) {
 			global $output;

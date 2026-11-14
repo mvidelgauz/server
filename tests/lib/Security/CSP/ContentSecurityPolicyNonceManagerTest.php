@@ -3,23 +3,8 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2016 Lukas Reschke <lukas@statuscode.ch>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Security\CSP;
@@ -31,51 +16,53 @@ use OC\Security\CSRF\CsrfTokenManager;
 use Test\TestCase;
 
 class ContentSecurityPolicyNonceManagerTest extends TestCase {
-	/** @var CsrfTokenManager */
-	private $csrfTokenManager;
-	/** @var Request */
-	private $request;
-	/** @var ContentSecurityPolicyNonceManager */
-	private $nonceManager;
+	private ContentSecurityPolicyNonceManager $nonceManager;
 
+	#[\Override]
 	protected function setUp(): void {
-		$this->csrfTokenManager = $this->createMock(CsrfTokenManager::class);
-		$this->request = $this->createMock(Request::class);
-		$this->nonceManager = new ContentSecurityPolicyNonceManager(
-			$this->csrfTokenManager,
-			$this->request
+		parent::setUp();
+		$this->nonceManager = $this->createInstanceWithMocks(
+			ContentSecurityPolicyNonceManager::class,
+			[
+				/* We mock the private class */
+				'request' => $this->getAutoMock(Request::class),
+			],
 		);
 	}
 
-	public function testGetNonce() {
+	public function testGetNonce(): void {
+		$secret = base64_encode('secret');
+		$tokenValue = base64_encode('secret' ^ 'value_') . ':' . $secret;
 		$token = $this->createMock(CsrfToken::class);
 		$token
 			->expects($this->once())
 			->method('getEncryptedValue')
-			->willReturn('MyToken');
+			->willReturn($tokenValue);
 
-		$this->csrfTokenManager
+		$this->getAutoMock(CsrfTokenManager::class)
 			->expects($this->once())
 			->method('getToken')
 			->willReturn($token);
 
-		$this->assertSame('TXlUb2tlbg==', $this->nonceManager->getNonce());
-		$this->assertSame('TXlUb2tlbg==', $this->nonceManager->getNonce());
+		$this->assertSame($secret, $this->nonceManager->getNonce());
+		// call it twice but `getEncryptedValue` is expected to be called only once
+		$this->assertSame($secret, $this->nonceManager->getNonce());
 	}
 
-	public function testGetNonceServerVar() {
+	public function testGetNonceServerVar(): void {
 		$token = 'SERVERNONCE';
-		$this->request
+		$this->getAutoMock(Request::class)
 			->method('__isset')
 			->with('server')
 			->willReturn(true);
 
-		$this->request
+		$this->getAutoMock(Request::class)
 			->method('__get')
 			->with('server')
 			->willReturn(['CSP_NONCE' => $token]);
 
 		$this->assertSame($token, $this->nonceManager->getNonce());
+		// call it twice but `CSP_NONCE` variable is expected to be loaded only once
 		$this->assertSame($token, $this->nonceManager->getNonce());
 	}
 }

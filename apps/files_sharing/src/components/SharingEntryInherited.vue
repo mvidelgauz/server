@@ -1,24 +1,7 @@
 <!--
-  - @copyright Copyright (c) 2019 John Molakvoæ <skjnldsv@protonmail.com>
-  -
-  - @author John Molakvoæ <skjnldsv@protonmail.com>
-  -
-  - @license GNU AGPL version 3 or any later version
-  -
-  - This program is free software: you can redistribute it and/or modify
-  - it under the terms of the GNU Affero General Public License as
-  - published by the Free Software Foundation, either version 3 of the
-  - License, or (at your option) any later version.
-  -
-  - This program is distributed in the hope that it will be useful,
-  - but WITHOUT ANY WARRANTY; without even the implied warranty of
-  - MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  - GNU Affero General Public License for more details.
-  -
-  - You should have received a copy of the GNU Affero General Public License
-  - along with this program. If not, see <http://www.gnu.org/licenses/>.
-  -
-  -->
+  - SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 
 <template>
 	<SharingEntrySimple
@@ -26,49 +9,49 @@
 		class="sharing-entry__inherited"
 		:title="share.shareWithDisplayName">
 		<template #avatar>
-			<Avatar
+			<NcAvatar
 				:user="share.shareWith"
 				:display-name="share.shareWithDisplayName"
-				class="sharing-entry__avatar"
-				tooltip-message="" />
+				class="sharing-entry__avatar" />
 		</template>
-		<ActionText icon="icon-user">
+		<NcActionText icon="icon-user">
 			{{ t('files_sharing', 'Added by {initiator}', { initiator: share.ownerDisplayName }) }}
-		</ActionText>
-		<ActionLink v-if="share.viaPath && share.viaFileid"
+		</NcActionText>
+		<NcActionLink
+			v-if="share.viaPath && share.viaFileid"
 			icon="icon-folder"
 			:href="viaFileTargetUrl">
-			{{ t('files_sharing', 'Via “{folder}”', {folder: viaFolderName} ) }}
-		</ActionLink>
-		<ActionButton v-if="share.canDelete"
+			{{ t('files_sharing', 'Via "{folder}"', { folder: viaFolderName }) }}
+		</NcActionLink>
+		<NcActionButton
+			v-if="share.canDelete"
 			icon="icon-close"
 			@click.prevent="onDelete">
-			{{ t('files_sharing', 'Unshare') }}
-		</actionbutton>
+			{{ unshareLabel }}
+		</NcActionButton>
 	</SharingEntrySimple>
 </template>
 
 <script>
-import { generateUrl } from '@nextcloud/router'
+import { t } from '@nextcloud/l10n'
 import { basename } from '@nextcloud/paths'
-import Avatar from '@nextcloud/vue/dist/Components/Avatar'
-import ActionButton from '@nextcloud/vue/dist/Components/ActionButton'
-import ActionLink from '@nextcloud/vue/dist/Components/ActionLink'
-import ActionText from '@nextcloud/vue/dist/Components/ActionText'
-
-// eslint-disable-next-line no-unused-vars
-import Share from '../models/Share'
-import SharesMixin from '../mixins/SharesMixin'
-import SharingEntrySimple from '../components/SharingEntrySimple'
+import NcActionButton from '@nextcloud/vue/components/NcActionButton'
+import NcActionLink from '@nextcloud/vue/components/NcActionLink'
+import NcActionText from '@nextcloud/vue/components/NcActionText'
+import NcAvatar from '@nextcloud/vue/components/NcAvatar'
+import SharingEntrySimple from '../components/SharingEntrySimple.vue'
+import SharesMixin from '../mixins/SharesMixin.js'
+import Share from '../models/Share.js'
+import { generateFileUrl } from '../utils/generateUrl.js'
 
 export default {
 	name: 'SharingEntryInherited',
 
 	components: {
-		ActionButton,
-		ActionLink,
-		ActionText,
-		Avatar,
+		NcActionButton,
+		NcActionLink,
+		NcActionText,
+		NcAvatar,
 		SharingEntrySimple,
 	},
 
@@ -83,13 +66,18 @@ export default {
 
 	computed: {
 		viaFileTargetUrl() {
-			return generateUrl('/f/{fileid}', {
-				fileid: this.share.viaFileid,
-			})
+			return generateFileUrl(this.share.viaFileid)
 		},
 
 		viaFolderName() {
 			return basename(this.share.viaPath)
+		},
+
+		unshareLabel() {
+			if (this.viaFolderName) {
+				return t('files_sharing', 'Unshare "{folder}"', { folder: this.viaFolderName })
+			}
+			return t('files_sharing', 'Unshare')
 		},
 	},
 }
@@ -105,13 +93,14 @@ export default {
 		flex-direction: column;
 		justify-content: space-between;
 		padding: 8px;
+		padding-inline-start: 10px;
 		line-height: 1.2em;
 		p {
 			color: var(--color-text-maxcontrast);
 		}
 	}
 	&__actions {
-		margin-left: auto;
+		margin-inline-start: auto;
 	}
 }
 </style>

@@ -1,22 +1,9 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2021 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Test\DB\Exception;
@@ -31,6 +18,7 @@ use Doctrine\DBAL\Exception\DriverException;
 use Doctrine\DBAL\Exception\ForeignKeyConstraintViolationException;
 use Doctrine\DBAL\Exception\InvalidArgumentException;
 use Doctrine\DBAL\Exception\InvalidFieldNameException;
+use Doctrine\DBAL\Exception\LockWaitTimeoutException;
 use Doctrine\DBAL\Exception\NonUniqueFieldNameException;
 use Doctrine\DBAL\Exception\NotNullConstraintViolationException;
 use Doctrine\DBAL\Exception\ServerException;
@@ -39,27 +27,28 @@ use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use OC\DB\Exceptions\DbalException;
 
 class DbalExceptionTest extends \Test\TestCase {
-
 	/** @var TheDriverException */
 	protected $driverException;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 		$this->driverException = $this->createMock(TheDriverException::class);
 	}
 
 	/**
-	 * @dataProvider dataDriverException
 	 * @param string $class
 	 * @param int $reason
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataDriverException')]
 	public function testDriverException(string $class, int $reason): void {
 		$result = DbalException::wrap(new $class($this->driverException, null));
 		$this->assertSame($reason, $result->getReason());
 	}
 
-	public function dataDriverException(): array {
+	public static function dataDriverException(): array {
 		return [
+			[LockWaitTimeoutException::class, DbalException::REASON_LOCK_WAIT_TIMEOUT],
 			[ForeignKeyConstraintViolationException::class, DbalException::REASON_FOREIGN_KEY_VIOLATION],
 			[NotNullConstraintViolationException::class, DbalException::REASON_NOT_NULL_CONSTRAINT_VIOLATION],
 			[UniqueConstraintViolationException::class, DbalException::REASON_UNIQUE_CONSTRAINT_VIOLATION],

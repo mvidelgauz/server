@@ -1,35 +1,19 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Olivier Paroz <github@oparoz.com>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Preview;
 
 use Imagick;
 use OCP\Files\File;
 use OCP\IImage;
-use OCP\ILogger;
+use OCP\Image;
+use OCP\Server;
+use Psr\Log\LoggerInterface;
 
 /**
  * Creates a PNG preview using ImageMagick via the PECL extension
@@ -37,31 +21,56 @@ use OCP\ILogger;
  * @package OC\Preview
  */
 abstract class Bitmap extends ProviderV2 {
+	/**
+	 * List of MIME types that this preview provider is allowed to process.
+	 *
+	 * These should correspond to the MIME types *identified* by Imagemagick
+	 * for files to be processed by this provider. These do / will not
+	 * necessarily need to match the MIME types stored in the database
+	 * (which are identified by IMimeTypeDetector).
+	 *
+	 * @return string Regular expression
+	 */
+	abstract protected function getAllowedMimeTypes(): string;
 
 	/**
-	 * {@inheritDoc}
+	 * @return list<string>
 	 */
+	abstract protected function getMagicStrings(): array;
+
+	abstract protected function getImagickFormatHint(): string;
+
+	#[\Override]
 	public function getThumbnail(File $file, int $maxX, int $maxY): ?IImage {
 		$tmpPath = $this->getLocalFile($file);
+		if ($tmpPath === false) {
+			Server::get(LoggerInterface::class)->error(
+				'Failed to get thumbnail for: ' . $file->getPath(),
+				['app' => 'core']
+			);
+			return null;
+		}
 
 		// Creates \Imagick object from bitmap or vector file
 		try {
 			$bp = $this->getResizedPreview($tmpPath, $maxX, $maxY);
 		} catch (\Exception $e) {
-			\OC::$server->getLogger()->logException($e, [
-				'message' => 'File: ' . $file->getPath() . ' Imagick says:',
-				'level' => ILogger::ERROR,
-				'app' => 'core',
-			]);
+			Server::get(LoggerInterface::class)->info(
+				'File: ' . $file->getPath() . ' Imagick says:',
+				[
+					'exception' => $e,
+					'app' => 'core',
+				]
+			);
 			return null;
 		}
 
 		$this->cleanTmpFiles();
 
 		//new bitmap image object
-		$image = new \OC_Image();
-		$image->loadFromData($bp);
-		//check if image object is valid
+		$image = new Image();
+		$image->loadFromData((string)$bp);
+		// Check if image object is valid
 		return $image->valid() ? $image : null;
 	}
 
@@ -78,18 +87,47 @@ abstract class Bitmap extends ProviderV2 {
 	 * @param int $maxY
 	 *
 	 * @return \Imagick
+	 *
+	 * @throws \Exception
 	 */
 	private function getResizedPreview($tmpPath, $maxX, $maxY) {
 		$bp = new Imagick();
 
+		if (!$this->isMagicStringSupported($tmpPath)) {
+			throw new \Exception('Invalid image type: magic string not recognized');
+		}
+
+		// Validate mime type
+		$bp->pingImage($this->getImagickFormatHint() . ':' . $tmpPath . '[0]');
+		$mimeType = $bp->getImageMimeType();
+		if (!preg_match($this->getAllowedMimeTypes(), $mimeType)) {
+			throw new \Exception('File mime type does not match the preview provider: ' . $mimeType);
+		}
+
 		// Layer 0 contains either the bitmap or a flat representation of all vector layers
-		$bp->readImage($tmpPath . '[0]');
+		$bp->readImage($this->getImagickFormatHint() . ':' . $tmpPath . '[0]');
 
 		$bp = $this->resize($bp, $maxX, $maxY);
 
 		$bp->setImageFormat('png');
 
 		return $bp;
+	}
+
+	private function isMagicStringSupported(string $filepath): bool {
+		$signatures = $this->getMagicStrings();
+		if (empty($signatures)) {
+			return true;
+		}
+		$length = array_reduce($signatures, static fn (int $carry, string $signature) => max($carry, strlen($signature)), 0);
+		$firstBytes = file_get_contents($filepath, false, null, 0, $length);
+		foreach ($signatures as $signature) {
+			if (str_starts_with($firstBytes, $signature)) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

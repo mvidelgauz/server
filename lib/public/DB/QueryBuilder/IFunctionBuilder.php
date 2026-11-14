@@ -1,27 +1,10 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2017 Robin Appelman <robin@icewind.nl>
- *
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\DB\QueryBuilder;
 
 /**
@@ -37,19 +20,36 @@ interface IFunctionBuilder {
 	 *
 	 * @return IQueryFunction
 	 * @since 12.0.0
+	 * @deprecated 35.0.0 - MD5 is not considered secure anymore, thus most databases have or will drop support for this function
 	 */
 	public function md5($input): IQueryFunction;
 
 	/**
 	 * Combines two input strings
 	 *
-	 * @param string|ILiteral|IParameter|IQueryFunction $x The first input string
-	 * @param string|ILiteral|IParameter|IQueryFunction $y The seccond input string
+	 * @param string|ILiteral|IParameter|IQueryFunction $x Expressions or literal strings
+	 * @param string|ILiteral|IParameter|IQueryFunction ...$exprs Expressions or literal strings
 	 *
 	 * @return IQueryFunction
 	 * @since 12.0.0
 	 */
-	public function concat($x, $y): IQueryFunction;
+	public function concat($x, ...$expr): IQueryFunction;
+
+	/**
+	 * Returns a string which is the concatenation of all non-NULL values of X
+	 *
+	 * Usage examples:
+	 *
+	 * groupConcat('column') -- with comma as separator (default separator)
+	 *
+	 * groupConcat('column', ';') -- with different separator
+	 *
+	 * @param string|IQueryFunction $expr The expression to group
+	 * @param string|null $separator The separator
+	 * @return IQueryFunction
+	 * @since 24.0.0
+	 */
+	public function groupConcat($expr, ?string $separator = ','): IQueryFunction;
 
 	/**
 	 * Takes a substring from the input string
@@ -62,6 +62,17 @@ interface IFunctionBuilder {
 	 * @since 12.0.0
 	 */
 	public function substring($input, $start, $length = null): IQueryFunction;
+
+	/**
+	 * Takes a substring from the input string using a regex pattern
+	 *
+	 * @param string|ILiteral|IParameter|IQueryFunction $input The input string
+	 * @param string|ILiteral|IParameter|IQueryFunction $pattern The pattern to match and return
+	 *
+	 * @return IQueryFunction
+	 * @since 36.0.0
+	 */
+	public function regexSubstring($input, $pattern): IQueryFunction;
 
 	/**
 	 * Takes the sum of all rows in a column
@@ -106,6 +117,24 @@ interface IFunctionBuilder {
 	 * @since 14.0.0
 	 */
 	public function count($count = '', $alias = ''): IQueryFunction;
+
+	/**
+	 * @param string|ILiteral|IParameter|IQueryFunction $field The input to be measured
+	 * @param string $alias Alias for the length
+	 *
+	 * @return IQueryFunction
+	 * @since 24.0.0
+	 */
+	public function octetLength($field, $alias = ''): IQueryFunction;
+
+	/**
+	 * @param string|ILiteral|IParameter|IQueryFunction $field The input to be measured
+	 * @param string $alias Alias for the length
+	 *
+	 * @return IQueryFunction
+	 * @since 24.0.0
+	 */
+	public function charLength($field, $alias = ''): IQueryFunction;
 
 	/**
 	 * Takes the maximum of all rows in a column
@@ -154,4 +183,18 @@ interface IFunctionBuilder {
 	 * @since 18.0.0
 	 */
 	public function least($x, $y): IQueryFunction;
+
+	/**
+	 * Get the current date and time as a UNIX timestamp.
+	 * @since 34.0.0
+	 */
+	public function now(): IQueryFunction;
+
+	/**
+	 * @param string|ILiteral|IParameter|IQueryFunction $value The value that might be null
+	 * @param string|ILiteral|IParameter|IQueryFunction $default The value to use if the first one is null
+	 * @return IQueryFunction
+	 * @since 35.0.0
+	 */
+	public function coalesce(string|ILiteral|IParameter|IQueryFunction $value, string|ILiteral|IParameter|IQueryFunction $default): IQueryFunction;
 }

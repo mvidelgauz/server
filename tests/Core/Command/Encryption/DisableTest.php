@@ -1,35 +1,22 @@
 <?php
+
 /**
- * @author Joas Schilling <nickvergessen@owncloud.com>
- *
- * @copyright Copyright (c) 2015, ownCloud, Inc.
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program.  If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
 
 namespace Tests\Core\Command\Encryption;
 
 use OC\Core\Command\Encryption\Disable;
-use OCP\IConfig;
+use OCP\IAppConfig;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Test\TestCase;
 
 class DisableTest extends TestCase {
 	/** @var \PHPUnit\Framework\MockObject\MockObject */
-	protected $config;
+	protected $appConfig;
 	/** @var \PHPUnit\Framework\MockObject\MockObject */
 	protected $consoleInput;
 	/** @var \PHPUnit\Framework\MockObject\MockObject */
@@ -38,38 +25,38 @@ class DisableTest extends TestCase {
 	/** @var \Symfony\Component\Console\Command\Command */
 	protected $command;
 
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
-		$config = $this->config = $this->getMockBuilder(IConfig::class)
+		$appConfig = $this->appConfig = $this->getMockBuilder(IAppConfig::class)
 			->disableOriginalConstructor()
 			->getMock();
 		$this->consoleInput = $this->getMockBuilder(InputInterface::class)->getMock();
 		$this->consoleOutput = $this->getMockBuilder(OutputInterface::class)->getMock();
 
-		/** @var \OCP\IConfig $config */
-		$this->command = new Disable($config);
+		/** @var IAppConfig $appConfig */
+		$this->command = new Disable($appConfig);
 	}
 
-
-	public function dataDisable() {
+	public static function dataDisable(): array {
 		return [
-			['yes', true, 'Encryption disabled'],
-			['no', false, 'Encryption is already disabled'],
+			[true, true, 'Encryption disabled'],
+			[false, false, 'Encryption is already disabled'],
 		];
 	}
 
 	/**
-	 * @dataProvider dataDisable
 	 *
-	 * @param string $oldStatus
+	 * @param bool $oldStatus
 	 * @param bool $isUpdating
 	 * @param string $expectedString
 	 */
-	public function testDisable($oldStatus, $isUpdating, $expectedString) {
-		$this->config->expects($this->once())
-			->method('getAppValue')
-			->with('core', 'encryption_enabled', $this->anything())
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataDisable')]
+	public function testDisable(bool $oldStatus, bool $isUpdating, string $expectedString): void {
+		$this->appConfig->expects($this->once())
+			->method('getValueBool')
+			->with('core', 'encryption_enabled', false)
 			->willReturn($oldStatus);
 
 		$this->consoleOutput->expects($this->once())
@@ -77,9 +64,9 @@ class DisableTest extends TestCase {
 			->with($this->stringContains($expectedString));
 
 		if ($isUpdating) {
-			$this->config->expects($this->once())
-				->method('setAppValue')
-				->with('core', 'encryption_enabled', 'no');
+			$this->appConfig->expects($this->once())
+				->method('setValueBool')
+				->with('core', 'encryption_enabled', false);
 		}
 
 		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);

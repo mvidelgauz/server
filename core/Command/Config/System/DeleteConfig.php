@@ -1,26 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Core\Command\Config\System;
 
 use OC\SystemConfig;
@@ -30,17 +15,13 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class DeleteConfig extends Base {
-	/** * @var SystemConfig */
-	protected $systemConfig;
-
-	/**
-	 * @param SystemConfig $systemConfig
-	 */
-	public function __construct(SystemConfig $systemConfig) {
-		parent::__construct();
-		$this->systemConfig = $systemConfig;
+	public function __construct(
+		SystemConfig $systemConfig,
+	) {
+		parent::__construct($systemConfig);
 	}
 
+	#[\Override]
 	protected function configure() {
 		parent::configure();
 
@@ -61,12 +42,13 @@ class DeleteConfig extends Base {
 		;
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$configNames = $input->getArgument('name');
 		$configName = $configNames[0];
 
 		if (count($configNames) > 1) {
-			if ($input->hasParameterOption('--error-if-not-exists') && !in_array($configName, $this->systemConfig->getKeys())) {
+			if ($input->hasParameterOption('--error-if-not-exists') && !in_array($configName, $this->systemConfig->getKeys(), true)) {
 				$output->writeln('<error>System config ' . implode(' => ', $configNames) . ' could not be deleted because it did not exist</error>');
 				return 1;
 			}
@@ -84,7 +66,7 @@ class DeleteConfig extends Base {
 			$output->writeln('<info>System config value ' . implode(' => ', $configNames) . ' deleted</info>');
 			return 0;
 		} else {
-			if ($input->hasParameterOption('--error-if-not-exists') && !in_array($configName, $this->systemConfig->getKeys())) {
+			if ($input->hasParameterOption('--error-if-not-exists') && !in_array($configName, $this->systemConfig->getKeys(), true)) {
 				$output->writeln('<error>System config ' . $configName . ' could not be deleted because it did not exist</error>');
 				return 1;
 			}

@@ -1,59 +1,30 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Clark Tomlinson <fallen013@gmail.com>
- * @author Jan-Christoph Borchardt <hey@jancborchardt.net>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Valdnet <47037905+Valdnet@users.noreply.github.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Encryption\Crypto;
 
 use OC\Encryption\Exceptions\DecryptionFailedException;
 use OC\Files\Cache\Scanner;
 use OC\Files\View;
+use OCA\Encryption\Exceptions\MultiKeyEncryptException;
 use OCA\Encryption\Exceptions\PublicKeyMissingException;
 use OCA\Encryption\KeyManager;
 use OCA\Encryption\Session;
 use OCA\Encryption\Util;
 use OCP\Encryption\IEncryptionModule;
 use OCP\IL10N;
-use OCP\ILogger;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class Encryption implements IEncryptionModule {
 	public const ID = 'OC_DEFAULT_MODULE';
 	public const DISPLAY_NAME = 'Default encryption module';
-
-	/**
-	 * @var Crypt
-	 */
-	private $crypt;
 
 	/** @var string */
 	private $cipher;
@@ -64,8 +35,7 @@ class Encryption implements IEncryptionModule {
 	/** @var string */
 	private $user;
 
-	/** @var  array */
-	private $owner;
+	private array $owner;
 
 	/** @var string */
 	private $fileKey;
@@ -73,83 +43,43 @@ class Encryption implements IEncryptionModule {
 	/** @var string */
 	private $writeCache;
 
-	/** @var KeyManager */
-	private $keyManager;
-
 	/** @var array */
 	private $accessList;
 
 	/** @var boolean */
 	private $isWriteOperation;
 
-	/** @var Util */
-	private $util;
+	private bool $useMasterPassword;
 
-	/** @var  Session */
-	private $session;
-
-	/** @var  ILogger */
-	private $logger;
-
-	/** @var IL10N */
-	private $l;
-
-	/** @var EncryptAll */
-	private $encryptAll;
-
-	/** @var  bool */
-	private $useMasterPassword;
-
-	/** @var DecryptAll  */
-	private $decryptAll;
-
-	/** @var int unencrypted block size if block contains signature */
-	private $unencryptedBlockSizeSigned = 6072;
-
-	/** @var int unencrypted block size */
-	private $unencryptedBlockSize = 6126;
+	private bool $useLegacyBase64Encoding = false;
 
 	/** @var int Current version of the file */
-	private $version = 0;
-
-	/** @var array remember encryption signature version */
-	private static $rememberVersion = [];
-
+	private int $version = 0;
 
 	/**
-	 *
-	 * @param Crypt $crypt
-	 * @param KeyManager $keyManager
-	 * @param Util $util
-	 * @param Session $session
-	 * @param EncryptAll $encryptAll
-	 * @param DecryptAll $decryptAll
-	 * @param ILogger $logger
-	 * @param IL10N $il10n
+	 * @var array remember encryption signature version
+	 * @psalm-suppress ImpureStaticProperty
 	 */
-	public function __construct(Crypt $crypt,
-								KeyManager $keyManager,
-								Util $util,
-								Session $session,
-								EncryptAll $encryptAll,
-								DecryptAll $decryptAll,
-								ILogger $logger,
-								IL10N $il10n) {
-		$this->crypt = $crypt;
-		$this->keyManager = $keyManager;
-		$this->util = $util;
-		$this->session = $session;
-		$this->encryptAll = $encryptAll;
-		$this->decryptAll = $decryptAll;
-		$this->logger = $logger;
-		$this->l = $il10n;
+	private static $rememberVersion = [];
+
+	public function __construct(
+		private Crypt $crypt,
+		private KeyManager $keyManager,
+		private Util $util,
+		private Session $session,
+		private EncryptAll $encryptAll,
+		private DecryptAll $decryptAll,
+		private LoggerInterface $logger,
+		private IL10N $l,
+	) {
 		$this->owner = [];
-		$this->useMasterPassword = $util->isMasterKeyEnabled();
+		$this->useMasterPassword = $this->util->isMasterKeyEnabled();
 	}
 
 	/**
 	 * @return string defining the technical unique id
 	 */
+	#[\Override]
 	public function getId() {
 		return self::ID;
 	}
@@ -159,6 +89,7 @@ class Encryption implements IEncryptionModule {
 	 *
 	 * @return string
 	 */
+	#[\Override]
 	public function getDisplayName() {
 		return self::DISPLAY_NAME;
 	}
@@ -175,15 +106,21 @@ class Encryption implements IEncryptionModule {
 	 * @param array $accessList who has access to the file contains the key 'users' and 'public'
 	 *
 	 * @return array $header contain data as key-value pairs which should be
-	 *                       written to the header, in case of a write operation
-	 *                       or if no additional data is needed return a empty array
+	 *               written to the header, in case of a write operation
+	 *               or if no additional data is needed return a empty array
 	 */
+	#[\Override]
 	public function begin($path, $user, $mode, array $header, array $accessList) {
 		$this->path = $this->getPathToRealFile($path);
 		$this->accessList = $accessList;
 		$this->user = $user;
 		$this->isWriteOperation = false;
 		$this->writeCache = '';
+		$this->useLegacyBase64Encoding = true;
+
+		if (isset($header['encoding'])) {
+			$this->useLegacyBase64Encoding = $header['encoding'] !== Crypt::BINARY_ENCODING_FORMAT;
+		}
 
 		if ($this->session->isReady() === false) {
 			// if the master key is enabled we can initialize encryption
@@ -193,15 +130,10 @@ class Encryption implements IEncryptionModule {
 			}
 		}
 
-		if ($this->session->decryptAllModeActivated()) {
-			$encryptedFileKey = $this->keyManager->getEncryptedFileKey($this->path);
-			$shareKey = $this->keyManager->getShareKey($this->path, $this->session->getDecryptAllUid());
-			$this->fileKey = $this->crypt->multiKeyDecrypt($encryptedFileKey,
-				$shareKey,
-				$this->session->getDecryptAllKey());
-		} else {
-			$this->fileKey = $this->keyManager->getFileKey($this->path, $this->user);
-		}
+		/* If useLegacyFileKey is not specified in header, auto-detect, to be safe */
+		$useLegacyFileKey = ((string)($header['useLegacyFileKey'] ?? '') === 'false' ? false : null);
+
+		$this->fileKey = $this->keyManager->getFileKey($this->path, $useLegacyFileKey, $this->session->decryptAllModeActivated());
 
 		// always use the version from the original file, also part files
 		// need to have a correct version number if they get moved over to the
@@ -225,10 +157,19 @@ class Encryption implements IEncryptionModule {
 			if (Scanner::isPartialFile($path)) {
 				$this->version = $this->version + 1;
 			}
+
+			// A file that is not in the file cache has no stored version, but its
+			// blocks were signed with version 1 - the version the first write of a
+			// file uses. This happens while a file written in this request has not
+			// been scanned yet.
+			if ($this->version === 0) {
+				$this->version = 1;
+			}
 		}
 
 		if ($this->isWriteOperation) {
 			$this->cipher = $this->crypt->getCipher();
+			$this->useLegacyBase64Encoding = $this->crypt->useLegacyBase64Encoding();
 		} elseif (isset($header['cipher'])) {
 			$this->cipher = $header['cipher'];
 		} else {
@@ -237,7 +178,17 @@ class Encryption implements IEncryptionModule {
 			$this->cipher = $this->crypt->getLegacyCipher();
 		}
 
-		return ['cipher' => $this->cipher, 'signed' => 'true'];
+		$result = [
+			'cipher' => $this->cipher,
+			'signed' => 'true',
+			'useLegacyFileKey' => 'false',
+		];
+
+		if ($this->useLegacyBase64Encoding !== true) {
+			$result['encoding'] = Crypt::BINARY_ENCODING_FORMAT;
+		}
+
+		return $result;
 	}
 
 	/**
@@ -246,14 +197,15 @@ class Encryption implements IEncryptionModule {
 	 * buffer.
 	 *
 	 * @param string $path to the file
-	 * @param int $position
+	 * @param string $position
 	 * @return string remained data which should be written to the file in case
 	 *                of a write operation
 	 * @throws PublicKeyMissingException
 	 * @throws \Exception
-	 * @throws \OCA\Encryption\Exceptions\MultiKeyEncryptException
+	 * @throws MultiKeyEncryptException
 	 */
-	public function end($path, $position = 0) {
+	#[\Override]
+	public function end($path, $position = '0') {
 		$result = '';
 		if ($this->isWriteOperation) {
 			// in case of a part file we remember the new signature versions
@@ -288,13 +240,19 @@ class Encryption implements IEncryptionModule {
 			}
 
 			$publicKeys = $this->keyManager->addSystemKeys($this->accessList, $publicKeys, $this->getOwner($path));
-			$encryptedKeyfiles = $this->crypt->multiKeyEncrypt($this->fileKey, $publicKeys);
-			$this->keyManager->setAllFileKeys($this->path, $encryptedKeyfiles);
+			$shareKeys = $this->crypt->multiKeyEncrypt($this->fileKey, $publicKeys);
+			if (!$this->keyManager->deleteLegacyFileKey($this->path)) {
+				$this->logger->warning(
+					'Failed to delete legacy filekey for {path}',
+					['app' => 'encryption', 'path' => $path]
+				);
+			}
+			foreach ($shareKeys as $uid => $keyFile) {
+				$this->keyManager->setShareKey($this->path, $uid, $keyFile);
+			}
 		}
-		return $result;
+		return $result ?: '';
 	}
-
-
 
 	/**
 	 * encrypt data
@@ -303,11 +261,15 @@ class Encryption implements IEncryptionModule {
 	 * @param int $position
 	 * @return string encrypted data
 	 */
-	public function encrypt($data, $position = 0) {
+	#[\Override]
+	public function encrypt(
+		#[\SensitiveParameter]
+		$data,
+		$position = 0,
+	): string {
 		// If extra data is left over from the last round, make sure it
 		// is integrated into the next block
 		if ($this->writeCache) {
-
 			// Concat writeCache to start of $data
 			$data = $this->writeCache . $data;
 
@@ -319,15 +281,13 @@ class Encryption implements IEncryptionModule {
 		$encrypted = '';
 		// While there still remains some data to be processed & written
 		while (strlen($data) > 0) {
-
 			// Remaining length for this iteration, not of the
 			// entire file (may be greater than 8192 bytes)
 			$remainingLength = strlen($data);
 
 			// If data remaining to be written is less than the
-			// size of 1 6126 byte block
-			if ($remainingLength < $this->unencryptedBlockSizeSigned) {
-
+			// size of 1 unencrypted block
+			if ($remainingLength < $this->getUnencryptedBlockSize(true)) {
 				// Set writeCache to contents of $data
 				// The writeCache will be carried over to the
 				// next write round, and added to the start of
@@ -341,16 +301,15 @@ class Encryption implements IEncryptionModule {
 				// Clear $data ready for next round
 				$data = '';
 			} else {
-
 				// Read the chunk from the start of $data
-				$chunk = substr($data, 0, $this->unencryptedBlockSizeSigned);
+				$chunk = substr($data, 0, $this->getUnencryptedBlockSize(true));
 
-				$encrypted .= $this->crypt->symmetricEncryptFileContent($chunk, $this->fileKey, $this->version + 1, $position);
+				$encrypted .= $this->crypt->symmetricEncryptFileContent($chunk, $this->fileKey, $this->version + 1, (string)$position);
 
 				// Remove the chunk we just processed from
 				// $data, leaving only unprocessed data in $data
 				// var, for handling on the next round
-				$data = substr($data, $this->unencryptedBlockSizeSigned);
+				$data = substr($data, $this->getUnencryptedBlockSize(true));
 			}
 		}
 
@@ -365,7 +324,12 @@ class Encryption implements IEncryptionModule {
 	 * @return string decrypted data
 	 * @throws DecryptionFailedException
 	 */
-	public function decrypt($data, $position = 0) {
+	#[\Override]
+	public function decrypt(
+		#[\SensitiveParameter]
+		$data,
+		$position = 0,
+	): string {
 		if (empty($this->fileKey)) {
 			$msg = 'Cannot decrypt this file, probably this is a shared file. Please ask the file owner to reshare the file with you.';
 			$hint = $this->l->t('Cannot decrypt this file, probably this is a shared file. Please ask the file owner to reshare the file with you.');
@@ -374,27 +338,28 @@ class Encryption implements IEncryptionModule {
 			throw new DecryptionFailedException($msg, $hint);
 		}
 
-		return $this->crypt->symmetricDecryptFileContent($data, $this->fileKey, $this->cipher, $this->version, $position);
+		return $this->crypt->symmetricDecryptFileContent($data, $this->fileKey, $this->cipher, $this->version, $position, !$this->useLegacyBase64Encoding);
 	}
 
 	/**
 	 * update encrypted file, e.g. give additional users access to the file
 	 *
 	 * @param string $path path to the file which should be updated
-	 * @param string $uid of the user who performs the operation
+	 * @param string $uid ignored
 	 * @param array $accessList who has access to the file contains the key 'users' and 'public'
-	 * @return boolean
+	 * @return bool
 	 */
+	#[\Override]
 	public function update($path, $uid, array $accessList) {
 		if (empty($accessList)) {
 			if (isset(self::$rememberVersion[$path])) {
 				$this->keyManager->setVersion($path, self::$rememberVersion[$path], new View());
 				unset(self::$rememberVersion[$path]);
 			}
-			return;
+			return false;
 		}
 
-		$fileKey = $this->keyManager->getFileKey($path, $uid);
+		$fileKey = $this->keyManager->getFileKey($path, null);
 
 		if (!empty($fileKey)) {
 			$publicKeys = [];
@@ -412,11 +377,13 @@ class Encryption implements IEncryptionModule {
 
 			$publicKeys = $this->keyManager->addSystemKeys($accessList, $publicKeys, $this->getOwner($path));
 
-			$encryptedFileKey = $this->crypt->multiKeyEncrypt($fileKey, $publicKeys);
+			$shareKeys = $this->crypt->multiKeyEncrypt($fileKey, $publicKeys);
 
 			$this->keyManager->deleteAllFileKeys($path);
 
-			$this->keyManager->setAllFileKeys($path, $encryptedFileKey);
+			foreach ($shareKeys as $uid => $keyFile) {
+				$this->keyManager->setShareKey($path, $uid, $keyFile);
+			}
 		} else {
 			$this->logger->debug('no file key found, we assume that the file "{file}" is not encrypted',
 				['file' => $path, 'app' => 'encryption']);
@@ -433,6 +400,7 @@ class Encryption implements IEncryptionModule {
 	 * @param string $path
 	 * @return boolean
 	 */
+	#[\Override]
 	public function shouldEncrypt($path) {
 		if ($this->util->shouldEncryptHomeStorage() === false) {
 			$storage = $this->util->getStorage($path);
@@ -462,15 +430,28 @@ class Encryption implements IEncryptionModule {
 	 * get size of the unencrypted payload per block.
 	 * Nextcloud read/write files with a block size of 8192 byte
 	 *
+	 * Encrypted blocks have a 22-byte IV and 2 bytes of padding, encrypted and
+	 * signed blocks have also a 71-byte signature and 1 more byte of padding,
+	 * resulting respectively in:
+	 *
+	 *  8192 - 22 - 2 = 8168 bytes in each unsigned unencrypted block
+	 *  8192 - 22 - 2 - 71 - 1 = 8096 bytes in each signed unencrypted block
+	 *
+	 * Legacy base64 encoding then reduces the available size by a 3/4 factor:
+	 *
+	 *  8168 * (3/4) = 6126 bytes in each base64-encoded unsigned unencrypted block
+	 *  8096 * (3/4) = 6072 bytes in each base64-encoded signed unencrypted block
+	 *
 	 * @param bool $signed
 	 * @return int
 	 */
+	#[\Override]
 	public function getUnencryptedBlockSize($signed = false) {
-		if ($signed === false) {
-			return $this->unencryptedBlockSize;
+		if ($this->useLegacyBase64Encoding) {
+			return $signed ? 6072 : 6126;
+		} else {
+			return $signed ? 8096 : 8168;
 		}
-
-		return $this->unencryptedBlockSizeSigned;
 	}
 
 	/**
@@ -478,12 +459,13 @@ class Encryption implements IEncryptionModule {
 	 * e.g. if all encryption keys exists
 	 *
 	 * @param string $path
-	 * @param string $uid user for whom we want to check if he can read the file
+	 * @param string $uid user for whom we want to check if they can read the file
 	 * @return bool
 	 * @throws DecryptionFailedException
 	 */
+	#[\Override]
 	public function isReadable($path, $uid) {
-		$fileKey = $this->keyManager->getFileKey($path, $uid);
+		$fileKey = $this->keyManager->getFileKey($path, null);
 		if (empty($fileKey)) {
 			$owner = $this->util->getOwner($path);
 			if ($owner !== $uid) {
@@ -491,8 +473,8 @@ class Encryption implements IEncryptionModule {
 				// error message because in this case it means that the file was
 				// shared with the user at a point where the user didn't had a
 				// valid private/public key
-				$msg = 'Encryption module "' . $this->getDisplayName() .
-					'" is not able to read ' . $path;
+				$msg = 'Encryption module "' . $this->getDisplayName()
+					. '" is not able to read ' . $path;
 				$hint = $this->l->t('Cannot read this file, probably this is a shared file. Please ask the file owner to reshare the file with you.');
 				$this->logger->warning($msg);
 				throw new DecryptionFailedException($msg, $hint);
@@ -509,6 +491,7 @@ class Encryption implements IEncryptionModule {
 	 * @param InputInterface $input
 	 * @param OutputInterface $output write some status information to the terminal during encryption
 	 */
+	#[\Override]
 	public function encryptAll(InputInterface $input, OutputInterface $output) {
 		$this->encryptAll->encryptAll($input, $output);
 	}
@@ -521,10 +504,10 @@ class Encryption implements IEncryptionModule {
 	 * @param string $user
 	 * @return bool
 	 */
+	#[\Override]
 	public function prepareDecryptAll(InputInterface $input, OutputInterface $output, $user = '') {
 		return $this->decryptAll->prepare($input, $output, $user);
 	}
-
 
 	/**
 	 * @param string $path
@@ -536,7 +519,9 @@ class Encryption implements IEncryptionModule {
 		if ($parts[2] === 'files_versions') {
 			$realPath = '/' . $parts[1] . '/files/' . implode('/', array_slice($parts, 3));
 			$length = strrpos($realPath, '.');
-			$realPath = substr($realPath, 0, $length);
+			if ($length !== false) {
+				$realPath = substr($realPath, 0, $length);
+			}
 		}
 
 		return $realPath;
@@ -581,6 +566,7 @@ class Encryption implements IEncryptionModule {
 	 * @return boolean
 	 * @since 9.1.0
 	 */
+	#[\Override]
 	public function isReadyForUser($user) {
 		if ($this->util->isMasterKeyEnabled()) {
 			return true;
@@ -593,6 +579,7 @@ class Encryption implements IEncryptionModule {
 	 *
 	 * @return bool
 	 */
+	#[\Override]
 	public function needDetailedAccessList() {
 		return !$this->util->isMasterKeyEnabled();
 	}

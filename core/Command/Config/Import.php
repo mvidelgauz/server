@@ -1,26 +1,11 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Core\Command\Config;
 
 use OCP\IConfig;
@@ -34,19 +19,15 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 class Import extends Command implements CompletionAwareInterface {
-	protected $validRootKeys = ['system', 'apps'];
+	protected array $validRootKeys = ['system', 'apps'];
 
-	/** @var IConfig */
-	protected $config;
-
-	/**
-	 * @param IConfig $config
-	 */
-	public function __construct(IConfig $config) {
+	public function __construct(
+		protected IConfig $config,
+	) {
 		parent::__construct();
-		$this->config = $config;
 	}
 
+	#[\Override]
 	protected function configure() {
 		$this
 			->setName('config:import')
@@ -59,6 +40,7 @@ class Import extends Command implements CompletionAwareInterface {
 		;
 	}
 
+	#[\Override]
 	protected function execute(InputInterface $input, OutputInterface $output): int {
 		$importFile = $input->getArgument('file');
 		if ($importFile !== null) {
@@ -70,7 +52,7 @@ class Import extends Command implements CompletionAwareInterface {
 		try {
 			$configs = $this->validateFileContent($content);
 		} catch (\UnexpectedValueException $e) {
-			$output->writeln('<error>' . $e->getMessage(). '</error>');
+			$output->writeln('<error>' . $e->getMessage() . '</error>');
 			return 1;
 		}
 
@@ -174,8 +156,8 @@ class Import extends Command implements CompletionAwareInterface {
 	 * @param string $configName
 	 */
 	protected function checkTypeRecursively($configValue, $configName) {
-		if (!is_array($configValue) && !is_bool($configValue) && !is_int($configValue) && !is_string($configValue) && !is_null($configValue)) {
-			throw new \UnexpectedValueException('Invalid system config value for "' . $configName . '". Only arrays, bools, integers, strings and null (delete) are allowed.');
+		if (!is_array($configValue) && !is_bool($configValue) && !is_int($configValue) && !is_string($configValue) && !is_null($configValue) && !is_float($configValue)) {
+			throw new \UnexpectedValueException('Invalid system config value for "' . $configName . '". Only arrays, bools, integers, floats, strings and null (delete) are allowed.');
 		}
 		if (is_array($configValue)) {
 			foreach ($configValue as $key => $value) {
@@ -204,6 +186,7 @@ class Import extends Command implements CompletionAwareInterface {
 	 * @param CompletionContext $context
 	 * @return string[]
 	 */
+	#[\Override]
 	public function completeOptionValues($optionName, CompletionContext $context) {
 		return [];
 	}
@@ -213,6 +196,7 @@ class Import extends Command implements CompletionAwareInterface {
 	 * @param CompletionContext $context
 	 * @return string[]
 	 */
+	#[\Override]
 	public function completeArgumentValues($argumentName, CompletionContext $context) {
 		if ($argumentName === 'file') {
 			$helper = new ShellPathCompletion(

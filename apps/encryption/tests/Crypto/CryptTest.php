@@ -1,65 +1,40 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Encryption\Tests\Crypto;
 
 use OCA\Encryption\Crypto\Crypt;
+use OCP\Encryption\Exceptions\GenericEncryptionException;
 use OCP\IConfig;
 use OCP\IL10N;
-use OCP\ILogger;
 use OCP\IUserSession;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 use Test\TestCase;
 
 class CryptTest extends TestCase {
+	protected LoggerInterface&MockObject $logger;
+	protected IUserSession&MockObject $userSession;
+	protected IConfig&MockObject $config;
+	protected IL10N&MockObject $l;
 
-
-	/** @var \OCP\ILogger|\PHPUnit\Framework\MockObject\MockObject */
-	private $logger;
-
-	/** @var \OCP\IUserSession|\PHPUnit\Framework\MockObject\MockObject */
-	private $userSession;
-
-	/** @var \OCP\IConfig|\PHPUnit\Framework\MockObject\MockObject */
-	private $config;
-
-	/** @var \OCP\IL10N|\PHPUnit\Framework\MockObject\MockObject */
-	private $l;
-
-	/** @var Crypt */
-	private $crypt;
+	protected Crypt $crypt;
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->logger = $this->getMockBuilder(ILogger::class)
+		$this->logger = $this->getMockBuilder(LoggerInterface::class)
 			->disableOriginalConstructor()
 			->getMock();
 		$this->logger->expects($this->any())
-			->method('warning')
-			->willReturn(true);
+			->method('warning');
 		$this->userSession = $this->getMockBuilder(IUserSession::class)
 			->disableOriginalConstructor()
 			->getMock();
@@ -74,7 +49,7 @@ class CryptTest extends TestCase {
 	/**
 	 * test getOpenSSLConfig without any additional parameters
 	 */
-	public function testGetOpenSSLConfigBasic() {
+	public function testGetOpenSSLConfigBasic(): void {
 		$this->config->expects($this->once())
 			->method('getSystemValue')
 			->with($this->equalTo('openssl'), $this->equalTo([]))
@@ -89,7 +64,7 @@ class CryptTest extends TestCase {
 	/**
 	 * test getOpenSSLConfig with additional parameters defined in config.php
 	 */
-	public function testGetOpenSSLConfig() {
+	public function testGetOpenSSLConfig(): void {
 		$this->config->expects($this->once())
 			->method('getSystemValue')
 			->with($this->equalTo('openssl'), $this->equalTo([]))
@@ -103,15 +78,13 @@ class CryptTest extends TestCase {
 		$this->assertSame('bar', $result['foo']);
 	}
 
-
 	/**
 	 * test generateHeader with valid key formats
-	 *
-	 * @dataProvider dataTestGenerateHeader
 	 */
-	public function testGenerateHeader($keyFormat, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataTestGenerateHeader')]
+	public function testGenerateHeader($keyFormat, $expected): void {
 		$this->config->expects($this->once())
-			->method('getSystemValue')
+			->method('getSystemValueString')
 			->with($this->equalTo('cipher'), $this->equalTo('AES-256-CTR'))
 			->willReturn('AES-128-CFB');
 
@@ -128,44 +101,41 @@ class CryptTest extends TestCase {
 	 * test generateHeader with invalid key format
 	 *
 	 */
-	public function testGenerateHeaderInvalid() {
+	public function testGenerateHeaderInvalid(): void {
 		$this->expectException(\InvalidArgumentException::class);
 
 		$this->crypt->generateHeader('unknown');
 	}
 
-	/**
-	 * @return array
-	 */
-	public function dataTestGenerateHeader() {
+	public static function dataTestGenerateHeader(): array {
 		return [
-			[null, 'HBEGIN:cipher:AES-128-CFB:keyFormat:hash:HEND'],
-			['password', 'HBEGIN:cipher:AES-128-CFB:keyFormat:password:HEND'],
-			['hash', 'HBEGIN:cipher:AES-128-CFB:keyFormat:hash:HEND']
+			[null, 'HBEGIN:cipher:AES-128-CFB:keyFormat:hash2:encoding:binary:HEND'],
+			['password', 'HBEGIN:cipher:AES-128-CFB:keyFormat:password:encoding:binary:HEND'],
+			['hash', 'HBEGIN:cipher:AES-128-CFB:keyFormat:hash:encoding:binary:HEND']
 		];
 	}
 
-	public function testGetCipherWithInvalidCipher() {
+	public function testGetCipherWithInvalidCipher(): void {
 		$this->config->expects($this->once())
-				->method('getSystemValue')
-				->with($this->equalTo('cipher'), $this->equalTo('AES-256-CTR'))
-				->willReturn('Not-Existing-Cipher');
+			->method('getSystemValueString')
+			->with($this->equalTo('cipher'), $this->equalTo('AES-256-CTR'))
+			->willReturn('Not-Existing-Cipher');
 		$this->logger
 			->expects($this->once())
 			->method('warning')
 			->with('Unsupported cipher (Not-Existing-Cipher) defined in config.php supported. Falling back to AES-256-CTR');
 
-		$this->assertSame('AES-256-CTR',  $this->crypt->getCipher());
+		$this->assertSame('AES-256-CTR', $this->crypt->getCipher());
 	}
 
 	/**
-	 * @dataProvider dataProviderGetCipher
 	 * @param string $configValue
 	 * @param string $expected
 	 */
-	public function testGetCipher($configValue, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataProviderGetCipher')]
+	public function testGetCipher($configValue, $expected): void {
 		$this->config->expects($this->once())
-			->method('getSystemValue')
+			->method('getSystemValueString')
 			->with($this->equalTo('cipher'), $this->equalTo('AES-256-CTR'))
 			->willReturn($configValue);
 
@@ -176,10 +146,8 @@ class CryptTest extends TestCase {
 
 	/**
 	 * data provider for testGetCipher
-	 *
-	 * @return array
 	 */
-	public function dataProviderGetCipher() {
+	public static function dataProviderGetCipher(): array {
 		return [
 			['AES-128-CFB', 'AES-128-CFB'],
 			['AES-256-CFB', 'AES-256-CFB'],
@@ -193,7 +161,7 @@ class CryptTest extends TestCase {
 	/**
 	 * test concatIV()
 	 */
-	public function testConcatIV() {
+	public function testConcatIV(): void {
 		$result = self::invokePrivate(
 			$this->crypt,
 			'concatIV',
@@ -204,11 +172,9 @@ class CryptTest extends TestCase {
 		);
 	}
 
-	/**
-	 * @dataProvider dataTestSplitMetaData
-	 */
-	public function testSplitMetaData($data, $expected) {
-		$this->config->method('getSystemValue')
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataTestSplitMetaData')]
+	public function testSplitMetaData($data, $expected): void {
+		$this->config->method('getSystemValueBool')
 			->with('encryption_skip_signature_check', false)
 			->willReturn(true);
 		$result = self::invokePrivate($this->crypt, 'splitMetaData', [$data, 'AES-256-CFB']);
@@ -222,7 +188,7 @@ class CryptTest extends TestCase {
 		$this->assertSame($expected['signature'], $result['signature']);
 	}
 
-	public function dataTestSplitMetaData() {
+	public static function dataTestSplitMetaData(): array {
 		return [
 			['encryptedContent00iv001234567890123456xx',
 				['encrypted' => 'encryptedContent', 'iv' => '1234567890123456', 'signature' => false]],
@@ -231,11 +197,9 @@ class CryptTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider dataTestHasSignature
-	 */
-	public function testHasSignature($data, $expected) {
-		$this->config->method('getSystemValue')
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataTestHasSignature')]
+	public function testHasSignature($data, $expected): void {
+		$this->config->method('getSystemValueBool')
 			->with('encryption_skip_signature_check', false)
 			->willReturn(true);
 		$this->assertSame($expected,
@@ -243,24 +207,22 @@ class CryptTest extends TestCase {
 		);
 	}
 
-	public function dataTestHasSignature() {
+	public static function dataTestHasSignature(): array {
 		return [
 			['encryptedContent00iv001234567890123456xx', false],
 			['encryptedContent00iv00123456789012345600sig00e1992521e437f6915f9173b190a512cfc38a00ac24502db44e0ba10c2bb0cc86xxx', true]
 		];
 	}
 
-	/**
-	 * @dataProvider dataTestHasSignatureFail
-	 */
-	public function testHasSignatureFail($cipher) {
-		$this->expectException(\OCP\Encryption\Exceptions\GenericEncryptionException::class);
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataTestHasSignatureFail')]
+	public function testHasSignatureFail($cipher): void {
+		$this->expectException(GenericEncryptionException::class);
 
 		$data = 'encryptedContent00iv001234567890123456xx';
 		$this->invokePrivate($this->crypt, 'hasSignature', [$data, $cipher]);
 	}
 
-	public function dataTestHasSignatureFail() {
+	public static function dataTestHasSignatureFail(): array {
 		return [
 			['AES-256-CTR'],
 			['aes-256-ctr'],
@@ -272,7 +234,7 @@ class CryptTest extends TestCase {
 	/**
 	 * test addPadding()
 	 */
-	public function testAddPadding() {
+	public function testAddPadding(): void {
 		$result = self::invokePrivate($this->crypt, 'addPadding', ['data']);
 		$this->assertSame('dataxxx', $result);
 	}
@@ -280,21 +242,19 @@ class CryptTest extends TestCase {
 	/**
 	 * test removePadding()
 	 *
-	 * @dataProvider dataProviderRemovePadding
 	 * @param $data
 	 * @param $expected
 	 */
-	public function testRemovePadding($data, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataProviderRemovePadding')]
+	public function testRemovePadding($data, $expected): void {
 		$result = self::invokePrivate($this->crypt, 'removePadding', [$data]);
 		$this->assertSame($expected, $result);
 	}
 
 	/**
 	 * data provider for testRemovePadding
-	 *
-	 * @return array
 	 */
-	public function dataProviderRemovePadding() {
+	public static function dataProviderRemovePadding(): array {
 		return [
 			['dataxx', 'data'],
 			['data', false]
@@ -304,16 +264,18 @@ class CryptTest extends TestCase {
 	/**
 	 * test parseHeader()
 	 */
-	public function testParseHeader() {
-		$header = 'HBEGIN:foo:bar:cipher:AES-256-CFB:HEND';
+	public function testParseHeader(): void {
+		$header = 'HBEGIN:foo:bar:cipher:AES-256-CFB:encoding:binary:HEND';
 		$result = self::invokePrivate($this->crypt, 'parseHeader', [$header]);
 
 		$this->assertTrue(is_array($result));
-		$this->assertSame(2, count($result));
+		$this->assertSame(3, count($result));
 		$this->assertArrayHasKey('foo', $result);
 		$this->assertArrayHasKey('cipher', $result);
+		$this->assertArrayHasKey('encoding', $result);
 		$this->assertSame('bar', $result['foo']);
 		$this->assertSame('AES-256-CFB', $result['cipher']);
+		$this->assertSame('binary', $result['encoding']);
 	}
 
 	/**
@@ -324,42 +286,42 @@ class CryptTest extends TestCase {
 	public function testEncrypt() {
 		$decrypted = 'content';
 		$password = 'password';
+		$cipher = 'AES-256-CTR';
 		$iv = self::invokePrivate($this->crypt, 'generateIv');
 
 		$this->assertTrue(is_string($iv));
 		$this->assertSame(16, strlen($iv));
 
-		$result = self::invokePrivate($this->crypt, 'encrypt', [$decrypted, $iv, $password]);
+		$result = self::invokePrivate($this->crypt, 'encrypt', [$decrypted, $iv, $password, $cipher]);
 
 		$this->assertTrue(is_string($result));
 
 		return [
 			'password' => $password,
 			'iv' => $iv,
+			'cipher' => $cipher,
 			'encrypted' => $result,
 			'decrypted' => $decrypted];
 	}
 
 	/**
 	 * test decrypt()
-	 *
-	 * @depends testEncrypt
 	 */
-	public function testDecrypt($data) {
+	#[\PHPUnit\Framework\Attributes\Depends('testEncrypt')]
+	public function testDecrypt($data): void {
 		$result = self::invokePrivate(
 			$this->crypt,
 			'decrypt',
-			[$data['encrypted'], $data['iv'], $data['password']]);
+			[$data['encrypted'], $data['iv'], $data['password'], $data['cipher'], true]);
 
 		$this->assertSame($data['decrypted'], $result);
 	}
 
 	/**
 	 * test return values of valid ciphers
-	 *
-	 * @dataProvider dataTestGetKeySize
 	 */
-	public function testGetKeySize($cipher, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataTestGetKeySize')]
+	public function testGetKeySize($cipher, $expected): void {
 		$result = $this->invokePrivate($this->crypt, 'getKeySize', [$cipher]);
 		$this->assertSame($expected, $result);
 	}
@@ -368,16 +330,13 @@ class CryptTest extends TestCase {
 	 * test exception if cipher is unknown
 	 *
 	 */
-	public function testGetKeySizeFailure() {
+	public function testGetKeySizeFailure(): void {
 		$this->expectException(\InvalidArgumentException::class);
 
 		$this->invokePrivate($this->crypt, 'getKeySize', ['foo']);
 	}
 
-	/**
-	 * @return array
-	 */
-	public function dataTestGetKeySize() {
+	public static function dataTestGetKeySize(): array {
 		return [
 			['AES-256-CFB', 32],
 			['AES-128-CFB', 16],
@@ -386,32 +345,28 @@ class CryptTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider dataTestDecryptPrivateKey
-	 */
-	public function testDecryptPrivateKey($header, $privateKey, $expectedCipher, $isValidKey, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataTestDecryptPrivateKey')]
+	public function testDecryptPrivateKey($header, $privateKey, $expectedCipher, $isValidKey, $expected): void {
 		$this->config->method('getSystemValueBool')
-			->with('encryption.legacy_format_support', false)
-			->willReturn(true);
+			->willReturnMap([
+				['encryption.legacy_format_support', false, true],
+				['encryption.use_legacy_base64_encoding', false, false],
+			]);
 
-		/** @var \OCA\Encryption\Crypto\Crypt | \PHPUnit\Framework\MockObject\MockObject $crypt */
+		/** @var Crypt|\PHPUnit\Framework\MockObject\MockObject $crypt */
 		$crypt = $this->getMockBuilder(Crypt::class)
-			->setConstructorArgs(
-				[
-					$this->logger,
-					$this->userSession,
-					$this->config,
-					$this->l
-				]
-			)
-			->setMethods(
-				[
-					'parseHeader',
-					'generatePasswordHash',
-					'symmetricDecryptFileContent',
-					'isValidPrivateKey'
-				]
-			)
+			->setConstructorArgs([
+				$this->logger,
+				$this->userSession,
+				$this->config,
+				$this->l
+			])
+			->onlyMethods([
+				'parseHeader',
+				'generatePasswordHash',
+				'symmetricDecryptFileContent',
+				'isValidPrivateKey'
+			])
 			->getMock();
 
 		$crypt->expects($this->once())->method('parseHeader')->willReturn($header);
@@ -432,10 +387,7 @@ class CryptTest extends TestCase {
 		$this->assertSame($expected, $result);
 	}
 
-	/**
-	 * @return array
-	 */
-	public function dataTestDecryptPrivateKey() {
+	public static function dataTestDecryptPrivateKey(): array {
 		return [
 			[['cipher' => 'AES-128-CFB', 'keyFormat' => 'password'], 'HBEGIN:HENDprivateKey', 'AES-128-CFB', true, 'key'],
 			[['cipher' => 'AES-256-CFB', 'keyFormat' => 'password'], 'HBEGIN:HENDprivateKey', 'AES-256-CFB', true, 'key'],
@@ -446,7 +398,7 @@ class CryptTest extends TestCase {
 		];
 	}
 
-	public function testIsValidPrivateKey() {
+	public function testIsValidPrivateKey(): void {
 		$res = openssl_pkey_new();
 		openssl_pkey_export($res, $privateKey);
 
@@ -458,6 +410,19 @@ class CryptTest extends TestCase {
 		// invalid private key
 		$this->assertFalse(
 			$this->invokePrivate($this->crypt, 'isValidPrivateKey', ['foo'])
+		);
+	}
+
+	public function testMultiKeyEncrypt(): void {
+		$res = openssl_pkey_new();
+		openssl_pkey_export($res, $privateKey);
+		$publicKeyPem = openssl_pkey_get_details($res)['key'];
+		$publicKey = openssl_pkey_get_public($publicKeyPem);
+
+		$shareKeys = $this->crypt->multiKeyEncrypt('content', ['user1' => $publicKey]);
+		$this->assertEquals(
+			'content',
+			$this->crypt->multiKeyDecrypt($shareKeys['user1'], $privateKey)
 		);
 	}
 }

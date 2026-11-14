@@ -2,23 +2,8 @@
 
 declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2019 Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Notification;
@@ -28,13 +13,13 @@ use OCP\Notification\INotification;
 use OCP\Notification\INotifier;
 
 class DummyNotifier implements INotifier {
-
 	/**
 	 * Identifier of the notifier, only use [a-z0-9_]
 	 *
 	 * @return string
 	 * @since 17.0.0
 	 */
+	#[\Override]
 	public function getID(): string {
 		// TODO: Implement getID() method.
 	}
@@ -45,6 +30,7 @@ class DummyNotifier implements INotifier {
 	 * @return string
 	 * @since 17.0.0
 	 */
+	#[\Override]
 	public function getName(): string {
 		// TODO: Implement getName() method.
 	}
@@ -57,6 +43,7 @@ class DummyNotifier implements INotifier {
 	 * @throws AlreadyProcessedException When the notification is not needed anymore and should be deleted
 	 * @since 9.0.0
 	 */
+	#[\Override]
 	public function prepare(INotification $notification, string $languageCode): INotification {
 		// TODO: Implement prepare() method.
 	}

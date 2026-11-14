@@ -1,17 +1,25 @@
 <?php
 
+/**
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 namespace Test\Comments;
 
 use OC\Comments\Comment;
 use OCP\Comments\IComment;
+use OCP\Comments\IllegalIDChangeException;
+use OCP\Comments\MessageTooLongException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Test\TestCase;
 
 class CommentTest extends TestCase {
-
 	/**
-	 * @throws \OCP\Comments\IllegalIDChangeException
+	 * @throws IllegalIDChangeException
 	 */
-	public function testSettersValidInput() {
+	public function testSettersValidInput(): void {
 		$comment = new Comment();
 
 		$id = 'comment23';
@@ -24,6 +32,8 @@ class CommentTest extends TestCase {
 		$creationDT = new \DateTime();
 		$latestChildDT = new \DateTime('yesterday');
 		$object = ['type' => 'files', 'id' => 'file64'];
+		$referenceId = sha1('referenceId');
+		$metaData = ['last_edit_actor_id' => 'admin'];
 
 		$comment
 			->setId($id)
@@ -35,7 +45,9 @@ class CommentTest extends TestCase {
 			->setActor($actor['type'], $actor['id'])
 			->setCreationDateTime($creationDT)
 			->setLatestChildDateTime($latestChildDT)
-			->setObject($object['type'], $object['id']);
+			->setObject($object['type'], $object['id'])
+			->setReferenceId($referenceId)
+			->setMetaData($metaData);
 
 		$this->assertSame($id, $comment->getId());
 		$this->assertSame($parentId, $comment->getParentId());
@@ -49,11 +61,12 @@ class CommentTest extends TestCase {
 		$this->assertSame($latestChildDT, $comment->getLatestChildDateTime());
 		$this->assertSame($object['type'], $comment->getObjectType());
 		$this->assertSame($object['id'], $comment->getObjectId());
+		$this->assertSame($referenceId, $comment->getReferenceId());
+		$this->assertSame($metaData, $comment->getMetaData());
 	}
 
-
-	public function testSetIdIllegalInput() {
-		$this->expectException(\OCP\Comments\IllegalIDChangeException::class);
+	public function testSetIdIllegalInput(): void {
+		$this->expectException(IllegalIDChangeException::class);
 
 		$comment = new Comment();
 
@@ -62,9 +75,9 @@ class CommentTest extends TestCase {
 	}
 
 	/**
-	 * @throws \OCP\Comments\IllegalIDChangeException
+	 * @throws IllegalIDChangeException
 	 */
-	public function testResetId() {
+	public function testResetId(): void {
 		$comment = new Comment();
 		$comment->setId('c23');
 		$comment->setId('');
@@ -72,7 +85,7 @@ class CommentTest extends TestCase {
 		$this->assertSame('', $comment->getId());
 	}
 
-	public function simpleSetterProvider() {
+	public static function simpleSetterProvider(): array {
 		return [
 			['Id', true],
 			['TopmostParentId', true],
@@ -84,10 +97,8 @@ class CommentTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider simpleSetterProvider
-	 */
-	public function testSimpleSetterInvalidInput($field, $input) {
+	#[DataProvider(methodName: 'simpleSetterProvider')]
+	public function testSimpleSetterInvalidInput($field, $input): void {
 		$this->expectException(\InvalidArgumentException::class);
 
 		$comment = new Comment();
@@ -96,7 +107,7 @@ class CommentTest extends TestCase {
 		$comment->$setter($input);
 	}
 
-	public function roleSetterProvider() {
+	public static function roleSetterProvider(): array {
 		return [
 			['Actor', true, true],
 			['Actor', 'users', true],
@@ -109,10 +120,8 @@ class CommentTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider roleSetterProvider
-	 */
-	public function testSetRoleInvalidInput($role, $type, $id) {
+	#[DataProvider(methodName: 'roleSetterProvider')]
+	public function testSetRoleInvalidInput($role, $type, $id): void {
 		$this->expectException(\InvalidArgumentException::class);
 
 		$comment = new Comment();
@@ -120,81 +129,143 @@ class CommentTest extends TestCase {
 		$comment->$setter($type, $id);
 	}
 
-
-	public function testSetUberlongMessage() {
-		$this->expectException(\OCP\Comments\MessageTooLongException::class);
+	public function testSetUberlongMessage(): void {
+		$this->expectException(MessageTooLongException::class);
 
 		$comment = new Comment();
 		$msg = str_pad('', IComment::MAX_MESSAGE_LENGTH + 1, 'x');
 		$comment->setMessage($msg);
 	}
 
-	public function mentionsProvider() {
+	public static function mentionsProvider(): array {
 		return [
 			[
-				'@alice @bob look look, a cook!', ['alice', 'bob']
+				'@alice @bob look look, a cook!',
+				[['type' => 'user', 'id' => 'alice'], ['type' => 'user', 'id' => 'bob']],
 			],
 			[
-				'no mentions in this message', []
+				'no mentions in this message',
+				[]
 			],
 			[
-				'@alice @bob look look, a duplication @alice test @bob!', ['alice', 'bob']
+				'@alice @bob look look, a duplication @alice test @bob!',
+				[['type' => 'user', 'id' => 'alice'], ['type' => 'user', 'id' => 'bob']],
 			],
 			[
-				'@alice is the author, notify @bob, nevertheless mention her!', ['alice', 'bob'], 'alice'
+				'@alice is the author, notify @bob, nevertheless mention her!',
+				[['type' => 'user', 'id' => 'alice'], ['type' => 'user', 'id' => 'bob']],
+				/* author: */ 'alice'
 			],
 			[
-				'@foobar and @barfoo you should know, @foo@bar.com is valid' .
-					' and so is @bar@foo.org@foobar.io I hope that clarifies everything.' .
-					' cc @23452-4333-54353-2342 @yolo!' .
-					' however the most important thing to know is that www.croissant.com/@oil is not valid' .
-					' and won\'t match anything at all',
-				['bar@foo.org@foobar.io', '23452-4333-54353-2342', 'foo@bar.com', 'foobar', 'barfoo', 'yolo']
+				'@foobar and @barfoo you should know, @foo@bar.com is valid'
+					. ' and so is @bar@foo.org@foobar.io I hope that clarifies everything.'
+					. ' cc @23452-4333-54353-2342 @yolo!'
+					. ' however the most important thing to know is that www.croissant.com/@oil is not valid'
+					. ' and won\'t match anything at all',
+				[
+					['type' => 'user', 'id' => 'bar@foo.org@foobar.io'],
+					['type' => 'user', 'id' => '23452-4333-54353-2342'],
+					['type' => 'user', 'id' => 'foo@bar.com'],
+					['type' => 'user', 'id' => 'foobar'],
+					['type' => 'user', 'id' => 'barfoo'],
+					['type' => 'user', 'id' => 'yolo'],
+				],
 			],
 			[
-				'@@chef is also a valid mention, no matter how strange it looks', ['@chef']
+				'@@chef is also a valid mention, no matter how strange it looks',
+				[['type' => 'user', 'id' => '@chef']],
 			],
 			[
-				'Also @"user with spaces" are now supported', ['user with spaces']
+				'Also @"user with spaces" are now supported',
+				[['type' => 'user', 'id' => 'user with spaces']],
 			],
 			[
-				'Also @"guest/0123456789abcdef" are now supported', [], null, ['guest/0123456789abcdef']
+				'Also @"guest/0123456789abcdef" are now supported',
+				[['type' => 'guest', 'id' => 'guest/0123456789abcdef']],
 			],
 			[
-				'Also @"group/My Group ID 321" are now supported', [], null, [], ['My Group ID 321']
+				'Also @"group/My Group ID 321" are now supported',
+				[['type' => 'group', 'id' => 'My Group ID 321']],
+			],
+			[
+				'Welcome federation @"federated_group/My Group ID 321" @"federated_team/Former Cirle" @"federated_user/cloudId@http://example.tld:8080/nextcloud"! Now freshly supported',
+				[
+					['type' => 'federated_user', 'id' => 'cloudId@http://example.tld:8080/nextcloud'],
+					['type' => 'federated_group', 'id' => 'My Group ID 321'],
+					['type' => 'federated_team', 'id' => 'Former Cirle'],
+				],
+			],
+			[
+				'Emails are supported since 30.0.2 right? @"email/aa23d315de327cfc330f0401ea061005b2b0cdd45ec8346f12664dd1f34cb886"',
+				[
+					['type' => 'email', 'id' => 'aa23d315de327cfc330f0401ea061005b2b0cdd45ec8346f12664dd1f34cb886'],
+				],
+			],
+			[
+				'Mention @alice but not `@bob` inside inline code',
+				[['type' => 'user', 'id' => 'alice']],
+			],
+			[
+				'Mention @alice but not `Hello @bob there` inside inline code',
+				[['type' => 'user', 'id' => 'alice']],
+			],
+			[
+				"Mention ` user @alice\nAs it's just 2 ` accents",
+				[['type' => 'user', 'id' => 'alice']],
+			],
+			[
+				'Mention @alice and @bob but not `Hello @bob there` inside inline code',
+				[['type' => 'user', 'id' => 'alice'], ['type' => 'user', 'id' => 'bob']],
+			],
+			[
+				"Mention @alice but not in fenced code block\n```\n@bob @charlie\n```\nend",
+				[['type' => 'user', 'id' => 'alice']],
+			],
+			[
+				"Mention @alice but not in tilde code block\n~~~\n@bob\n~~~\nend",
+				[['type' => 'user', 'id' => 'alice']],
+			],
+			[
+				'No mentions at all in `@alice` and `@bob`',
+				[],
+			],
+			[
+				"@alice\n```\n@bob\n```\n@charlie",
+				[['type' => 'user', 'id' => 'charlie'], ['type' => 'user', 'id' => 'alice']],
+			],
+			[
+				"@alice\n```\n@bob\n```\n@charlie",
+				[['type' => 'user', 'id' => 'charlie'], ['type' => 'user', 'id' => 'alice'], ['type' => 'user', 'id' => 'bob']],
+				null,
+				false,
+			],
+			[
+				'Mention @alice and `also @bob as end of text only applies to code blocks',
+				[['type' => 'user', 'id' => 'alice'], ['type' => 'user', 'id' => 'bob']],
+			],
+			[
+				"Mention @alice but not in unclosed fenced code block\n```\n@bob\n@charlie",
+				[['type' => 'user', 'id' => 'alice']],
+			],
+			[
+				"Mention @alice but not in unclosed tilde code block\n~~~\n@bob",
+				[['type' => 'user', 'id' => 'alice']],
+			],
+			[
+				'Matrix users @"matrix/@bob:example.org" and @"matrix/@carol.c=1/x+y:[2001:db8::1]:8448" but not @"matrix/@dave" or @"matrix/eve:example.org"',
+				[['type' => 'matrix', 'id' => '@carol.c=1/x+y:[2001:db8::1]:8448'], ['type' => 'matrix', 'id' => '@bob:example.org']],
 			],
 		];
 	}
 
-	/**
-	 * @dataProvider mentionsProvider
-	 *
-	 * @param string $message
-	 * @param array $expectedUids
-	 * @param string|null $author
-	 * @param array $expectedGuests
-	 */
-	public function testMentions(string $message, array $expectedUids, ?string $author = null, array $expectedGuests = [], array $expectedGroups = []): void {
+	#[DataProvider(methodName: 'mentionsProvider')]
+	public function testMentions(string $message, array $expectedMentions, ?string $author = null, bool $markdown = true): void {
 		$comment = new Comment();
 		$comment->setMessage($message);
 		if (!is_null($author)) {
 			$comment->setActor('user', $author);
 		}
-		$mentions = $comment->getMentions();
-		while ($mention = array_shift($mentions)) {
-			if ($mention['type'] === 'user') {
-				$id = array_shift($expectedUids);
-			} elseif ($mention['type'] === 'guest') {
-				$id = array_shift($expectedGuests);
-			} elseif ($mention['type'] === 'group') {
-				$id = array_shift($expectedGroups);
-			} else {
-				$this->fail('Unexpected mention type');
-				continue;
-			}
-			$this->assertSame($id, $mention['id']);
-		}
-		$this->assertEmpty($mentions);
-		$this->assertEmpty($expectedUids);
+		$mentions = $comment->getMentions($markdown);
+		$this->assertSame($expectedMentions, $mentions);
 	}
 }

@@ -3,26 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2020 Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Repair;
 
 use OCP\DB\Exception;
@@ -40,37 +24,22 @@ use function urlencode;
 class RepairDavShares implements IRepairStep {
 	protected const GROUP_PRINCIPAL_PREFIX = 'principals/groups/';
 
-	/** @var IConfig */
-	private $config;
-	/** @var IDBConnection */
-	private $dbc;
-	/** @var IGroupManager */
-	private $groupManager;
-	/** @var LoggerInterface */
-	private $logger;
-	/** @var bool */
-	private $hintInvalidShares = false;
+	private bool $hintInvalidShares = false;
 
 	public function __construct(
-		IConfig $config,
-		IDBConnection $dbc,
-		IGroupManager $groupManager,
-		LoggerInterface $logger
+		private readonly IConfig $config,
+		private readonly IDBConnection $dbc,
+		private readonly IGroupManager $groupManager,
+		private readonly LoggerInterface $logger,
 	) {
-		$this->config = $config;
-		$this->dbc = $dbc;
-		$this->groupManager = $groupManager;
-		$this->logger = $logger;
 	}
 
-	/**
-	 * @inheritDoc
-	 */
-	public function getName() {
+	#[\Override]
+	public function getName(): string {
 		return 'Repair DAV shares';
 	}
 
-	protected function repairUnencodedGroupShares() {
+	protected function repairUnencodedGroupShares(): bool {
 		$qb = $this->dbc->getQueryBuilder();
 		$qb->select(['id', 'principaluri'])
 			->from('dav_shares')
@@ -81,8 +50,8 @@ class RepairDavShares implements IRepairStep {
 			->set('principaluri', $updateQuery->createParameter('updatedPrincipalUri'))
 			->where($updateQuery->expr()->eq('id', $updateQuery->createParameter('shareId')));
 
-		$statement = $qb->execute();
-		while ($share = $statement->fetch()) {
+		$statement = $qb->executeQuery();
+		while ($share = $statement->fetchAssociative()) {
 			$gid = substr($share['principaluri'], strlen(self::GROUP_PRINCIPAL_PREFIX));
 			$decodedGid = urldecode($gid);
 			$encodedGid = urlencode($gid);
@@ -110,7 +79,7 @@ class RepairDavShares implements IRepairStep {
 				$updateQuery
 					->setParameter('updatedPrincipalUri', $fixedPrincipal)
 					->setParameter('shareId', $share['id'])
-					->execute();
+					->executeStatement();
 				$this->logger->info('Repaired principal for dav share {id} from {old} to {new}', $logParameters);
 			} catch (Exception $e) {
 				$logParameters['message'] = $e->getMessage();
@@ -121,11 +90,9 @@ class RepairDavShares implements IRepairStep {
 		return true;
 	}
 
-	/**
-	 * @inheritDoc
-	 */
-	public function run(IOutput $output) {
-		$versionFromBeforeUpdate = $this->config->getSystemValue('version', '0.0.0');
+	#[\Override]
+	public function run(IOutput $output): void {
+		$versionFromBeforeUpdate = $this->config->getSystemValueString('version', '0.0.0');
 		if (version_compare($versionFromBeforeUpdate, '20.0.8', '<')
 			&& $this->repairUnencodedGroupShares()
 		) {

@@ -1,96 +1,46 @@
 <?php
 
 /**
- * @author Morris Jobke <hey@morrisjobke.de>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\Support\Subscription;
 
 use OC\Support\Subscription\Registry;
-use OC\User\Database;
 use OCP\IConfig;
 use OCP\IGroup;
 use OCP\IGroupManager;
-use OCP\IServerContainer;
 use OCP\IUserManager;
 use OCP\Notification\IManager;
+use OCP\Support\Subscription\Exception\AlreadyRegisteredException;
 use OCP\Support\Subscription\ISubscription;
 use OCP\Support\Subscription\ISupportedApps;
-use OCP\User\Backend\ICountUsersBackend;
-use OCP\UserInterface;
 use PHPUnit\Framework\MockObject\MockObject;
-use Psr\Log\LoggerInterface;
+use Psr\Container\ContainerInterface;
 use Test\TestCase;
 
 class RegistryTest extends TestCase {
+	private Registry $registry;
+	private MockObject&IManager $notificationManager;
 
-	/** @var Registry */
-	private $registry;
-
-	/** @var MockObject|IConfig */
-	private $config;
-
-	/** @var MockObject|IServerContainer */
-	private $serverContainer;
-
-	/** @var MockObject|IUserManager */
-	private $userManager;
-
-	/** @var MockObject|IGroupManager */
-	private $groupManager;
-
-	/** @var MockObject|LoggerInterface */
-	private $logger;
-
-	/** @var MockObject|IManager */
-	private $notificationManager;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
-
-		$this->config = $this->createMock(IConfig::class);
-		$this->serverContainer = $this->createMock(IServerContainer::class);
-		$this->userManager = $this->createMock(IUserManager::class);
-		$this->groupManager = $this->createMock(IGroupManager::class);
-		$this->logger = $this->createMock(LoggerInterface::class);
 		$this->notificationManager = $this->createMock(IManager::class);
-		$this->registry = new Registry(
-			$this->config,
-			$this->serverContainer,
-			$this->userManager,
-			$this->groupManager,
-			$this->logger,
-			$this->notificationManager
-		);
+		$this->registry = $this->createInstanceWithMocks(Registry::class);
 	}
 
 	/**
 	 * Doesn't assert anything, just checks whether anything "explodes"
 	 */
-	public function testDelegateToNone() {
+	public function testDelegateToNone(): void {
 		$this->registry->delegateHasValidSubscription();
 		$this->addToAssertionCount(1);
 	}
 
-
-	public function testDoubleRegistration() {
-		$this->expectException(\OCP\Support\Subscription\Exception\AlreadyRegisteredException::class);
+	public function testDoubleRegistration(): void {
+		$this->expectException(AlreadyRegisteredException::class);
 
 		/* @var ISubscription $subscription1 */
 		$subscription1 = $this->createMock(ISubscription::class);
@@ -100,12 +50,12 @@ class RegistryTest extends TestCase {
 		$this->registry->register($subscription2);
 	}
 
-	public function testNoSupportApp() {
+	public function testNoSupportApp(): void {
 		$this->assertSame([], $this->registry->delegateGetSupportedApps());
 		$this->assertSame(false, $this->registry->delegateHasValidSubscription());
 	}
 
-	public function testDelegateHasValidSubscription() {
+	public function testDelegateHasValidSubscription(): void {
 		/* @var ISubscription|\PHPUnit\Framework\MockObject\MockObject $subscription */
 		$subscription = $this->createMock(ISubscription::class);
 		$subscription->expects($this->once())
@@ -116,9 +66,9 @@ class RegistryTest extends TestCase {
 		$this->assertSame(true, $this->registry->delegateHasValidSubscription());
 	}
 
-	public function testDelegateHasValidSubscriptionConfig() {
+	public function testDelegateHasValidSubscriptionConfig(): void {
 		/* @var ISubscription|\PHPUnit\Framework\MockObject\MockObject $subscription */
-		$this->config->expects($this->once())
+		$this->getAutoMock(IConfig::class)->expects($this->once())
 			->method('getSystemValueBool')
 			->with('has_valid_subscription')
 			->willReturn(true);
@@ -126,7 +76,7 @@ class RegistryTest extends TestCase {
 		$this->assertSame(true, $this->registry->delegateHasValidSubscription());
 	}
 
-	public function testDelegateHasExtendedSupport() {
+	public function testDelegateHasExtendedSupport(): void {
 		/* @var ISubscription|\PHPUnit\Framework\MockObject\MockObject $subscription */
 		$subscription = $this->createMock(ISubscription::class);
 		$subscription->expects($this->once())
@@ -137,8 +87,7 @@ class RegistryTest extends TestCase {
 		$this->assertSame(true, $this->registry->delegateHasExtendedSupport());
 	}
 
-
-	public function testDelegateGetSupportedApps() {
+	public function testDelegateGetSupportedApps(): void {
 		/* @var ISupportedApps|\PHPUnit\Framework\MockObject\MockObject $subscription */
 		$subscription = $this->createMock(ISupportedApps::class);
 		$subscription->expects($this->once())
@@ -149,8 +98,8 @@ class RegistryTest extends TestCase {
 		$this->assertSame(['abc'], $this->registry->delegateGetSupportedApps());
 	}
 
-	public function testSubscriptionService() {
-		$this->serverContainer->method('query')
+	public function testSubscriptionService(): void {
+		$this->getAutoMock(ContainerInterface::class)->method('get')
 			->with(DummySubscription::class)
 			->willReturn(new DummySubscription(true, false, false));
 		$this->registry->registerService(DummySubscription::class);
@@ -159,7 +108,7 @@ class RegistryTest extends TestCase {
 		$this->assertFalse($this->registry->delegateHasExtendedSupport());
 	}
 
-	public function testDelegateIsHardUserLimitReached() {
+	public function testDelegateIsHardUserLimitReached(): void {
 		/* @var ISubscription|\PHPUnit\Framework\MockObject\MockObject $subscription */
 		$subscription = $this->createMock(ISubscription::class);
 		$subscription->expects($this->once())
@@ -173,23 +122,23 @@ class RegistryTest extends TestCase {
 		$dummyGroup->expects($this->once())
 			->method('getUsers')
 			->willReturn([]);
-		$this->groupManager->expects($this->once())
+		$this->getAutoMock(IGroupManager::class)->expects($this->once())
 			->method('get')
 			->willReturn($dummyGroup);
 
-		$this->assertSame(true, $this->registry->delegateIsHardUserLimitReached());
+		$this->assertSame(true, $this->registry->delegateIsHardUserLimitReached($this->notificationManager));
 	}
 
-	public function testDelegateIsHardUserLimitReachedWithoutSupportApp() {
-		$this->config->expects($this->once())
+	public function testDelegateIsHardUserLimitReachedWithoutSupportApp(): void {
+		$this->getAutoMock(IConfig::class)->expects($this->once())
 			->method('getSystemValueBool')
 			->with('one-click-instance')
 			->willReturn(false);
 
-		$this->assertSame(false, $this->registry->delegateIsHardUserLimitReached());
+		$this->assertSame(false, $this->registry->delegateIsHardUserLimitReached($this->notificationManager));
 	}
 
-	public function dataForUserLimitCheck() {
+	public static function dataForUserLimitCheck(): array {
 		return [
 			// $userLimit, $userCount, $disabledUsers, $expectedResult
 			[35, 15, 2, false],
@@ -199,44 +148,34 @@ class RegistryTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider dataForUserLimitCheck
-	 */
-	public function testDelegateIsHardUserLimitReachedWithoutSupportAppAndUserCount($userLimit, $userCount, $disabledUsers, $expectedResult) {
-		$this->config->expects($this->once())
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataForUserLimitCheck')]
+	public function testDelegateIsHardUserLimitReachedWithoutSupportAppAndUserCount($userLimit, $userCount, $disabledUsers, $expectedResult): void {
+		$this->getAutoMock(IConfig::class)->expects($this->once())
 			->method('getSystemValueBool')
 			->with('one-click-instance')
 			->willReturn(true);
-		$this->config->expects($this->once())
-			->method('getSystemValue')
+		$this->getAutoMock(IConfig::class)->expects($this->once())
+			->method('getSystemValueInt')
 			->with('one-click-instance.user-limit')
 			->willReturn($userLimit);
-		$this->config->expects($this->once())
+		$this->getAutoMock(IConfig::class)->expects($this->once())
 			->method('getUsersForUserValue')
 			->with('core', 'enabled', 'false')
 			->willReturn(array_fill(0, $disabledUsers, ''));
-		/* @var UserInterface|ICountUsersBackend|\PHPUnit\Framework\MockObject\MockObject $dummyBackend */
-		$dummyBackend = $this->createMock(Database::class);
-		$dummyBackend->expects($this->once())
-			->method('implementsActions')
-			->willReturn(true);
-		$dummyBackend->expects($this->once())
-			->method('countUsers')
+		$this->getAutoMock(IUserManager::class)->expects($this->once())
+			->method('countUsersTotal')
 			->willReturn($userCount);
-		$this->userManager->expects($this->once())
-			->method('getBackends')
-			->willReturn([$dummyBackend]);
 
 		if ($expectedResult) {
 			$dummyGroup = $this->createMock(IGroup::class);
 			$dummyGroup->expects($this->once())
 				->method('getUsers')
 				->willReturn([]);
-			$this->groupManager->expects($this->once())
+			$this->getAutoMock(IGroupManager::class)->expects($this->once())
 				->method('get')
 				->willReturn($dummyGroup);
 		}
 
-		$this->assertSame($expectedResult, $this->registry->delegateIsHardUserLimitReached());
+		$this->assertSame($expectedResult, $this->registry->delegateIsHardUserLimitReached($this->notificationManager));
 	}
 }

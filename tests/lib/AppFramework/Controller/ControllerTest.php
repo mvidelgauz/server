@@ -1,24 +1,9 @@
 <?php
 
 /**
- * ownCloud - App Framework
- *
- * @author Bernhard Posselt
- * @copyright 2012 Bernhard Posselt <dev@bernhard-posselt.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
- * License as published by the Free Software Foundation; either
- * version 3 of the License, or any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU AFFERO GENERAL PUBLIC LICENSE for more details.
- *
- * You should have received a copy of the GNU Affero General Public
- * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 namespace Test\AppFramework\Controller;
@@ -28,9 +13,11 @@ use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\DataResponse;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\IConfig;
+use OCP\IRequest;
+use OCP\IRequestId;
 
 class ChildController extends Controller {
-	public function __construct($appName, $request) {
+	public function __construct(string $appName, IRequest $request) {
 		parent::__construct($appName, $request);
 		$this->registerResponder('tom', function ($respone) {
 			return 'hi';
@@ -45,7 +32,7 @@ class ChildController extends Controller {
 		return $in;
 	}
 
-	public function customDataResponse($in) {
+	public function customDataResponse(mixed $in): DataResponse {
 		$response = new DataResponse($in, 300);
 		$response->addHeader('test', 'something');
 		return $response;
@@ -53,13 +40,10 @@ class ChildController extends Controller {
 };
 
 class ControllerTest extends \Test\TestCase {
+	private Controller $controller;
+	private Request $request;
 
-	/**
-	 * @var Controller
-	 */
-	private $controller;
-	private $app;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
@@ -73,48 +57,36 @@ class ControllerTest extends \Test\TestCase {
 				'session' => ['sezession' => 'kein'],
 				'method' => 'hi',
 			],
-			$this->getMockBuilder('\OCP\Security\ISecureRandom')
-				->disableOriginalConstructor()
-				->getMock(),
-			$this->getMockBuilder(IConfig::class)
-				->disableOriginalConstructor()
-				->getMock()
+			$this->createMock(IRequestId::class),
+			$this->createMock(IConfig::class)
 		);
 
-		$this->app = $this->getMockBuilder('OC\AppFramework\DependencyInjection\DIContainer')
-			->setMethods(['getAppName'])
-			->setConstructorArgs(['test'])
-			->getMock();
-		$this->app->expects($this->any())
-				->method('getAppName')
-				->willReturn('apptemplate_advanced');
-
-		$this->controller = new ChildController($this->app, $request);
+		$this->controller = new ChildController('apptemplate_advanced', $request);
+		$this->overwriteService(IRequest::class, $request);
+		$this->request = $request;
 	}
 
-
-	public function testFormatResonseInvalidFormat() {
+	public function testFormatResonseInvalidFormat(): void {
 		$this->expectException(\DomainException::class);
 
 		$this->controller->buildResponse(null, 'test');
 	}
 
-
-	public function testFormat() {
+	public function testFormat(): void {
 		$response = $this->controller->buildResponse(['hi'], 'json');
 
 		$this->assertEquals(['hi'], $response->getData());
 	}
 
-
-	public function testFormatDataResponseJSON() {
+	public function testFormatDataResponseJSON(): void {
 		$expectedHeaders = [
 			'test' => 'something',
 			'Cache-Control' => 'no-cache, no-store, must-revalidate',
 			'Content-Type' => 'application/json; charset=utf-8',
 			'Content-Security-Policy' => "default-src 'none';base-uri 'none';manifest-src 'self';frame-ancestors 'none'",
 			'Feature-Policy' => "autoplay 'none';camera 'none';fullscreen 'none';geolocation 'none';microphone 'none';payment 'none'",
-			'X-Robots-Tag' => 'none',
+			'X-Request-Id' => $this->request->getId(),
+			'X-Robots-Tag' => 'noindex, nofollow',
 		];
 
 		$response = $this->controller->customDataResponse(['hi']);
@@ -125,23 +97,20 @@ class ControllerTest extends \Test\TestCase {
 		$this->assertEquals($expectedHeaders, $response->getHeaders());
 	}
 
-
-	public function testCustomFormatter() {
+	public function testCustomFormatter(): void {
 		$response = $this->controller->custom('hi');
 		$response = $this->controller->buildResponse($response, 'json');
 
 		$this->assertEquals([2], $response->getData());
 	}
 
-
-	public function testDefaultResponderToJSON() {
+	public function testDefaultResponderToJSON(): void {
 		$responder = $this->controller->getResponderByHTTPHeader('*/*');
 
 		$this->assertEquals('json', $responder);
 	}
 
-
-	public function testResponderAcceptHeaderParsed() {
+	public function testResponderAcceptHeaderParsed(): void {
 		$responder = $this->controller->getResponderByHTTPHeader(
 			'*/*, application/tom, application/json'
 		);
@@ -149,8 +118,7 @@ class ControllerTest extends \Test\TestCase {
 		$this->assertEquals('tom', $responder);
 	}
 
-
-	public function testResponderAcceptHeaderParsedUpperCase() {
+	public function testResponderAcceptHeaderParsedUpperCase(): void {
 		$responder = $this->controller->getResponderByHTTPHeader(
 			'*/*, apPlication/ToM, application/json'
 		);

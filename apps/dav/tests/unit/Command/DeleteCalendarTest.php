@@ -2,35 +2,20 @@
 
 declare(strict_types=1);
 /**
- *
- * @copyright Copyright (c) 2021, Mattia Narducci (mattianarducci1@gmail.com)
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2023 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-namespace OCA\DAV\Tests\Command;
+namespace OCA\DAV\Tests\unit\Command;
 
 use OCA\DAV\CalDAV\BirthdayService;
-use OCA\DAV\CalDav\CalDavBackend;
+use OCA\DAV\CalDAV\CalDavBackend;
 use OCA\DAV\Command\DeleteCalendar;
 use OCP\IConfig;
 use OCP\IL10N;
 use OCP\IUserManager;
 use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Tester\CommandTester;
 use Test\TestCase;
 
@@ -43,20 +28,12 @@ class DeleteCalendarTest extends TestCase {
 	public const USER = 'user';
 	public const NAME = 'calendar';
 
-	/** @var CalDavBackend|MockObject */
-	private $calDav;
-
-	/** @var IConfig|MockObject */
-	private $config;
-
-	/** @var IL10N|MockObject */
-	private $l10n;
-
-	/** @var IUserManager|MockObject */
-	private $userManager;
-
-	/** @var DeleteCalendar */
-	private $command;
+	private CalDavBackend&MockObject $calDav;
+	private IConfig&MockObject $config;
+	private IL10N&MockObject $l10n;
+	private IUserManager&MockObject $userManager;
+	private LoggerInterface&MockObject $logger;
+	private DeleteCalendar $command;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -65,16 +42,18 @@ class DeleteCalendarTest extends TestCase {
 		$this->config = $this->createMock(IConfig::class);
 		$this->l10n = $this->createMock(IL10N::class);
 		$this->userManager = $this->createMock(IUserManager::class);
+		$this->logger = $this->createMock(LoggerInterface::class);
 
 		$this->command = new DeleteCalendar(
 			$this->calDav,
 			$this->config,
 			$this->l10n,
 			$this->userManager,
+			$this->logger
 		);
 	}
 
-	public function testInvalidUser() {
+	public function testInvalidUser(): void {
 		$this->expectException(\InvalidArgumentException::class);
 		$this->expectExceptionMessage(
 			'User <' . self::USER . '> is unknown.');
@@ -91,7 +70,7 @@ class DeleteCalendarTest extends TestCase {
 		]);
 	}
 
-	public function testNoCalendarName() {
+	public function testNoCalendarName(): void {
 		$this->expectException(\InvalidArgumentException::class);
 		$this->expectExceptionMessage(
 			'Please specify a calendar name or --birthday');
@@ -107,10 +86,10 @@ class DeleteCalendarTest extends TestCase {
 		]);
 	}
 
-	public function testInvalidCalendar() {
+	public function testInvalidCalendar(): void {
 		$this->expectException(\InvalidArgumentException::class);
 		$this->expectExceptionMessage(
-			'User <' . self::USER . '> has no calendar named <' . self::NAME .  '>.');
+			'User <' . self::USER . '> has no calendar named <' . self::NAME . '>.');
 
 		$this->userManager->expects($this->once())
 			->method('userExists')
@@ -131,12 +110,12 @@ class DeleteCalendarTest extends TestCase {
 		]);
 	}
 
-	public function testDelete() {
+	public function testDelete(): void {
 		$id = 1234;
 		$calendar = [
 			'id' => $id,
 			'principaluri' => 'principals/users/' . self::USER,
-			'uri' => self::NAME
+			'uri' => self::NAME,
 		];
 
 		$this->userManager->expects($this->once())
@@ -161,7 +140,7 @@ class DeleteCalendarTest extends TestCase {
 		]);
 	}
 
-	public function testForceDelete() {
+	public function testForceDelete(): void {
 		$id = 1234;
 		$calendar = [
 			'id' => $id,
@@ -192,12 +171,13 @@ class DeleteCalendarTest extends TestCase {
 		]);
 	}
 
-	public function testDeleteBirthday() {
+	public function testDeleteBirthday(): void {
 		$id = 1234;
 		$calendar = [
 			'id' => $id,
 			'principaluri' => 'principals/users/' . self::USER,
-			'uri' => BirthdayService::BIRTHDAY_CALENDAR_URI
+			'uri' => BirthdayService::BIRTHDAY_CALENDAR_URI,
+			'{DAV:}displayname' => 'Test',
 		];
 
 		$this->userManager->expects($this->once())
@@ -222,11 +202,12 @@ class DeleteCalendarTest extends TestCase {
 		]);
 	}
 
-	public function testBirthdayHasPrecedence() {
+	public function testBirthdayHasPrecedence(): void {
 		$calendar = [
 			'id' => 1234,
 			'principaluri' => 'principals/users/' . self::USER,
-			'uri' => BirthdayService::BIRTHDAY_CALENDAR_URI
+			'uri' => BirthdayService::BIRTHDAY_CALENDAR_URI,
+			'{DAV:}displayname' => 'Test',
 		];
 		$this->userManager->expects($this->once())
 			->method('userExists')

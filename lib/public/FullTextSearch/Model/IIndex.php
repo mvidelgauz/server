@@ -1,29 +1,11 @@
 <?php
 
 declare(strict_types=1);
-
 /**
- * @copyright 2018
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Maxence Lange <maxence@artificial-owl.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2018 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\FullTextSearch\Model;
 
 /**
@@ -43,26 +25,85 @@ namespace OCP\FullTextSearch\Model;
  *
  */
 interface IIndex {
+	/**
+	 * @since 15.0.0
+	 */
 	public const INDEX_OK = 1;
+
+	/**
+	 * @since 15.0.0
+	 */
 	public const INDEX_IGNORE = 2;
 
+	/**
+	 * @since 15.0.0
+	 */
 	public const INDEX_META = 4;
+
+	/**
+	 * @since 15.0.0
+	 */
 	public const INDEX_CONTENT = 8;
+
+	/**
+	 * @since 16.0.0
+	 */
 	public const INDEX_PARTS = 16;
+
+	/**
+	 * @since 15.0.0
+	 */
 	public const INDEX_FULL = 28;
+
+	/**
+	 * @since 15.0.0
+	 */
 	public const INDEX_REMOVE = 32;
+
+	/**
+	 * @since 15.0.0
+	 */
 	public const INDEX_DONE = 64;
+
+	/**
+	 * @since 15.0.0
+	 */
 	public const INDEX_FAILED = 128;
 
+	/**
+	 * @since 15.0.0
+	 */
 	public const ERROR_FAILED = 1;
+
+	/**
+	 * @since 15.0.0
+	 */
 	public const ERROR_FAILED2 = 2;
+
+	/**
+	 * @since 15.0.0
+	 */
 	public const ERROR_FAILED3 = 4;
 
+	/**
+	 * @since 15.0.0
+	 */
 	public const ERROR_SEV_1 = 1;
-	public const ERROR_SEV_2 = 2;
-	public const ERROR_SEV_3 = 3;
-	public const ERROR_SEV_4 = 4;
 
+	/**
+	 * @since 15.0.0
+	 */
+	public const ERROR_SEV_2 = 2;
+
+	/**
+	 * @since 15.0.0
+	 */
+	public const ERROR_SEV_3 = 3;
+
+	/**
+	 * @since 15.0.0
+	 */
+	public const ERROR_SEV_4 = 4;
 
 	/**
 	 * Get the Id of the Content Provider.
@@ -73,7 +114,6 @@ interface IIndex {
 	 */
 	public function getProviderId(): string;
 
-
 	/**
 	 * Get the Id of the original document.
 	 *
@@ -83,6 +123,15 @@ interface IIndex {
 	 */
 	public function getDocumentId(): string;
 
+	/**
+	 * Get the collection of the index.
+	 * If empty (''), means collection is the default one used by the internal framework
+	 *
+	 * @since 24.0.0
+	 *
+	 * @return string
+	 */
+	public function getCollection(): string;
 
 	/**
 	 * Set the source of the original document.
@@ -104,7 +153,6 @@ interface IIndex {
 	 */
 	public function getSource(): string;
 
-
 	/**
 	 * Set the owner of the original document.
 	 *
@@ -124,7 +172,6 @@ interface IIndex {
 	 * @return string
 	 */
 	public function getOwnerId(): string;
-
 
 	/**
 	 * Set the current index status (bit flag) of the original document.
@@ -169,7 +216,6 @@ interface IIndex {
 	 * @return IIndex
 	 */
 	public function unsetStatus(int $status): IIndex;
-
 
 	/**
 	 * Add an option related to the original document (as string).
@@ -228,7 +274,6 @@ interface IIndex {
 	 */
 	public function getOptions(): array;
 
-
 	/**
 	 * Add an error log related to the Index.
 	 *
@@ -257,7 +302,6 @@ interface IIndex {
 	 * @since 15.0.0
 	 */
 	public function resetErrors(): IIndex;
-
 
 	/**
 	 * Set the date of the last index.

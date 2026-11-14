@@ -1,54 +1,26 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author root <root@localhost.localdomain>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\User_LDAP;
 
-use OC\Cache\CappedMemoryCache;
+use OCP\Cache\CappedMemoryCache;
 use OCP\DB\QueryBuilder\IQueryBuilder;
-use OCP\IConfig;
+use OCP\IAppConfig;
 use OCP\IDBConnection;
 
 class Helper {
+	/** @var CappedMemoryCache<string> */
+	protected CappedMemoryCache $sanitizeDnCache;
 
-	/** @var IConfig */
-	private $config;
-
-	/** @var IDBConnection */
-	private $connection;
-
-	/** @var CappedMemoryCache */
-	protected $sanitizeDnCache;
-
-	public function __construct(IConfig $config,
-								IDBConnection $connection) {
-		$this->config = $config;
-		$this->connection = $connection;
+	public function __construct(
+		private IAppConfig $appConfig,
+		private IDBConnection $connection,
+	) {
 		$this->sanitizeDnCache = new CappedMemoryCache(10000);
 	}
 
@@ -56,7 +28,7 @@ class Helper {
 	 * returns prefixes for each saved LDAP/AD server configuration.
 	 *
 	 * @param bool $activeConfigurations optional, whether only active configuration shall be
-	 * retrieved, defaults to false
+	 *                                   retrieved, defaults to false
 	 * @return array with a list of the available prefixes
 	 *
 	 * Configuration prefixes are used to set up configurations for n LDAP or
@@ -73,21 +45,37 @@ class Helper {
 	 * except the default (first) server shall be connected to.
 	 *
 	 */
-	public function getServerConfigurationPrefixes($activeConfigurations = false): array {
+	public function getServerConfigurationPrefixes(bool $activeConfigurations = false): array {
+		$all = $this->getAllServerConfigurationPrefixes();
+		if (!$activeConfigurations) {
+			return $all;
+		}
+		return array_values(array_filter(
+			$all,
+			fn (string $prefix): bool => ($this->appConfig->getValueString('user_ldap', $prefix . 'ldap_configuration_active') === '1')
+		));
+	}
+
+	protected function getAllServerConfigurationPrefixes(): array {
+		$unfilled = ['UNFILLED'];
+		$prefixes = $this->appConfig->getValueArray('user_ldap', 'configuration_prefixes', $unfilled);
+		if ($prefixes !== $unfilled) {
+			return $prefixes;
+		}
+
+		/* Fallback to browsing key for migration from Nextcloud<32 */
 		$referenceConfigkey = 'ldap_configuration_active';
 
 		$keys = $this->getServersConfig($referenceConfigkey);
 
 		$prefixes = [];
 		foreach ($keys as $key) {
-			if ($activeConfigurations && $this->config->getAppValue('user_ldap', $key, '0') !== '1') {
-				continue;
-			}
-
 			$len = strlen($key) - strlen($referenceConfigkey);
 			$prefixes[] = substr($key, 0, $len);
 		}
-		asort($prefixes);
+		sort($prefixes);
+
+		$this->appConfig->setValueArray('user_ldap', 'configuration_prefixes', $prefixes);
 
 		return $prefixes;
 	}
@@ -96,46 +84,45 @@ class Helper {
 	 *
 	 * determines the host for every configured connection
 	 *
-	 * @return array an array with configprefix as keys
+	 * @return array<string,string> an array with configprefix as keys
 	 *
 	 */
-	public function getServerConfigurationHosts() {
+	public function getServerConfigurationHosts(): array {
+		$prefixes = $this->getServerConfigurationPrefixes();
+
 		$referenceConfigkey = 'ldap_host';
-
-		$keys = $this->getServersConfig($referenceConfigkey);
-
 		$result = [];
-		foreach ($keys as $key) {
-			$len = strlen($key) - strlen($referenceConfigkey);
-			$prefix = substr($key, 0, $len);
-			$result[$prefix] = $this->config->getAppValue('user_ldap', $key);
+		foreach ($prefixes as $prefix) {
+			$result[$prefix] = $this->appConfig->getValueString('user_ldap', $prefix . $referenceConfigkey);
 		}
 
 		return $result;
 	}
 
 	/**
-	 * return the next available configuration prefix
-	 *
-	 * @return string
+	 * return the next available configuration prefix and register it as used
 	 */
-	public function getNextServerConfigurationPrefix() {
-		$serverConnections = $this->getServerConfigurationPrefixes();
+	public function getNextServerConfigurationPrefix(): string {
+		$prefixes = $this->getServerConfigurationPrefixes();
 
-		if (count($serverConnections) === 0) {
-			return 's01';
+		if (count($prefixes) === 0) {
+			$prefix = 's01';
+		} else {
+			sort($prefixes);
+			$lastKey = end($prefixes);
+			$lastNumber = (int)str_replace('s', '', $lastKey);
+			$prefix = 's' . str_pad((string)($lastNumber + 1), 2, '0', STR_PAD_LEFT);
 		}
 
-		sort($serverConnections);
-		$lastKey = array_pop($serverConnections);
-		$lastNumber = (int)str_replace('s', '', $lastKey);
-		return 's' . str_pad($lastNumber + 1, 2, '0', STR_PAD_LEFT);
+		$prefixes[] = $prefix;
+		$this->appConfig->setValueArray('user_ldap', 'configuration_prefixes', $prefixes);
+		return $prefix;
 	}
 
-	private function getServersConfig($value) {
+	private function getServersConfig(string $value): array {
 		$regex = '/' . $value . '$/S';
 
-		$keys = $this->config->getAppKeys('user_ldap');
+		$keys = $this->appConfig->getKeys('user_ldap');
 		$result = [];
 		foreach ($keys as $key) {
 			if (preg_match($regex, $key) === 1) {
@@ -153,7 +140,9 @@ class Helper {
 	 * @return bool true on success, false otherwise
 	 */
 	public function deleteServerConfiguration($prefix) {
-		if (!in_array($prefix, self::getServerConfigurationPrefixes())) {
+		$prefixes = $this->getServerConfigurationPrefixes();
+		$index = array_search($prefix, $prefixes, true);
+		if ($index === false) {
 			return false;
 		}
 
@@ -172,7 +161,11 @@ class Helper {
 			$query->andWhere($query->expr()->notLike('configkey', $query->createNamedParameter('s%')));
 		}
 
-		$deletedRows = $query->execute();
+		$deletedRows = $query->executeStatement();
+
+		unset($prefixes[$index]);
+		$this->appConfig->setValueArray('user_ldap', 'configuration_prefixes', array_values($prefixes));
+
 		return $deletedRows !== 0;
 	}
 
@@ -180,10 +173,13 @@ class Helper {
 	 * checks whether there is one or more disabled LDAP configurations
 	 */
 	public function haveDisabledConfigurations(): bool {
-		$all = $this->getServerConfigurationPrefixes(false);
-		$active = $this->getServerConfigurationPrefixes(true);
-
-		return count($all) !== count($active) || count($all) === 0;
+		$all = $this->getServerConfigurationPrefixes();
+		foreach ($all as $prefix) {
+			if ($this->appConfig->getValueString('user_ldap', $prefix . 'ldap_configuration_active') !== '1') {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -211,7 +207,22 @@ class Helper {
 	/**
 	 * sanitizes a DN received from the LDAP server
 	 *
-	 * @param array $dn the DN in question
+	 * This is used and done to have a stable format of DNs that can be compared
+	 * and identified again. The input DN value is modified as following:
+	 *
+	 * 1) whitespaces after commas are removed
+	 * 2) the DN is turned to lower-case
+	 * 3) the DN is escaped according to RFC 2253
+	 *
+	 * When a future DN is supposed to be used as a base parameter, it has to be
+	 * run through DNasBaseParameter() first, to recode \5c into a backslash
+	 * again, otherwise the search or read operation will fail with LDAP error
+	 * 32, NO_SUCH_OBJECT. Regular usage in LDAP filters requires the backslash
+	 * being escaped, however.
+	 *
+	 * Internally, DNs are stored in their sanitized form.
+	 *
+	 * @param array|string $dn the DN in question
 	 * @return array|string the sanitized DN
 	 */
 	public function sanitizeDN($dn) {
@@ -269,24 +280,5 @@ class Helper {
 	 */
 	public function DNasBaseParameter($dn) {
 		return str_ireplace('\\5c', '\\', $dn);
-	}
-
-	/**
-	 * listens to a hook thrown by server2server sharing and replaces the given
-	 * login name by a username, if it matches an LDAP user.
-	 *
-	 * @param array $param
-	 * @throws \Exception
-	 */
-	public static function loginName2UserName($param) {
-		if (!isset($param['uid'])) {
-			throw new \Exception('key uid is expected to be set in $param');
-		}
-
-		$userBackend = \OC::$server->get(User_Proxy::class);
-		$uid = $userBackend->loginName2UserName($param['uid']);
-		if ($uid !== false) {
-			$param['uid'] = $uid;
-		}
 	}
 }

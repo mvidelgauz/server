@@ -1,79 +1,41 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright 2017 Georg Ehrke <oc.list@georgehrke.com>
- *
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Joas Schilling <coding@schilljs.com>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\DAV\Migration;
 
-use OC\BackgroundJob\QueuedJob;
 use OCA\DAV\CalDAV\CalDavBackend;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
+use OCP\BackgroundJob\QueuedJob;
 use OCP\IDBConnection;
-use OCP\ILogger;
+use Psr\Log\LoggerInterface;
 
 class BuildCalendarSearchIndexBackgroundJob extends QueuedJob {
-
-	/** @var IDBConnection */
-	private $db;
-
-	/** @var CalDavBackend */
-	private $calDavBackend;
-
-	/** @var ILogger */
-	private $logger;
-
-	/** @var IJobList */
-	private $jobList;
-
-	/** @var ITimeFactory */
-	private $timeFactory;
-
-	/**
-	 * @param IDBConnection $db
-	 * @param CalDavBackend $calDavBackend
-	 * @param ILogger $logger
-	 * @param IJobList $jobList
-	 * @param ITimeFactory $timeFactory
-	 */
-	public function __construct(IDBConnection $db,
-								CalDavBackend $calDavBackend,
-								ILogger $logger,
-								IJobList $jobList,
-								ITimeFactory $timeFactory) {
-		$this->db = $db;
-		$this->calDavBackend = $calDavBackend;
-		$this->logger = $logger;
-		$this->jobList = $jobList;
-		$this->timeFactory = $timeFactory;
+	public function __construct(
+		private IDBConnection $db,
+		private CalDavBackend $calDavBackend,
+		private LoggerInterface $logger,
+		private IJobList $jobList,
+		ITimeFactory $timeFactory,
+	) {
+		parent::__construct($timeFactory);
 	}
 
-	public function run($arguments) {
-		$offset = (int) $arguments['offset'];
-		$stopAt = (int) $arguments['stopAt'];
+	#[\Override]
+	public function run($argument) {
+		$offset = (int)$argument['offset'];
+		$stopAt = (int)$argument['stopAt'];
 
-		$this->logger->info('Building calendar index (' . $offset .'/' . $stopAt . ')');
+		$this->logger->info('Building calendar index (' . $offset . '/' . $stopAt . ')');
 
-		$startTime = $this->timeFactory->getTime();
-		while (($this->timeFactory->getTime() - $startTime) < 15) {
+		$startTime = $this->time->getTime();
+		while (($this->time->getTime() - $startTime) < 15) {
 			$offset = $this->buildIndex($offset, $stopAt);
 			if ($offset >= $stopAt) {
 				break;
@@ -105,8 +67,8 @@ class BuildCalendarSearchIndexBackgroundJob extends QueuedJob {
 			->orderBy('id', 'ASC')
 			->setMaxResults(500);
 
-		$result = $query->execute();
-		while ($row = $result->fetch(\PDO::FETCH_ASSOC)) {
+		$result = $query->executeQuery();
+		while ($row = $result->fetchAssociative()) {
 			$offset = $row['id'];
 
 			$calendarData = $row['calendardata'];

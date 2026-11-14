@@ -1,49 +1,31 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2020, Lukas Stabe (lukas@stabe.de)
- *
- * @author Lukas Stabe <lukas@stabe.de>
- * @author Robin Appelman <robin@icewind.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Files\Stream;
 
 use Icewind\Streams\File;
+use Icewind\Streams\Wrapper;
 
 /**
  * A stream wrapper that uses http range requests to provide a seekable stream for http reading
  */
 class SeekableHttpStream implements File {
-	private const PROTOCOL = 'httpseek';
-
-	private static $registered = false;
+	private const string PROTOCOL = 'httpseek';
 
 	/**
 	 * Registers the stream wrapper using the `httpseek://` url scheme
 	 * $return void
 	 */
 	private static function registerIfNeeded() {
-		if (!self::$registered) {
+		if (!in_array(self::PROTOCOL, stream_get_wrappers(), true)) {
 			stream_wrapper_register(
 				self::PROTOCOL,
 				self::class
 			);
-			self::$registered = true;
 		}
 	}
 
@@ -72,30 +54,49 @@ class SeekableHttpStream implements File {
 	/** @var callable */
 	private $openCallback;
 
-	/** @var resource */
+	/** @var ?resource|closed-resource */
 	private $current;
-	/** @var int */
-	private $offset = 0;
-	/** @var int */
-	private $length = 0;
+	/** @var int $offset offset of the current chunk */
+	private int $offset = 0;
+	/** @var int $length length of the current chunk */
+	private int $length = 0;
+	/** @var int $totalSize size of the full stream */
+	private int $totalSize = 0;
+	private bool $needReconnect = false;
 
-	private function reconnect(int $start) {
+	private function reconnect(int $start): bool {
+		$this->needReconnect = false;
 		$range = $start . '-';
-		if ($this->current != null) {
+		if ($this->hasOpenStream()) {
 			fclose($this->current);
 		}
 
-		$this->current = ($this->openCallback)($range);
+		$stream = ($this->openCallback)($range);
 
-		if ($this->current === false) {
+		if ($stream === false) {
+			$this->current = null;
 			return false;
 		}
+		$this->current = $stream;
 
 		$responseHead = stream_get_meta_data($this->current)['wrapper_data'];
+
+		while ($responseHead instanceof Wrapper) {
+			$wrapperOptions = stream_context_get_options($responseHead->context);
+			foreach ($wrapperOptions as $options) {
+				if (isset($options['source']) && is_resource($options['source'])) {
+					$responseHead = stream_get_meta_data($options['source'])['wrapper_data'];
+					continue 2;
+				}
+			}
+			throw new \Exception('Failed to get source stream from stream wrapper of ' . get_class($responseHead));
+		}
+
 		$rangeHeaders = array_values(array_filter($responseHead, function ($v) {
 			return preg_match('#^content-range:#i', $v) === 1;
 		}));
 		if (!$rangeHeaders) {
+			$this->current = null;
 			return false;
 		}
 		$contentRange = $rangeHeaders[0];
@@ -106,15 +107,42 @@ class SeekableHttpStream implements File {
 		$length = intval(explode('/', $range)[1]);
 
 		if ($begin !== $start) {
+			$this->current = null;
 			return false;
 		}
 
 		$this->offset = $begin;
 		$this->length = $length;
+		if ($start === 0) {
+			$this->totalSize = $length;
+		}
 
 		return true;
 	}
 
+	/**
+	 * @return ?resource
+	 */
+	private function getCurrent() {
+		if ($this->needReconnect) {
+			$this->reconnect($this->offset);
+		}
+		if (is_resource($this->current)) {
+			return $this->current;
+		} else {
+			return null;
+		}
+	}
+
+	/**
+	 * @return bool
+	 * @psalm-assert-if-true resource $this->current
+	 */
+	private function hasOpenStream(): bool {
+		return is_resource($this->current);
+	}
+
+	#[\Override]
 	public function stream_open($path, $mode, $options, &$opened_path) {
 		$options = stream_context_get_options($this->context)[self::PROTOCOL];
 		$this->openCallback = $options['callback'];
@@ -122,80 +150,108 @@ class SeekableHttpStream implements File {
 		return $this->reconnect(0);
 	}
 
+	#[\Override]
 	public function stream_read($count) {
-		if (!$this->current) {
+		if (!$this->getCurrent()) {
 			return false;
 		}
-		$ret = fread($this->current, $count);
+		$ret = fread($this->getCurrent(), $count);
 		$this->offset += strlen($ret);
 		return $ret;
 	}
 
+	#[\Override]
 	public function stream_seek($offset, $whence = SEEK_SET) {
 		switch ($whence) {
 			case SEEK_SET:
 				if ($offset === $this->offset) {
 					return true;
+				} else {
+					$this->offset = $offset;
 				}
-				return $this->reconnect($offset);
+				break;
 			case SEEK_CUR:
 				if ($offset === 0) {
 					return true;
+				} else {
+					$this->offset += $offset;
 				}
-				return $this->reconnect($this->offset + $offset);
+				break;
 			case SEEK_END:
 				if ($this->length === 0) {
 					return false;
 				} elseif ($this->length + $offset === $this->offset) {
 					return true;
+				} else {
+					$this->offset = $this->length + $offset;
 				}
-				return $this->reconnect($this->length + $offset);
+				break;
 		}
-		return false;
+
+		if ($this->hasOpenStream()) {
+			fclose($this->current);
+		}
+		$this->current = null;
+		$this->needReconnect = true;
+		return true;
 	}
 
+	#[\Override]
 	public function stream_tell() {
 		return $this->offset;
 	}
 
+	#[\Override]
 	public function stream_stat() {
-		if (is_resource($this->current)) {
-			return fstat($this->current);
+		if ($this->getCurrent()) {
+			$stat = fstat($this->getCurrent());
+			if ($stat) {
+				$stat['size'] = $this->totalSize;
+			}
+			return $stat;
 		} else {
 			return false;
 		}
 	}
 
+	#[\Override]
 	public function stream_eof() {
-		if (is_resource($this->current)) {
-			return feof($this->current);
+		if ($this->getCurrent()) {
+			return feof($this->getCurrent());
 		} else {
 			return true;
 		}
 	}
 
+	#[\Override]
 	public function stream_close() {
-		if (is_resource($this->current)) {
+		if ($this->hasOpenStream()) {
 			fclose($this->current);
 		}
+		$this->current = null;
 	}
 
+	#[\Override]
 	public function stream_write($data) {
 		return false;
 	}
 
+	#[\Override]
 	public function stream_set_option($option, $arg1, $arg2) {
 		return false;
 	}
 
+	#[\Override]
 	public function stream_truncate($size) {
 		return false;
 	}
 
+	#[\Override]
 	public function stream_lock($operation) {
 		return false;
 	}
 
+	#[\Override]
 	public function stream_flush() {
 		return; //noop because readonly stream
 	}

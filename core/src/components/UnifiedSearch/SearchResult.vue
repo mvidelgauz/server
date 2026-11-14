@@ -1,218 +1,203 @@
- <!--
-  - @copyright Copyright (c) 2020 John Molakvoæ <skjnldsv@protonmail.com>
-  -
-  - @author John Molakvoæ <skjnldsv@protonmail.com>
-  -
-  - @license GNU AGPL version 3 or any later version
-  -
-  - This program is free software: you can redistribute it and/or modify
-  - it under the terms of the GNU Affero General Public License as
-  - published by the Free Software Foundation, either version 3 of the
-  - License, or (at your option) any later version.
-  -
-  - This program is distributed in the hope that it will be useful,
-  - but WITHOUT ANY WARRANTY; without even the implied warranty of
-  - MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  - GNU Affero General Public License for more details.
-  -
-  - You should have received a copy of the GNU Affero General Public License
-  - along with this program.  If not, see <http://www.gnu.org/licenses/>.
-  -
-  -->
-<template>
-	<a :href="resourceUrl || '#'"
-		class="unified-search__result"
-		:class="{
-			'unified-search__result--focused': focused,
-		}"
-		@click="reEmitEvent"
-		@focus="reEmitEvent">
+<!--
+ - SPDX-FileCopyrightText: 2020 Nextcloud GmbH and Nextcloud contributors
+ - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import NcListItem from '@nextcloud/vue/components/NcListItem'
+import AppIcon from '../AppIcon.vue'
 
-		<!-- Icon describing the result -->
-		<div class="unified-search__result-icon"
-			:class="{
-				'unified-search__result-icon--rounded': rounded,
-				'unified-search__result-icon--no-preview': !hasValidThumbnail && !loaded,
-				'unified-search__result-icon--with-thumbnail': hasValidThumbnail && loaded,
-				[icon]: !loaded && !isIconUrl,
-			}"
-			:style="{
-				backgroundImage: isIconUrl ? `url(${icon})` : '',
-			}"
-			role="img">
+const props = withDefaults(defineProps<{
+	title: string
+	thumbnailUrl?: string | null
+	subline?: string | null
+	resourceUrl?: string | null
+	icon?: string
+	rounded?: boolean
+	query?: string
+	/**
+	 * DOM id set on the option element (the <li>). The combobox input points
+	 * aria-activedescendant at this id to name the active row while focus stays
+	 * in the input.
+	 */
+	elementId?: string
+	/**
+	 * Whether this row is the selected result. Highlights it (via NcListItem's
+	 * active state) so the auto-selected first result and arrow navigation are
+	 * visible while the search input keeps focus.
+	 */
+	active?: boolean
+}>(), {
+	thumbnailUrl: null,
+	subline: null,
+	resourceUrl: null,
+	icon: '',
+	rounded: false,
+	query: '',
+	elementId: undefined,
+	active: false,
+})
 
-			<img v-if="hasValidThumbnail"
-				v-show="loaded"
-				:src="thumbnailUrl"
-				alt=""
-				@error="onError"
-				@load="onLoad">
-		</div>
+const thumbnailHasError = ref(false)
 
-		<!-- Title and sub-title -->
-		<span class="unified-search__result-content">
-			<h3 class="unified-search__result-line-one" :title="title">
-				<Highlight :text="title" :search="query" />
-			</h3>
-			<h4 v-if="subline" class="unified-search__result-line-two" :title="subline">{{ subline }}</h4>
-		</span>
-	</a>
-</template>
+/** A usable thumbnail image (a preview/avatar), not errored. */
+const hasThumbnail = computed(() => isValidIconOrPreviewUrl(props.thumbnailUrl) && !thumbnailHasError.value)
 
-<script>
-import Highlight from '@nextcloud/vue/dist/Components/Highlight'
+/** The icon is a real URL we can put in an <img>, not a legacy CSS class string. */
+const iconIsUrl = computed(() => isValidIconOrPreviewUrl(props.icon))
 
-export default {
-	name: 'SearchResult',
+/**
+ * App-style icon (bright glyph on a primary circle, like the app menu). Providers
+ * flag it by marking the entry rounded with an icon URL and no thumbnail.
+ */
+const isAppIcon = computed(() => props.rounded && iconIsUrl.value && !hasThumbnail.value)
 
-	components: {
-		Highlight,
-	},
+watch(() => props.thumbnailUrl, () => {
+	thumbnailHasError.value = false
+})
 
-	props: {
-		thumbnailUrl: {
-			type: String,
-			default: null,
-		},
-		title: {
-			type: String,
-			required: true,
-		},
-		subline: {
-			type: String,
-			default: null,
-		},
-		resourceUrl: {
-			type: String,
-			default: null,
-		},
-		icon: {
-			type: String,
-			default: '',
-		},
-		rounded: {
-			type: Boolean,
-			default: false,
-		},
-		query: {
-			type: String,
-			default: '',
-		},
+/**
+ * @param url - The url to check
+ */
+function isValidIconOrPreviewUrl(url: string | null): boolean {
+	return !!url && (/^https?:\/\//.test(url) || url.startsWith('/'))
+}
 
-		/**
-		 * Only used for the first result as a visual feedback
-		 * so we can keep the search input focused but pressing
-		 * enter still opens the first result
-		 */
-		focused: {
-			type: Boolean,
-			default: false,
-		},
-	},
-
-	data() {
-		return {
-			hasValidThumbnail: this.thumbnailUrl && this.thumbnailUrl.trim() !== '',
-			loaded: false,
-		}
-	},
-
-	computed: {
-		isIconUrl() {
-			// If we're facing an absolute url
-			if (this.icon.startsWith('/')) {
-				return true
-			}
-
-			// Otherwise, let's check if this is a valid url
-			try {
-				// eslint-disable-next-line no-new
-				new URL(this.icon)
-			} catch {
-				return false
-			}
-			return true
-		},
-	},
-
-	watch: {
-		// Make sure to reset state on change even when vue recycle the component
-		thumbnailUrl() {
-			this.hasValidThumbnail = this.thumbnailUrl && this.thumbnailUrl.trim() !== ''
-			this.loaded = false
-		},
-	},
-
-	methods: {
-		reEmitEvent(e) {
-			this.$emit(e.type, e)
-		},
-
-		/**
-		 * If the image fails to load, fallback to iconClass
-		 */
-		onError() {
-			this.hasValidThumbnail = false
-		},
-
-		onLoad() {
-			this.loaded = true
-		},
-	},
+/**
+ * Fall back to the icon if the thumbnail cannot be loaded.
+ */
+function thumbnailErrorHandler() {
+	thumbnailHasError.value = true
 }
 </script>
 
+<template>
+	<NcListItem
+		:id="elementId"
+		class="result-item"
+		:name="title"
+		:bold="false"
+		:active="active"
+		:href="resourceUrl ?? undefined"
+		target="_self">
+		<template #icon>
+			<AppIcon
+				v-if="isAppIcon"
+				class="result-item__app-icon"
+				:icon="icon" />
+			<div
+				v-else
+				aria-hidden="true"
+				class="result-item__icon"
+				:class="{
+					'result-item__icon--rounded': rounded,
+					'result-item__icon--with-thumbnail': hasThumbnail,
+					[icon]: !iconIsUrl && !hasThumbnail,
+				}">
+				<img
+					v-if="hasThumbnail"
+					:src="thumbnailUrl ?? undefined"
+					@error="thumbnailErrorHandler">
+				<img
+					v-else-if="iconIsUrl"
+					class="result-item__icon-img"
+					:src="icon"
+					alt=""
+					aria-hidden="true">
+			</div>
+		</template>
+		<template #subname>
+			{{ subline }}
+		</template>
+	</NcListItem>
+</template>
+
 <style lang="scss" scoped>
-$clickable-area: 44px;
-$margin: 10px;
+.result-item {
+	padding-inline: 0;
 
-.unified-search__result {
-	display: flex;
-	height: $clickable-area;
-	padding: $margin;
-	border-bottom: 1px solid var(--color-border);
+	:deep(a) {
+		border: 2px solid transparent;
+		border-radius: var(--border-radius-large) !important;
 
-	// Load more entry,
-	&:last-child {
-		border-bottom: none;
+		// Hover/press: neutral gray fill only, no border.
+		&:active,
+		&:hover {
+			background-color: var(--color-background-hover);
+		}
+
+		// Plain Tab into a result keeps a visible focus ring (a11y). Normally the combobox
+		// keeps focus in the input and drives selection via `active` below.
+		&:focus-visible {
+			background-color: var(--color-background-hover);
+			border-color: var(--color-border-maxcontrast);
+		}
+
+		* {
+			cursor: pointer;
+		}
 	}
 
-	&--focused,
-	&:active,
-	&:hover,
-	&:focus {
-		background-color: var(--color-background-hover);
+	// NcListItem's `active` state paints a primary fill, white text and a blue stripe.
+	// We want a neutral look: the gray hover fill plus a maxcontrast border, readable text.
+	&.list-item__wrapper--active {
+		:deep(.list-item) {
+			background-color: var(--color-background-hover);
+
+			// Keyboard selection marker: the pill the left navigation paints on its active
+			// entry. It has to hang off .list-item rather than the wrapper, because
+			// .list-item is itself positioned and paints the opaque row background, so it
+			// would cover a pseudo-element belonging to its parent.
+			&::before {
+				content: '';
+				position: absolute;
+				inset-block: calc(var(--default-grid-baseline) * 2);
+				inset-inline-start: 0;
+				width: 3px;
+				border-radius: var(--border-radius-rounded);
+				background-color: var(--color-primary-element);
+				// Zeroed by the reduced-motion theme, so no separate media query is needed.
+				animation: result-pill-in var(--animation-quick) ease-out;
+			}
+
+			&:hover {
+				background-color: var(--color-background-hover);
+			}
+		}
+
+		// Undo the forced active text colour. Chain through the anchor to outrank
+		// NcListItem's own !important rule.
+		:deep(.list-item__anchor .list-item-content__name),
+		:deep(.list-item__anchor .list-item-content__subname),
+		:deep(.list-item__anchor .list-item-content__details),
+		:deep(.list-item__anchor .list-item-details__details) {
+			color: var(--color-main-text) !important;
+		}
 	}
 
-	* {
-		cursor: pointer;
-	}
-
-	&-icon {
+	&__icon {
+		display: flex;
+		align-items: center;
+		justify-content: center;
 		overflow: hidden;
-		width: $clickable-area;
-		height: $clickable-area;
+		width: var(--default-clickable-area);
+		height: var(--default-clickable-area);
 		border-radius: var(--border-radius);
-		background-repeat: no-repeat;
-		background-position: center center;
-		background-size: 32px;
+		margin-inline-start: var(--default-grid-baseline);
+
 		&--rounded {
-			border-radius: $clickable-area / 2;
-		}
-		&--no-preview {
-			background-size: 32px;
-		}
-		&--with-thumbnail {
-			background-size: cover;
-		}
-		&--with-thumbnail:not(&--rounded) {
-			// compensate for border
-			max-width: $clickable-area - 2px;
-			max-height: $clickable-area - 2px;
-			border: 1px solid var(--color-border);
+			border-radius: calc(var(--default-clickable-area) / 2);
 		}
 
-		img {
+		&--with-thumbnail:not(#{&}--rounded) {
+			border: 1px solid var(--color-border);
+			// compensate for border
+			max-height: calc(var(--default-clickable-area) - 2px);
+			max-width: calc(var(--default-clickable-area) - 2px);
+		}
+
+		// A full-bleed thumbnail (preview or avatar) fills the box.
+		&--with-thumbnail img {
 			// Make sure to keep ratio
 			width: 100%;
 			height: 100%;
@@ -220,38 +205,43 @@ $margin: 10px;
 			object-fit: cover;
 			object-position: center;
 		}
+
+		// A small monochrome glyph (e.g. a settings section), not a thumbnail.
+		&-img {
+			width: 20px;
+			height: 20px;
+			object-fit: contain;
+			// Dark monochrome icons invert to light in dark themes.
+			filter: var(--background-invert-if-dark);
+
+			// Mime icons carry their own colours (a red PDF, a green spreadsheet), so the
+			// dark-theme invert would recolour them: red comes out cyan. Sized to match the
+			// 32px these icons had while they were painted as a background-image.
+			&[src*='/filetypes/'] {
+				width: 32px;
+				height: 32px;
+				filter: none;
+			}
+		}
 	}
 
-	&-icon,
-	&-actions {
-		flex: 0 0 $clickable-area;
-	}
-
-	&-content {
-		display: flex;
-		align-items: center;
-		flex: 1 1 100%;
-		flex-wrap: wrap;
-		// Set to minimum and gro from it
-		min-width: 0;
-		padding-left: $margin;
-	}
-
-	&-line-one,
-	&-line-two {
-		overflow: hidden;
-		flex: 1 1 100%;
-		margin: 1px 0;
-		white-space: nowrap;
-		text-overflow: ellipsis;
-		// Use the same color as the `a`
-		color: inherit;
-		font-size: inherit;
-	}
-	&-line-two {
-		opacity: .7;
-		font-size: var(--default-font-size);
+	// App results reuse the app-menu tile (AppIcon); size its circle to the icon column.
+	&__app-icon {
+		--app-icon-circle-size: var(--default-clickable-area);
+		margin-inline-start: var(--default-grid-baseline);
 	}
 }
 
+// Grow the pill out of the row's centre line, matching the navigation entry.
+@keyframes result-pill-in {
+	from {
+		transform: scaleY(0);
+		opacity: 0;
+	}
+
+	to {
+		transform: scaleY(1);
+		opacity: 1;
+	}
+}
 </style>

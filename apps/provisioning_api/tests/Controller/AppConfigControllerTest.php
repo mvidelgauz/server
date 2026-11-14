@@ -1,37 +1,36 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016 Joas Schilling <coding@schilljs.com>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Provisioning_API\Tests\Controller;
 
+use OC\AppConfig;
+use OC\Config\ConfigManager;
 use OCA\Provisioning_API\Controller\AppConfigController;
+use OCP\App\IAppManager;
 use OCP\AppFramework\Http;
 use OCP\AppFramework\Http\DataResponse;
+use OCP\Config\BeforeAppConfigDeletedEvent;
+use OCP\Config\BeforeAppConfigSetEvent;
+use OCP\EventDispatcher\IEventDispatcher;
+use OCP\Exceptions\AppConfigUnknownKeyException;
 use OCP\IAppConfig;
-use OCP\IConfig;
+use OCP\IGroupManager;
+use OCP\IL10N;
 use OCP\IRequest;
+use OCP\IUser;
+use OCP\IUserSession;
+use OCP\Log\Audit\CriticalActionPerformedEvent;
+use OCP\Server;
+use OCP\Settings\IManager;
+use PHPUnit\Framework\MockObject\MockObject;
 use Test\TestCase;
+use function json_decode;
+use function json_encode;
 
 /**
  * Class AppConfigControllerTest
@@ -39,22 +38,31 @@ use Test\TestCase;
  * @package OCA\Provisioning_API\Tests
  */
 class AppConfigControllerTest extends TestCase {
-
-	/** @var IConfig|\PHPUnit\Framework\MockObject\MockObject */
-	private $config;
-	/** @var IAppConfig|\PHPUnit\Framework\MockObject\MockObject */
-	private $appConfig;
+	private IAppConfig&MockObject $appConfig;
+	private IUserSession&MockObject $userSession;
+	private IL10N&MockObject $l10n;
+	private IManager&MockObject $settingManager;
+	private IGroupManager&MockObject $groupManager;
+	private IAppManager $appManager;
+	private ConfigManager $configManager;
+	private IEventDispatcher&MockObject $eventDispatcher;
 
 	protected function setUp(): void {
 		parent::setUp();
 
-		$this->config = $this->createMock(IConfig::class);
-		$this->appConfig = $this->createMock(IAppConfig::class);
+		$this->appConfig = $this->createMock(AppConfig::class);
+		$this->userSession = $this->createMock(IUserSession::class);
+		$this->l10n = $this->createMock(IL10N::class);
+		$this->settingManager = $this->createMock(IManager::class);
+		$this->groupManager = $this->createMock(IGroupManager::class);
+		$this->appManager = Server::get(IAppManager::class);
+		$this->configManager = Server::get(ConfigManager::class);
+		$this->eventDispatcher = $this->createMock(IEventDispatcher::class);
 	}
 
 	/**
 	 * @param string[] $methods
-	 * @return AppConfigController|\PHPUnit\Framework\MockObject\MockObject
+	 * @return AppConfigController|MockObject
 	 */
 	protected function getInstance(array $methods = []) {
 		$request = $this->createMock(IRequest::class);
@@ -63,23 +71,35 @@ class AppConfigControllerTest extends TestCase {
 			return new AppConfigController(
 				'provisioning_api',
 				$request,
-				$this->config,
-				$this->appConfig
+				$this->appConfig,
+				$this->userSession,
+				$this->l10n,
+				$this->groupManager,
+				$this->settingManager,
+				$this->appManager,
+				$this->configManager,
+				$this->eventDispatcher,
 			);
 		} else {
 			return $this->getMockBuilder(AppConfigController::class)
 				->setConstructorArgs([
 					'provisioning_api',
 					$request,
-					$this->config,
 					$this->appConfig,
+					$this->userSession,
+					$this->l10n,
+					$this->groupManager,
+					$this->settingManager,
+					$this->appManager,
+					$this->configManager,
+					$this->eventDispatcher,
 				])
-				->setMethods($methods)
+				->onlyMethods($methods)
 				->getMock();
 		}
 	}
 
-	public function testGetApps() {
+	public function testGetApps(): void {
 		$this->appConfig->expects($this->once())
 			->method('getApps')
 			->willReturn(['apps']);
@@ -90,21 +110,15 @@ class AppConfigControllerTest extends TestCase {
 		$this->assertEquals(['data' => ['apps']], $result->getData());
 	}
 
-	public function dataGetKeys() {
+	public static function dataGetKeys(): array {
 		return [
 			['app1 ', null, new \InvalidArgumentException('error'), Http::STATUS_FORBIDDEN],
 			['app2', ['keys'], null, Http::STATUS_OK],
 		];
 	}
 
-	/**
-	 * @dataProvider dataGetKeys
-	 * @param string $app
-	 * @param array|null $keys
-	 * @param \Exception|null $throws
-	 * @param int $status
-	 */
-	public function testGetKeys($app, $keys, $throws, $status) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataGetKeys')]
+	public function testGetKeys(string $app, ?array $keys, ?\Throwable $throws, int $status): void {
 		$api = $this->getInstance(['verifyAppId']);
 		if ($throws instanceof \Exception) {
 			$api->expects($this->once())
@@ -112,15 +126,15 @@ class AppConfigControllerTest extends TestCase {
 				->with($app)
 				->willThrowException($throws);
 
-			$this->config->expects($this->never())
-				->method('getAppKeys');
+			$this->appConfig->expects($this->never())
+				->method('getKeys');
 		} else {
 			$api->expects($this->once())
 				->method('verifyAppId')
 				->with($app);
 
-			$this->config->expects($this->once())
-				->method('getAppKeys')
+			$this->appConfig->expects($this->once())
+				->method('getKeys')
 				->with($app)
 				->willReturn($keys);
 		}
@@ -135,39 +149,28 @@ class AppConfigControllerTest extends TestCase {
 		}
 	}
 
-	public function dataGetValue() {
+	public static function dataGetValue(): array {
 		return [
 			['app1', 'key', 'default', null, new \InvalidArgumentException('error'), Http::STATUS_FORBIDDEN],
 			['app2', 'key', 'default', 'return', null, Http::STATUS_OK],
 		];
 	}
 
-	/**
-	 * @dataProvider dataGetValue
-	 * @param string $app
-	 * @param string|null $key
-	 * @param string|null $default
-	 * @param string|null $return
-	 * @param \Exception|null $throws
-	 * @param int $status
-	 */
-	public function testGetValue($app, $key, $default, $return, $throws, $status) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataGetValue')]
+	public function testGetValue(string $app, string $key, string $default, ?string $return, ?\Throwable $throws, int $status): void {
 		$api = $this->getInstance(['verifyAppId']);
 		if ($throws instanceof \Exception) {
 			$api->expects($this->once())
 				->method('verifyAppId')
 				->with($app)
 				->willThrowException($throws);
-
-			$this->config->expects($this->never())
-				->method('getAppValue');
 		} else {
 			$api->expects($this->once())
 				->method('verifyAppId')
 				->with($app);
 
-			$this->config->expects($this->once())
-				->method('getAppValue')
+			$this->appConfig->expects($this->once())
+				->method('getValueMixed')
 				->with($app, $key, $default)
 				->willReturn($return);
 		}
@@ -182,57 +185,86 @@ class AppConfigControllerTest extends TestCase {
 		}
 	}
 
-	public function dataSetValue() {
+	public static function dataSetValue(): array {
 		return [
-			['app1', 'key', 'default', new \InvalidArgumentException('error1'), null, Http::STATUS_FORBIDDEN],
-			['app2', 'key', 'default', null, new \InvalidArgumentException('error2'), Http::STATUS_FORBIDDEN],
-			['app2', 'key', 'default', null, null, Http::STATUS_OK],
+			['app1', 'key', 'default', new \InvalidArgumentException('error1'), Http::STATUS_FORBIDDEN],
+			['app2', 'key', 'default', null, Http::STATUS_OK],
+			['app2', 'key', '1', null, Http::STATUS_OK, IAppConfig::VALUE_BOOL],
+			['app2', 'key', '42', null, Http::STATUS_OK, IAppConfig::VALUE_INT],
+			['app2', 'key', '4.2', null, Http::STATUS_OK, IAppConfig::VALUE_FLOAT],
+			['app2', 'key', '42', null, Http::STATUS_OK, IAppConfig::VALUE_STRING],
+			['app2', 'key', 'secret', null, Http::STATUS_OK, IAppConfig::VALUE_STRING | IAppConfig::VALUE_SENSITIVE],
+			['app2', 'key', json_encode([4, 2]), null, Http::STATUS_OK, IAppConfig::VALUE_ARRAY],
+			['app2', 'key', json_encode([4, 2]), null, Http::STATUS_OK, new AppConfigUnknownKeyException()],
 		];
 	}
 
-	/**
-	 * @dataProvider dataSetValue
-	 * @param string $app
-	 * @param string|null $key
-	 * @param string|null $value
-	 * @param \Exception|null $appThrows
-	 * @param \Exception|null $keyThrows
-	 * @param int $status
-	 */
-	public function testSetValue($app, $key, $value, $appThrows, $keyThrows, $status) {
-		$api = $this->getInstance(['verifyAppId', 'verifyConfigKey']);
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataSetValue')]
+	public function testSetValue(string $app, string $key, string $value, ?\Throwable $appThrows, int $status, int|\Throwable $type = IAppConfig::VALUE_MIXED): void {
+		$adminUser = $this->createMock(IUser::class);
+		$adminUser->expects($this->once())
+			->method('getUid')
+			->willReturn('admin');
+
+		$this->userSession->expects($this->once())
+			->method('getUser')
+			->willReturn($adminUser);
+		$this->groupManager->expects($this->once())
+			->method('isAdmin')
+			->with('admin')
+			->willReturn(true);
+		$api = $this->getInstance(['verifyAppId']);
 		if ($appThrows instanceof \Exception) {
 			$api->expects($this->once())
 				->method('verifyAppId')
 				->with($app)
 				->willThrowException($appThrows);
-
-			$api->expects($this->never())
-				->method('verifyConfigKey');
-			$this->config->expects($this->never())
-				->method('setAppValue');
-		} elseif ($keyThrows instanceof  \Exception) {
-			$api->expects($this->once())
-				->method('verifyAppId')
-				->with($app);
-			$api->expects($this->once())
-				->method('verifyConfigKey')
-				->with($app, $key)
-				->willThrowException($keyThrows);
-
-			$this->config->expects($this->never())
-				->method('setAppValue');
+			$this->appConfig->expects($this->never())
+				->method('setValueMixed');
 		} else {
 			$api->expects($this->once())
 				->method('verifyAppId')
 				->with($app);
-			$api->expects($this->once())
-				->method('verifyConfigKey')
-				->with($app, $key);
 
-			$this->config->expects($this->once())
-				->method('setAppValue')
-				->with($app, $key, $value);
+			if ($type instanceof \Throwable) {
+				$this->appConfig->expects($this->once())
+					->method('getDetails')
+					->with($app, $key)
+					->willThrowException($type);
+			} else {
+				$this->appConfig->expects($this->once())
+					->method('getDetails')
+					->with($app, $key)
+					->willReturn([
+						'app' => $app,
+						'key' => $key,
+						'value' => '', // 🤷
+						'type' => $type,
+						'lazy' => false,
+						'typeString' => (string)$type, // this is not accurate, but acceptable
+						'sensitive' => ($type & IAppConfig::VALUE_SENSITIVE) !== 0,
+					]);
+			}
+
+			$configValueSetter = match ($type) {
+				IAppConfig::VALUE_BOOL => 'setValueBool',
+				IAppConfig::VALUE_FLOAT => 'setValueFloat',
+				IAppConfig::VALUE_INT => 'setValueInt',
+				IAppConfig::VALUE_STRING => 'setValueString',
+				IAppConfig::VALUE_ARRAY => 'setValueArray',
+				default => 'setValueMixed',
+			};
+
+			$this->appConfig->expects($this->once())
+				->method($configValueSetter)
+				->with($app, $key, $configValueSetter === 'setValueArray' ? json_decode($value, true) : $value)
+				->willReturn(true);
+
+			$this->expectAuditEvent('config.app_value.updated', ['configKey' => $key, 'appId' => $app], 'App config key "%s" of app "%s" was changed');
+		}
+		if ($appThrows instanceof \Exception) {
+			$this->eventDispatcher->expects($this->never())
+				->method('dispatchTyped');
 		}
 
 		$result = $api->setValue($app, $key, $value);
@@ -240,63 +272,75 @@ class AppConfigControllerTest extends TestCase {
 		$this->assertSame($status, $result->getStatus());
 		if ($appThrows instanceof \Exception) {
 			$this->assertEquals(['data' => ['message' => $appThrows->getMessage()]], $result->getData());
-		} elseif ($keyThrows instanceof \Exception) {
-			$this->assertEquals(['data' => ['message' => $keyThrows->getMessage()]], $result->getData());
 		} else {
 			$this->assertEquals([], $result->getData());
 		}
 	}
 
-	public function dataDeleteValue() {
-		return [
-			['app1', 'key', new \InvalidArgumentException('error1'), null, Http::STATUS_FORBIDDEN],
-			['app2', 'key', null, new \InvalidArgumentException('error2'), Http::STATUS_FORBIDDEN],
-			['app2', 'key', null, null, Http::STATUS_OK],
-		];
+	public function testSetUnchangedValueIsNotAudited(): void {
+		$adminUser = $this->createMock(IUser::class);
+		$adminUser->method('getUid')->willReturn('admin');
+		$this->userSession->method('getUser')->willReturn($adminUser);
+		$this->groupManager->method('isAdmin')->with('admin')->willReturn(true);
+		$api = $this->getInstance(['verifyAppId']);
+
+		$this->appConfig->method('getDetails')->willReturn(['type' => IAppConfig::VALUE_STRING]);
+		$this->appConfig->expects($this->once())
+			->method('setValueString')
+			->with('app2', 'key', 'value')
+			->willReturn(false);
+		$this->eventDispatcher->expects($this->once())
+			->method('dispatchTyped')
+			->with($this->isInstanceOf(BeforeAppConfigSetEvent::class));
+
+		$api->setValue('app2', 'key', 'value');
 	}
 
 	/**
-	 * @dataProvider dataDeleteValue
-	 * @param string $app
-	 * @param string|null $key
-	 * @param \Exception|null $appThrows
-	 * @param \Exception|null $keyThrows
-	 * @param int $status
+	 * Expects the before event of the change, followed by the audit event
 	 */
-	public function testDeleteValue($app, $key, $appThrows, $keyThrows, $status) {
-		$api = $this->getInstance(['verifyAppId', 'verifyConfigKey']);
+	private function expectAuditEvent(string $operation, array $parameters, string $message): void {
+		$this->eventDispatcher->expects($this->exactly(2))
+			->method('dispatchTyped')
+			->with($this->callback(fn (object $event): bool => $event instanceof BeforeAppConfigSetEvent
+				|| $event instanceof BeforeAppConfigDeletedEvent
+				|| ($event instanceof CriticalActionPerformedEvent
+					&& $event->getOperation() === $operation
+					&& $event->getParameters() === $parameters
+					&& $event->getLogMessage() === $message)));
+	}
+
+	public static function dataDeleteValue(): array {
+		return [
+			['app1', 'key', new \InvalidArgumentException('error1'), Http::STATUS_FORBIDDEN],
+			['app2', 'key', null, Http::STATUS_OK],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataDeleteValue')]
+	public function testDeleteValue(string $app, string $key, ?\Throwable $appThrows, int $status): void {
+		$api = $this->getInstance(['verifyAppId']);
 		if ($appThrows instanceof \Exception) {
 			$api->expects($this->once())
 				->method('verifyAppId')
 				->with($app)
 				->willThrowException($appThrows);
-
-			$api->expects($this->never())
-				->method('verifyConfigKey');
-			$this->config->expects($this->never())
-				->method('deleteAppValue');
-		} elseif ($keyThrows instanceof  \Exception) {
-			$api->expects($this->once())
-				->method('verifyAppId')
-				->with($app);
-			$api->expects($this->once())
-				->method('verifyConfigKey')
-				->with($app, $key)
-				->willThrowException($keyThrows);
-
-			$this->config->expects($this->never())
-				->method('deleteAppValue');
+			$this->appConfig->expects($this->never())
+				->method('deleteKey');
 		} else {
 			$api->expects($this->once())
 				->method('verifyAppId')
 				->with($app);
-			$api->expects($this->once())
-				->method('verifyConfigKey')
+
+			$this->appConfig->expects($this->once())
+				->method('deleteKey')
 				->with($app, $key);
 
-			$this->config->expects($this->once())
-				->method('deleteAppValue')
-				->with($app, $key);
+			$this->expectAuditEvent('config.app_value.deleted', ['configKey' => $key, 'appId' => $app], 'App config key "%s" of app "%s" was deleted');
+		}
+		if ($appThrows instanceof \Exception) {
+			$this->eventDispatcher->expects($this->never())
+				->method('dispatchTyped');
 		}
 
 		$result = $api->deleteKey($app, $key);
@@ -304,20 +348,57 @@ class AppConfigControllerTest extends TestCase {
 		$this->assertSame($status, $result->getStatus());
 		if ($appThrows instanceof \Exception) {
 			$this->assertEquals(['data' => ['message' => $appThrows->getMessage()]], $result->getData());
-		} elseif ($keyThrows instanceof \Exception) {
-			$this->assertEquals(['data' => ['message' => $keyThrows->getMessage()]], $result->getData());
 		} else {
 			$this->assertEquals([], $result->getData());
 		}
 	}
 
-	public function testVerifyAppId() {
+	public function testSetValueRejected(): void {
+		$adminUser = $this->createMock(IUser::class);
+		$adminUser->method('getUid')
+			->willReturn('admin');
+		$this->userSession->method('getUser')
+			->willReturn($adminUser);
+		$this->groupManager->method('isAdmin')
+			->with('admin')
+			->willReturn(true);
+		$this->eventDispatcher->expects($this->once())
+			->method('dispatchTyped')
+			->willReturnCallback(function (BeforeAppConfigSetEvent $event): void {
+				$this->assertSame('app1', $event->getAppId());
+				$this->assertSame('key', $event->getConfigKey());
+				$this->assertSame('value', $event->getConfigValue());
+				$event->setValid(false);
+			});
+		$this->appConfig->expects($this->never())
+			->method('setValueMixed');
+
+		$result = $this->getInstance(['verifyAppId'])->setValue('app1', 'key', 'value');
+		$this->assertSame(Http::STATUS_BAD_REQUEST, $result->getStatus());
+	}
+
+	public function testDeleteValueRejected(): void {
+		$this->eventDispatcher->expects($this->once())
+			->method('dispatchTyped')
+			->willReturnCallback(function (BeforeAppConfigDeletedEvent $event): void {
+				$this->assertSame('app1', $event->getAppId());
+				$this->assertSame('key', $event->getConfigKey());
+				$event->setValid(false);
+			});
+		$this->appConfig->expects($this->never())
+			->method('deleteKey');
+
+		$result = $this->getInstance(['verifyAppId'])->deleteKey('app1', 'key');
+		$this->assertSame(Http::STATUS_BAD_REQUEST, $result->getStatus());
+	}
+
+	public function testVerifyAppId(): void {
 		$api = $this->getInstance();
 		$this->invokePrivate($api, 'verifyAppId', ['activity']);
 		$this->addToAssertionCount(1);
 	}
 
-	public function dataVerifyAppIdThrows() {
+	public static function dataVerifyAppIdThrows(): array {
 		return [
 			['activity..'],
 			['activity/'],
@@ -326,62 +407,11 @@ class AppConfigControllerTest extends TestCase {
 		];
 	}
 
-	/**
-	 * @dataProvider dataVerifyAppIdThrows
-	 * @param string $app
-	 */
-	public function testVerifyAppIdThrows($app) {
+	#[\PHPUnit\Framework\Attributes\DataProvider(methodName: 'dataVerifyAppIdThrows')]
+	public function testVerifyAppIdThrows(string $app): void {
 		$this->expectException(\InvalidArgumentException::class);
 
 		$api = $this->getInstance();
 		$this->invokePrivate($api, 'verifyAppId', [$app]);
-	}
-
-	public function dataVerifyConfigKey() {
-		return [
-			['activity', 'abc', ''],
-			['dav', 'public_route', ''],
-			['files', 'remote_route', ''],
-			['core', 'encryption_enabled', 'yes'],
-		];
-	}
-
-	/**
-	 * @dataProvider dataVerifyConfigKey
-	 * @param string $app
-	 * @param string $key
-	 * @param string $value
-	 */
-	public function testVerifyConfigKey($app, $key, $value) {
-		$api = $this->getInstance();
-		$this->invokePrivate($api, 'verifyConfigKey', [$app, $key, $value]);
-		$this->addToAssertionCount(1);
-	}
-
-	public function dataVerifyConfigKeyThrows() {
-		return [
-			['activity', 'installed_version', ''],
-			['calendar', 'enabled', ''],
-			['contacts', 'types', ''],
-			['core', 'encryption_enabled', 'no'],
-			['core', 'encryption_enabled', ''],
-			['core', 'public_files', ''],
-			['core', 'public_dav', ''],
-			['core', 'remote_files', ''],
-			['core', 'remote_dav', ''],
-		];
-	}
-
-	/**
-	 * @dataProvider dataVerifyConfigKeyThrows
-	 * @param string $app
-	 * @param string $key
-	 * @param string $value
-	 */
-	public function testVerifyConfigKeyThrows($app, $key, $value) {
-		$this->expectException(\InvalidArgumentException::class);
-
-		$api = $this->getInstance();
-		$this->invokePrivate($api, 'verifyConfigKey', [$app, $key, $value]);
 	}
 }

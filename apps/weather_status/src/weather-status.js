@@ -1,38 +1,10 @@
 /**
- * @copyright Copyright (c) 2016 Julien Veyssier <eneiluj@posteo.net>
- *
- * @author Julien Veyssier <eneiluj@posteo.net>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import Vue from 'vue'
-import { getRequestToken } from '@nextcloud/auth'
-import { generateUrl } from '@nextcloud/router'
-import App from './App'
-
-// eslint-disable-next-line camelcase
-__webpack_nonce__ = btoa(getRequestToken())
-
-// Correct the root of the app for chunk loading
-// eslint-disable-next-line
-__webpack_public_path__ = generateUrl('/apps/weather_status/js/')
-
-Vue.prototype.t = t
+import { createApp } from 'vue'
+import App from './App.vue'
 
 document.addEventListener('DOMContentLoaded', function() {
 	if (!OCA.Dashboard) {
@@ -40,11 +12,8 @@ document.addEventListener('DOMContentLoaded', function() {
 	}
 
 	OCA.Dashboard.registerStatus('weather', (el) => {
-		const Dashboard = Vue.extend(App)
-		return new Dashboard({
-			propsData: {
-				inline: true,
-			},
-		}).$mount(el)
+		const app = createApp(App)
+		app.mixin({ methods: { t, n } })
+		return app.mount(el)
 	})
 })

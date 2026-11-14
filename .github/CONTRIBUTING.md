@@ -1,6 +1,10 @@
+<!--
+ - SPDX-FileCopyrightText: 2016 Nextcloud GmbH and Nextcloud contributors
+ - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 ## Submitting issues
 
-If you have questions about how to install or use Nextcloud, please direct these to our [forum][forum]. We are also available on [IRC][irc].
+If you have questions about how to install or use Nextcloud, please direct these to our [forum][forum]. We are also available on [IRC][irc] (unofficial).
 
 ### Short version
 
@@ -21,13 +25,38 @@ Help us to maximize the effort we can spend fixing issues and adding new feature
 
 [templates]: ./ISSUE_TEMPLATE
 [forum]: https://help.nextcloud.com/
-[irc]: https://webchat.freenode.net/?channels=nextcloud
+[irc]: https://web.libera.chat/#nextcloud
 
 ## Contributing to Source Code
 
 Thanks for wanting to contribute source code to Nextcloud. That's great!
 
+Please read the [general contribution guidelines][contributing] that apply to all Nextcloud repositories, and the [AI Contribution Policy][aipolicy] if you are using AI tools.
+
 Please read the [Developer Manuals][devmanual] to learn how to create your first application or how to test the Nextcloud code with PHPUnit.
+
+### AI-assisted contributions
+
+Nextcloud allows contributions made with the help of AI tools. You are the author of everything you submit - AI assistance does not change that responsibility.
+
+* **Disclosure:** Declare AI tool use in the PR description and add an `Assisted-by: AGENT_NAME:MODEL_VERSION` git trailer to each affected commit.
+
+* **Accountability:** You must be able to explain, defend, and modify every line you submit. If a reviewer asks why something works a certain way, "the AI wrote it" is not an answer.
+
+* **Communication:** PR descriptions, review comments, and issue reports must be written in your own words. This applies throughout the review process - passing reviewer feedback to an AI and posting whatever comes out is not acceptable.
+
+* **Quality:** AI output must be quality assured by the human, i.e. reviewed, cleaned up, and tested before submission. New features must be tested on a live instance by you, not by an agent. Code that has never been executed, or that shifts debugging work onto maintainers, will not be accepted.
+
+* **Licensing:** Ensure AI-generated code contains no material incompatible with the license of the repository you are contributing to.
+
+For the full policy including autonomous agent rules, security reports, and beginner issues, read the [AI Contribution Policy][aipolicy].
+
+### Conventional Commits
+
+Please use [Conventional Commits](https://www.conventionalcommits.org) for your commit messages. This helps maintain clarity and consistency across the project, making it easier to understand changes and automate versioning.
+```
+feat(files_sharing): allow sharing with contacts
+``` 
 
 ### Tests
 
@@ -37,16 +66,16 @@ In some areas unit testing is hard (aka almost impossible) as of today - in thes
 
 ### Sign your work
 
-We use the Developer Certificate of Origin (DCO) as a additional safeguard
+We use the Developer Certificate of Origin (DCO) as an additional safeguard
 for the Nextcloud project. This is a well established and widely used
 mechanism to assure contributors have confirmed their right to license
 their contribution under the project's license.
 Please read [contribute/developer-certificate-of-origin][dcofile].
 If you can certify it, then just add a line to every git commit message:
 
-````
-  Signed-off-by: Random J Developer <random@developer.example.org>
-````
+```
+Signed-off-by: Random J Developer <random@developer.example.org>
+```
 
 Use your real name (sorry, no pseudonyms or anonymous contributions).
 If you set your `user.name` and `user.email` git configs, you can sign your
@@ -61,6 +90,8 @@ In case you are not sure how to add or update the license header correctly pleas
 [devmanual]: https://docs.nextcloud.com/server/latest/developer_manual/
 [dcofile]: https://github.com/nextcloud/server/blob/master/contribute/developer-certificate-of-origin
 [applyalicense]: https://github.com/nextcloud/server/blob/master/contribute/HowToApplyALicense.md
+[contributing]: https://github.com/nextcloud/.github/blob/master/CONTRIBUTING.md
+[aipolicy]: https://github.com/nextcloud/.github/blob/master/AI_POLICY.md
 
 ## Translations
 Please submit translations via [Transifex][transifex].

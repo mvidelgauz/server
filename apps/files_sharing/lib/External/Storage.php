@@ -1,101 +1,235 @@
 <?php
+
+declare(strict_types=1);
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Björn Schießle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Daniel Kesselberg <mail@danielkesselberg.de>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OCA\Files_Sharing\External;
 
 use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\RequestException;
+use OC\Files\Storage\BearerAuthAwareSabreClient;
 use OC\Files\Storage\DAV;
 use OC\ForbiddenException;
+use OCA\Files_Sharing\External\Manager as ExternalShareManager;
 use OCA\Files_Sharing\ISharedStorage;
 use OCP\AppFramework\Http;
 use OCP\Constants;
 use OCP\Federation\ICloudId;
+use OCP\Files\Cache\ICache;
+use OCP\Files\Cache\IScanner;
+use OCP\Files\Cache\IWatcher;
 use OCP\Files\NotFoundException;
 use OCP\Files\Storage\IDisableEncryptionStorage;
+use OCP\Files\Storage\IReliableEtagStorage;
+use OCP\Files\Storage\IStorage;
 use OCP\Files\StorageInvalidException;
 use OCP\Files\StorageNotAvailableException;
+use OCP\Http\Client\IClientService;
+use OCP\Http\Client\LocalServerException;
+use OCP\IAppConfig;
+use OCP\ICacheFactory;
+use OCP\IConfig;
+use OCP\IUser;
+use OCP\IUserSession;
+use OCP\OCM\Exceptions\OCMArgumentException;
+use OCP\OCM\Exceptions\OCMProviderException;
+use OCP\OCM\IOCMDiscoveryService;
+use OCP\Server;
+use OCP\Share\IManager as IShareManager;
+use Psr\Log\LoggerInterface;
 
-class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
-	/** @var ICloudId */
-	private $cloudId;
-	/** @var string */
-	private $mountPoint;
-	/** @var string */
-	private $token;
-	/** @var \OCP\ICacheFactory */
-	private $memcacheFactory;
-	/** @var \OCP\Http\Client\IClientService */
-	private $httpClient;
-	/** @var bool */
-	private $updateChecked = false;
+class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage, IReliableEtagStorage {
+	private ICloudId $cloudId;
+	private string $mountPoint;
+	private string $token;
+	private ICacheFactory $memcacheFactory;
+	private IClientService $httpClient;
+	private bool $updateChecked = false;
+	private ExternalShareManager $manager;
+	private IConfig $config;
+	protected IAppConfig $appConfig;
+	private IShareManager $shareManager;
+	private IUser $recipientUser;
+	private bool $tokenRefreshed = false;
+	/** Unix timestamp until which the current access token is considered valid (0 = unknown/expired) */
+	private int $tokenExpiresAt = 0;
+	/** Number of consecutive token exchange failures (resets on success or DB-reuse) */
+	private int $refreshFailureCount = 0;
+	/** Unix timestamp before which the next exchange attempt must not be made (0 = no wait) */
+	private int $refreshBackoffUntil = 0;
+
+	private const int REFRESH_MAX_ATTEMPTS = 3;
+	private const int REFRESH_BACKOFF_SECONDS = 5;
 
 	/**
-	 * @var \OCA\Files_Sharing\External\Manager
+	 * @param array{
+	 *     HttpClientService: IClientService,
+	 *     manager: ExternalShareManager,
+	 *     cloudId: ICloudId,
+	 *     mountpoint: string,
+	 *     token: string,
+	 *     recipient: IUser,
+	 *     access_token: ?string,
+	 *     access_token_expires: ?int
+	 * }|array $options
 	 */
-	private $manager;
-
 	public function __construct($options) {
-		$this->memcacheFactory = \OC::$server->getMemCacheFactory();
+		$this->memcacheFactory = Server::get(ICacheFactory::class);
 		$this->httpClient = $options['HttpClientService'];
-
 		$this->manager = $options['manager'];
 		$this->cloudId = $options['cloudId'];
-		$discoveryService = \OC::$server->query(\OCP\OCS\IDiscoveryService::class);
+		$this->logger = Server::get(LoggerInterface::class);
+		$discoveryService = $options['discoveryService'] ?? Server::get(IOCMDiscoveryService::class);
+		$this->config = Server::get(IConfig::class);
+		$this->appConfig = Server::get(IAppConfig::class);
+		$this->shareManager = Server::get(IShareManager::class);
+		$this->recipientUser = $options['recipient'];
 
-		[$protocol, $remote] = explode('://', $this->cloudId->getRemote());
-		if (strpos($remote, '/')) {
-			[$host, $root] = explode('/', $remote, 2);
-		} else {
-			$host = $remote;
-			$root = '';
+		// use default path to webdav if not found on discovery
+		try {
+			$ocmProvider = $discoveryService->discover($this->cloudId->getRemote());
+			$webDavEndpoint = $ocmProvider->extractProtocolEntry('file', 'webdav');
+			$remote = $ocmProvider->getEndPoint();
+			$authType = \Sabre\DAV\Client::AUTH_BASIC;
+		} catch (OCMProviderException|OCMArgumentException $e) {
+			$this->logger->notice('exception while retrieving webdav endpoint', ['exception' => $e]);
+			$webDavEndpoint = '/public.php/webdav';
+			$remote = $this->cloudId->getRemote();
+			$authType = \Sabre\DAV\Client::AUTH_BASIC;
 		}
-		$secure = $protocol === 'https';
-		$federatedSharingEndpoints = $discoveryService->discover($this->cloudId->getRemote(), 'FEDERATED_SHARING');
-		$webDavEndpoint = isset($federatedSharingEndpoints['webdav']) ? $federatedSharingEndpoints['webdav'] : '/public.php/webdav';
-		$root = rtrim($root, '/') . $webDavEndpoint;
+
+		// Only use Bearer auth when an access token is already stored.
+		// Shares created before the exchange-token capability was introduced have no
+		// stored token and must keep using basic auth for backwards compatibility.
+		if (!empty($options['access_token'])) {
+			$authType = BearerAuthAwareSabreClient::AUTH_BEARER;
+		}
+
+		$host = parse_url($remote, PHP_URL_HOST);
+		// If host extraction fails (e.g., endpoint has no scheme), fall back to cloudId's remote
+		if ($host === null) {
+			$host = parse_url($this->cloudId->getRemote(), PHP_URL_HOST);
+		}
+		$port = parse_url($remote, PHP_URL_PORT);
+		if ($port === null) {
+			$port = parse_url($this->cloudId->getRemote(), PHP_URL_PORT);
+		}
+		$host .= ($port === null) ? '' : ':' . $port; // we add port if available
+
+		// in case remote NC is on a sub folder and using deprecated ocm provider
+		$tmpPath = rtrim(parse_url($this->cloudId->getRemote(), PHP_URL_PATH) ?? '', '/');
+		if (!str_starts_with($webDavEndpoint, $tmpPath)) {
+			$webDavEndpoint = $tmpPath . $webDavEndpoint;
+		}
+
 		$this->mountPoint = $options['mountpoint'];
 		$this->token = $options['token'];
+		$this->tokenExpiresAt = (int)($options['access_token_expires'] ?? 0);
 
-		parent::__construct([
-			'secure' => $secure,
-			'host' => $host,
-			'root' => $root,
-			'user' => $options['token'],
-			'password' => (string)$options['password']
-		]);
+		// Determine scheme - fall back to cloudId's remote if $remote has no scheme
+		$scheme = parse_url($remote, PHP_URL_SCHEME) ?? parse_url($this->cloudId->getRemote(), PHP_URL_SCHEME) ?? 'https';
+
+		parent::__construct(
+			[
+				'secure' => ($scheme === 'https'),
+				'verify' => !$this->config->getSystemValueBool('sharing.federation.allowSelfSignedCertificates', false),
+				'host' => $host,
+				'root' => $webDavEndpoint,
+				'user' => $options['token'],
+				'authType' => $authType,
+				'password' => $authType === BearerAuthAwareSabreClient::AUTH_BEARER
+					? (string)($options['access_token'] ?? '')
+					: (string)($options['password'] ?? ''),
+				'discoveryService' => $discoveryService,
+			]
+		);
 	}
 
-	public function getWatcher($path = '', $storage = null) {
+	/**
+	 * Refresh the access token. Extends parent to also persist to database.
+	 *
+	 * Uses expiry timestamps instead of a boolean flag so that concurrent
+	 * processes can detect that another process already obtained a fresh token
+	 * and reuse it rather than performing a redundant exchange.
+	 *
+	 * After a failed exchange, a 60-second backoff is applied so that
+	 * subsequent file operations do not hammer the remote token endpoint.
+	 * The DB is still consulted during backoff in case a concurrent process
+	 * succeeded; only the outgoing exchange call is suppressed.
+	 *
+	 * @return string|null the access token (freshly exchanged or reused from
+	 *                     DB), or null if refresh is currently not possible
+	 */
+	#[\Override]
+	protected function refreshAccessToken(): ?string {
+		$now = time();
+
+		// Fast path: in-memory token is still valid (single-process guard).
+		if ($this->tokenExpiresAt > $now && !empty($this->password)) {
+			return $this->password;
+		}
+
+		// Slow path: check DB — a concurrent process may have already refreshed.
+		$share = $this->manager->getShareByToken($this->token);
+		if ($share !== false) {
+			$dbExpiry = $share->getAccessTokenExpires();
+			$dbToken = $share->getAccessToken();
+			if ($dbExpiry !== null && $dbExpiry > $now && $dbToken !== null) {
+				// Another process already refreshed — reuse DB token and reset failure state.
+				$this->password = $dbToken;
+				$this->bearerToken = $dbToken;
+				$this->tokenExpiresAt = $dbExpiry;
+				$this->refreshFailureCount = 0;
+				$this->refreshBackoffUntil = 0;
+				$this->logger->debug('Reused access token refreshed by another process', ['app' => 'files_sharing']);
+				return $dbToken;
+			}
+		}
+
+		// Gave up after max attempts: stop trying for the lifetime of this instance.
+		if ($this->refreshFailureCount >= self::REFRESH_MAX_ATTEMPTS) {
+			return null;
+		}
+
+		// Still within the inter-attempt wait: don't hit the endpoint yet.
+		if ($this->refreshBackoffUntil > $now) {
+			return null;
+		}
+
+		// No valid token in DB — perform the exchange ourselves.
+		try {
+			$expiresAt = $now + 3600; // access tokens are valid for 1 hour
+			$newAccessToken = $this->exchangeRefreshToken();
+			$this->password = $newAccessToken;
+			$this->bearerToken = $newAccessToken;
+			$this->tokenExpiresAt = $expiresAt;
+			$this->refreshFailureCount = 0;
+			$this->refreshBackoffUntil = 0;
+
+			$this->manager->updateAccessToken($this->token, $newAccessToken, $expiresAt);
+
+			$this->logger->debug('Successfully refreshed access token', ['app' => 'files_sharing']);
+			return $newAccessToken;
+		} catch (\Exception $e) {
+			$this->refreshFailureCount++;
+			$this->refreshBackoffUntil = $now + self::REFRESH_BACKOFF_SECONDS;
+			$this->logger->warning('Failed to refresh access token (attempt {attempt}/{max})', [
+				'app' => 'files_sharing',
+				'attempt' => $this->refreshFailureCount,
+				'max' => self::REFRESH_MAX_ATTEMPTS,
+				'exception' => $e,
+			]);
+			return null;
+		}
+	}
+
+	#[\Override]
+	public function getWatcher(string $path = '', ?IStorage $storage = null): IWatcher {
 		if (!$storage) {
 			$storage = $this;
 		}
@@ -106,66 +240,53 @@ class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
 		return $this->watcher;
 	}
 
-	public function getRemoteUser() {
+	public function getRemoteUser(): string {
 		return $this->cloudId->getUser();
 	}
 
-	public function getRemote() {
+	public function getRemote(): string {
 		return $this->cloudId->getRemote();
 	}
 
-	public function getMountPoint() {
+	public function getMountPoint(): string {
 		return $this->mountPoint;
 	}
 
-	public function getToken() {
+	public function getToken(): string {
 		return $this->token;
 	}
 
-	public function getPassword() {
+	public function getPassword(): ?string {
 		return $this->password;
 	}
 
-	/**
-	 * @brief get id of the mount point
-	 * @return string
-	 */
-	public function getId() {
+	#[\Override]
+	public function getId(): string {
 		return 'shared::' . md5($this->token . '@' . $this->getRemote());
 	}
 
-	public function getCache($path = '', $storage = null) {
+	#[\Override]
+	public function getCache(string $path = '', ?IStorage $storage = null): ICache {
 		if (is_null($this->cache)) {
 			$this->cache = new Cache($this, $this->cloudId);
 		}
 		return $this->cache;
 	}
 
-	/**
-	 * @param string $path
-	 * @param \OC\Files\Storage\Storage $storage
-	 * @return \OCA\Files_Sharing\External\Scanner
-	 */
-	public function getScanner($path = '', $storage = null) {
+	#[\Override]
+	public function getScanner(string $path = '', ?IStorage $storage = null): IScanner {
 		if (!$storage) {
 			$storage = $this;
 		}
 		if (!isset($this->scanner)) {
 			$this->scanner = new Scanner($storage);
 		}
+		/** @var Scanner */
 		return $this->scanner;
 	}
 
-	/**
-	 * check if a file or folder has been updated since $time
-	 *
-	 * @param string $path
-	 * @param int $time
-	 * @throws \OCP\Files\StorageNotAvailableException
-	 * @throws \OCP\Files\StorageInvalidException
-	 * @return bool
-	 */
-	public function hasUpdated($path, $time) {
+	#[\Override]
+	public function hasUpdated(string $path, int $time): bool {
 		// since for owncloud webdav servers we can rely on etag propagation we only need to check the root of the storage
 		// because of that we only do one check for the entire storage per request
 		if ($this->updateChecked) {
@@ -185,7 +306,8 @@ class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
 		}
 	}
 
-	public function test() {
+	#[\Override]
+	public function test(): bool {
 		try {
 			return parent::test();
 		} catch (StorageInvalidException $e) {
@@ -203,41 +325,40 @@ class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
 	 * Check whether this storage is permanently or temporarily
 	 * unavailable
 	 *
-	 * @throws \OCP\Files\StorageNotAvailableException
-	 * @throws \OCP\Files\StorageInvalidException
+	 * @throws StorageNotAvailableException
+	 * @throws StorageInvalidException
 	 */
-	public function checkStorageAvailability() {
+	public function checkStorageAvailability(): void {
 		// see if we can find out why the share is unavailable
 		try {
-			$this->getShareInfo();
+			$this->getShareInfo(0);
 		} catch (NotFoundException $e) {
 			// a 404 can either mean that the share no longer exists or there is no Nextcloud on the remote
 			if ($this->testRemote()) {
 				// valid Nextcloud instance means that the public share no longer exists
 				// since this is permanent (re-sharing the file will create a new token)
 				// we remove the invalid storage
-				$this->manager->removeShare($this->mountPoint);
+				$this->manager->removeShare($this->recipientUser, $this->mountPoint);
 				$this->manager->getMountManager()->removeMount($this->mountPoint);
-				throw new StorageInvalidException();
+				throw new StorageInvalidException('Remote share not found', 0, $e);
 			} else {
 				// Nextcloud instance is gone, likely to be a temporary server configuration error
-				throw new StorageNotAvailableException();
+				throw new StorageNotAvailableException('No nextcloud instance found at remote', 0, $e);
 			}
 		} catch (ForbiddenException $e) {
 			// auth error, remove share for now (provide a dialog in the future)
-			$this->manager->removeShare($this->mountPoint);
+			$this->manager->removeShare($this->recipientUser, $this->mountPoint);
 			$this->manager->getMountManager()->removeMount($this->mountPoint);
-			throw new StorageInvalidException();
+			throw new StorageInvalidException('Auth error when getting remote share');
 		} catch (\GuzzleHttp\Exception\ConnectException $e) {
-			throw new StorageNotAvailableException();
+			throw new StorageNotAvailableException('Failed to connect to remote instance', 0, $e);
 		} catch (\GuzzleHttp\Exception\RequestException $e) {
-			throw new StorageNotAvailableException();
-		} catch (\Exception $e) {
-			throw $e;
+			throw new StorageNotAvailableException('Error while sending request to remote instance', 0, $e);
 		}
 	}
 
-	public function file_exists($path) {
+	#[\Override]
+	public function file_exists(string $path): bool {
 		if ($path === '') {
 			return true;
 		} else {
@@ -246,44 +367,34 @@ class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
 	}
 
 	/**
-	 * check if the configured remote is a valid federated share provider
-	 *
-	 * @return bool
+	 * Check if the configured remote is a valid-federated share provider
 	 */
-	protected function testRemote() {
+	protected function testRemote(): bool {
 		try {
-			return $this->testRemoteUrl($this->getRemote() . '/ocs-provider/index.php')
-				|| $this->testRemoteUrl($this->getRemote() . '/ocs-provider/')
-				|| $this->testRemoteUrl($this->getRemote() . '/status.php');
+			return $this->testRemoteUrl($this->getRemote() . '/ocm-provider/index.php')
+				   || $this->testRemoteUrl($this->getRemote() . '/ocm-provider/')
+				   || $this->testRemoteUrl($this->getRemote() . '/.well-known/ocm')
+				   || $this->testRemoteUrl($this->getRemote() . '/status.php');
 		} catch (\Exception $e) {
 			return false;
 		}
 	}
 
-	/**
-	 * @param string $url
-	 * @return bool
-	 */
-	private function testRemoteUrl($url) {
+	private function testRemoteUrl(string $url): bool {
 		$cache = $this->memcacheFactory->createDistributed('files_sharing_remote_url');
-		if ($cache->hasKey($url)) {
-			return (bool)$cache->get($url);
+		$cached = $cache->get($url);
+		if ($cached !== null) {
+			return (bool)$cached;
 		}
 
 		$client = $this->httpClient->newClient();
 		try {
-			$result = $client->get($url, [
-				'timeout' => 10,
-				'connect_timeout' => 10,
-			])->getBody();
+			$result = $client->get($url, $this->getDefaultRequestOptions())->getBody();
 			$data = json_decode($result);
 			$returnValue = (is_object($data) && !empty($data->version));
-		} catch (ConnectException $e) {
+		} catch (ConnectException|ClientException|RequestException $e) {
 			$returnValue = false;
-		} catch (ClientException $e) {
-			$returnValue = false;
-		} catch (RequestException $e) {
-			$returnValue = false;
+			$this->logger->warning('Failed to test remote URL', ['exception' => $e]);
 		}
 
 		$cache->set($url, $returnValue, 60 * 60 * 24);
@@ -291,12 +402,12 @@ class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
 	}
 
 	/**
-	 * Whether the remote is an ownCloud/Nextcloud, used since some sharing features are not
-	 * standardized. Let's use this to detect whether to use it.
+	 * Check whether the remote is an ownCloud/Nextcloud. This is needed since some sharing
+	 * features are not standardized.
 	 *
-	 * @return bool
+	 * @throws LocalServerException
 	 */
-	public function remoteIsOwnCloud() {
+	public function remoteIsOwnCloud(): bool {
 		if (defined('PHPUNIT_RUN') || !$this->testRemoteUrl($this->getRemote() . '/status.php')) {
 			return false;
 		}
@@ -309,27 +420,33 @@ class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
 	 * @throws NotFoundException
 	 * @throws \Exception
 	 */
-	public function getShareInfo() {
+	public function getShareInfo(int $depth = -1) {
 		$remote = $this->getRemote();
 		$token = $this->getToken();
 		$password = $this->getPassword();
 
-		// If remote is not an ownCloud do not try to get any share info
-		if (!$this->remoteIsOwnCloud()) {
-			return ['status' => 'unsupported'];
+		try {
+			// If remote is not an ownCloud do not try to get any share info
+			if (!$this->remoteIsOwnCloud()) {
+				return ['status' => 'unsupported'];
+			}
+		} catch (LocalServerException $e) {
+			// throw this to be on the safe side: the share will still be visible
+			// in the UI in case the failure is intermittent, and the user will
+			// be able to decide whether to remove it if it's really gone
+			throw new StorageNotAvailableException();
 		}
 
 		$url = rtrim($remote, '/') . '/index.php/apps/files_sharing/shareinfo?t=' . $token;
 
 		// TODO: DI
-		$client = \OC::$server->getHTTPClientService()->newClient();
+		$client = Server::get(IClientService::class)->newClient();
 		try {
-			$response = $client->post($url, [
-				'body' => ['password' => $password],
-				'timeout' => 10,
-				'connect_timeout' => 10,
-			]);
+			$response = $client->post($url, array_merge($this->getDefaultRequestOptions(), [
+				'body' => ['password' => $password, 'depth' => $depth],
+			]));
 		} catch (\GuzzleHttp\Exception\RequestException $e) {
+			$this->logger->warning('Failed to fetch share info', ['exception' => $e]);
 			if ($e->getCode() === Http::STATUS_UNAUTHORIZED || $e->getCode() === Http::STATUS_FORBIDDEN) {
 				throw new ForbiddenException();
 			}
@@ -345,25 +462,38 @@ class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
 		return json_decode($response->getBody(), true);
 	}
 
-	public function getOwner($path) {
+	#[\Override]
+	public function getOwner(string $path): string|false {
 		return $this->cloudId->getDisplayId();
 	}
 
-	public function isSharable($path) {
-		if (\OCP\Util::isSharingDisabledForUser() || !\OC\Share\Share::isResharingAllowed()) {
+	#[\Override]
+	public function isSharable(string $path): bool {
+		if ($this->shareManager->sharingDisabledForUser(Server::get(IUserSession::class)->getUser()?->getUID())
+			|| !$this->appConfig->getValueBool('core', 'shareapi_allow_resharing', true)) {
 			return false;
 		}
-		return ($this->getPermissions($path) & Constants::PERMISSION_SHARE);
+		return (bool)($this->getPermissions($path) & Constants::PERMISSION_SHARE);
 	}
 
-	public function getPermissions($path) {
+	#[\Override]
+	public function getPermissions(string $path): int {
 		$response = $this->propfind($path);
+		if ($response === false) {
+			return 0;
+		}
+
+		$ocsPermissions = $response['{http://open-collaboration-services.org/ns}share-permissions'] ?? null;
+		$ocmPermissions = $response['{http://open-cloud-mesh.org/ns}share-permissions'] ?? null;
+		$ocPermissions = $response['{http://owncloud.org/ns}permissions'] ?? null;
 		// old federated sharing permissions
-		if (isset($response['{http://open-collaboration-services.org/ns}share-permissions'])) {
-			$permissions = $response['{http://open-collaboration-services.org/ns}share-permissions'];
-		} elseif (isset($response['{http://open-cloud-mesh.org/ns}share-permissions'])) {
+		if ($ocsPermissions !== null) {
+			$permissions = (int)$ocsPermissions;
+		} elseif ($ocmPermissions !== null) {
 			// permissions provided by the OCM API
-			$permissions = $this->ocmPermissions2ncPermissions($response['{http://open-collaboration-services.org/ns}share-permissions'], $path);
+			$permissions = $this->ocmPermissions2ncPermissions($ocmPermissions, $path);
+		} elseif ($ocPermissions !== null) {
+			return $this->parsePermissions($ocPermissions);
 		} else {
 			// use default permission if remote server doesn't provide the share permissions
 			$permissions = $this->getDefaultPermissions($path);
@@ -372,18 +502,19 @@ class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
 		return $permissions;
 	}
 
-	public function needsPartFile() {
+	#[\Override]
+	public function needsPartFile(): bool {
 		return false;
 	}
 
 	/**
-	 * translate OCM Permissions to Nextcloud permissions
+	 * Translate OCM Permissions to Nextcloud permissions
 	 *
 	 * @param string $ocmPermissions json encoded OCM permissions
 	 * @param string $path path to file
 	 * @return int
 	 */
-	protected function ocmPermissions2ncPermissions($ocmPermissions, $path) {
+	protected function ocmPermissions2ncPermissions(string $ocmPermissions, string $path): int {
 		try {
 			$ocmPermissions = json_decode($ocmPermissions);
 			$ncPermissions = 0;
@@ -410,12 +541,9 @@ class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
 	}
 
 	/**
-	 * calculate default permissions in case no permissions are provided
-	 *
-	 * @param $path
-	 * @return int
+	 * Calculate the default permissions in case no permissions are provided
 	 */
-	protected function getDefaultPermissions($path) {
+	protected function getDefaultPermissions(string $path): int {
 		if ($this->is_dir($path)) {
 			$permissions = Constants::PERMISSION_ALL;
 		} else {
@@ -423,5 +551,21 @@ class Storage extends DAV implements ISharedStorage, IDisableEncryptionStorage {
 		}
 
 		return $permissions;
+	}
+
+	#[\Override]
+	public function free_space(string $path): int|float|false {
+		return parent::free_space('');
+	}
+
+	private function getDefaultRequestOptions(): array {
+		$options = [
+			'timeout' => 10,
+			'connect_timeout' => 10,
+		];
+		if ($this->config->getSystemValueBool('sharing.federation.allowSelfSignedCertificates')) {
+			$options['verify'] = false;
+		}
+		return $options;
 	}
 }

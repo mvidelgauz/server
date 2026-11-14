@@ -1,37 +1,68 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bart Visscher <bartv@thisnet.nl>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Jakob Sack <mail@jakobsack.de>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Sam Tuke <mail@samtuke.com>
- * @author Thomas Müller <thomas.mueller@tmit.eu>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+use OC\Files\Cache\Scanner;
+use OC\Files\Filesystem;
+use OC\ServerNotAvailableException;
+use OCA\Files_Trashbin\Trashbin;
+use OCP\HintException;
+use OCP\Server;
+use OCP\Share;
+use Psr\Log\LoggerInterface;
+
 class OC_Hook {
 	public static $thrownExceptions = [];
 
-	private static $registered = [];
+	private static array $registered = [];
+
+	private static array $allowList = [
+		[Filesystem::CLASSNAME, Filesystem::signal_read],
+		[Filesystem::CLASSNAME, Filesystem::signal_create],
+		[Filesystem::CLASSNAME, Filesystem::signal_post_create],
+		[Filesystem::CLASSNAME, Filesystem::signal_write],
+		[Filesystem::CLASSNAME, Filesystem::signal_post_write],
+		[Filesystem::CLASSNAME, Filesystem::signal_delete],
+		[Filesystem::CLASSNAME, Filesystem::signal_post_delete],
+		[Filesystem::CLASSNAME, Filesystem::signal_rename],
+		[Filesystem::CLASSNAME, Filesystem::signal_post_rename],
+		[Filesystem::CLASSNAME, Filesystem::signal_copy],
+		[Filesystem::CLASSNAME, Filesystem::signal_post_copy],
+		[Filesystem::CLASSNAME, Filesystem::signal_touch],
+		[Filesystem::CLASSNAME, Filesystem::signal_post_touch],
+		[Filesystem::CLASSNAME, Filesystem::signal_setup],
+		[Filesystem::CLASSNAME, Filesystem::signal_pre_setup],
+		[Filesystem::CLASSNAME, Filesystem::signal_post_init_mountpoints],
+		[Filesystem::CLASSNAME, 'umount'],
+		[Filesystem::CLASSNAME, 'post_umount'],
+		[Share::class,'share_link_access'],
+		[Share::class,'post_set_expiration_date'],
+		[Share::class,'post_update_password'],
+		[Share::class,'post_update_permissions'],
+		['OC\Files\Storage\Shared','fopen'],
+		['OC\Files\Storage\Shared','file_get_contents'],
+		['OC\Files\Storage\Shared','file_put_contents'],
+		[Trashbin::class,'post_moveToTrash'],
+		[Trashbin::class,'post_restore'],
+		['OCP\Trashbin','delete'],
+		['OCP\Trashbin','preDelete'],
+		['OCP\Trashbin','preDeleteAll'],
+		['OCP\Trashbin','deleteAll'],
+		['OCP\Versions','preDelete'],
+		['OCP\Versions','delete'],
+		['OC\User','assignedUserId'],
+		['OC\User','preUnassignedUserId'],
+		['OC\User','postUnassignedUserId'],
+		[Scanner::class,'scan_file'],
+		[Scanner::class,'post_scan_file'],
+		['Scanner','correctFolderSize'],
+		/* Only used by tests */
+		['LegacyHookTest', 'error'],
+		['LegacyHookTest', 'hint'],
+	];
 
 	/**
 	 * connects a function to a hook
@@ -40,13 +71,23 @@ class OC_Hook {
 	 * @param string $signalName name of signal
 	 * @param string|object $slotClass class name of slot
 	 * @param string $slotName name of slot
-	 * @return bool
 	 *
 	 * This function makes it very easy to connect to use hooks.
 	 *
 	 * TODO: write example
 	 */
-	public static function connect($signalClass, $signalName, $slotClass, $slotName) {
+	public static function connect(string $signalClass, string $signalName, string|object $slotClass, string $slotName): bool {
+		if (str_starts_with($signalClass, '\\')) {
+			$signalClass = substr($signalClass, 1);
+		}
+		$found = array_find(self::$allowList, function ($allowed) use ($signalClass, $signalName) {
+			[$allowedClass, $allowedSignal] = $allowed;
+			return $allowedClass === $signalClass && $allowedSignal === $signalName;
+		}) !== null;
+
+		if (!$found) {
+			throw new \RuntimeException("The signal $signalClass::$signalName is no longer emitted in server. Listening to it is NOOP.");
+		}
 		// If we're trying to connect to an emitting class that isn't
 		// yet registered, register it
 		if (!array_key_exists($signalClass, self::$registered)) {
@@ -60,14 +101,14 @@ class OC_Hook {
 
 		// don't connect hooks twice
 		foreach (self::$registered[$signalClass][$signalName] as $hook) {
-			if ($hook['class'] === $slotClass and $hook['name'] === $slotName) {
+			if ($hook['class'] === $slotClass && $hook['name'] === $slotName) {
 				return false;
 			}
 		}
 		// Connect the hook handler to the requested emitter
 		self::$registered[$signalClass][$signalName][] = [
-			"class" => $slotClass,
-			"name" => $slotName
+			'class' => $slotClass,
+			'name' => $slotName
 		];
 
 		// No chance for failure ;-)
@@ -81,13 +122,15 @@ class OC_Hook {
 	 * @param string $signalName name of signal
 	 * @param mixed $params default: array() array with additional data
 	 * @return bool true if slots exists or false if not
-	 * @throws \OCP\HintException
-	 * @throws \OC\ServerNotAvailableException Emits a signal. To get data from the slot use references!
+	 * @throws HintException
+	 * @throws ServerNotAvailableException Emits a signal. To get data from the slot use references!
 	 *
 	 * TODO: write example
 	 */
-	public static function emit($signalClass, $signalName, $params = []) {
-
+	public static function emit(string $signalClass, string $signalName, $params = []): bool {
+		if (str_starts_with($signalClass, '\\')) {
+			$signalClass = substr($signalClass, 1);
+		}
 		// Return false if no hook handlers are listening to this
 		// emitting class
 		if (!array_key_exists($signalClass, self::$registered)) {
@@ -103,14 +146,16 @@ class OC_Hook {
 		// Call all slots
 		foreach (self::$registered[$signalClass][$signalName] as $i) {
 			try {
-				call_user_func([ $i["class"], $i["name"] ], $params);
-			} catch (Exception $e) {
+				call_user_func([ $i['class'], $i['name'] ], $params);
+			} catch (Throwable $e) {
+				// a failing hook handler must not break the operation that emitted
+				// the signal, this includes Errors like TypeError
 				self::$thrownExceptions[] = $e;
-				\OC::$server->getLogger()->logException($e);
-				if ($e instanceof \OCP\HintException) {
+				Server::get(LoggerInterface::class)->error($e->getMessage(), ['exception' => $e]);
+				if ($e instanceof HintException) {
 					throw $e;
 				}
-				if ($e instanceof \OC\ServerNotAvailableException) {
+				if ($e instanceof ServerNotAvailableException) {
 					throw $e;
 				}
 			}
@@ -120,12 +165,13 @@ class OC_Hook {
 	}
 
 	/**
-	 * clear hooks
-	 * @param string $signalClass
-	 * @param string $signalName
+	 * Clear hooks
 	 */
-	public static function clear($signalClass = '', $signalName = '') {
+	public static function clear(string $signalClass = '', string $signalName = ''): void {
 		if ($signalClass) {
+			if (str_starts_with($signalClass, '\\')) {
+				$signalClass = substr($signalClass, 1);
+			}
 			if ($signalName) {
 				self::$registered[$signalClass][$signalName] = [];
 			} else {
@@ -133,6 +179,7 @@ class OC_Hook {
 			}
 		} else {
 			self::$registered = [];
+			self::$thrownExceptions = [];
 		}
 	}
 
@@ -140,7 +187,7 @@ class OC_Hook {
 	 * DO NOT USE!
 	 * For unit tests ONLY!
 	 */
-	public static function getHooks() {
+	public static function getHooks(): array {
 		return self::$registered;
 	}
 }

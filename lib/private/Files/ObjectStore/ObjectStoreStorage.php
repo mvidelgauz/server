@@ -1,102 +1,104 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Jörn Friedrich Dreyer <jfd@butonic.de>
- * @author Marcel Klehr <mklehr@gmx.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Tigran Mkrtchyan <tigran.mkrtchyan@desy.de>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files\ObjectStore;
 
+use Aws\S3\Exception\S3Exception;
+use Aws\S3\Exception\S3MultipartUploadException;
 use Icewind\Streams\CallbackWrapper;
 use Icewind\Streams\CountWrapper;
 use Icewind\Streams\IteratorDirectory;
 use OC\Files\Cache\Cache;
 use OC\Files\Cache\CacheEntry;
+use OC\Files\Storage\Common;
 use OC\Files\Storage\PolyFill\CopyDirectory;
+use OC\Files\Storage\Wrapper\Encryption;
+use OCP\Constants;
+use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\Files\Cache\ICache;
 use OCP\Files\Cache\ICacheEntry;
+use OCP\Files\Cache\IScanner;
 use OCP\Files\FileInfo;
+use OCP\Files\GenericFileException;
+use OCP\Files\IMimeTypeDetector;
 use OCP\Files\NotFoundException;
 use OCP\Files\ObjectStore\IObjectStore;
+use OCP\Files\ObjectStore\IObjectStoreMetaData;
+use OCP\Files\ObjectStore\IObjectStoreMultiPartUpload;
+use OCP\Files\Storage\IChunkedFileWrite;
 use OCP\Files\Storage\IStorage;
+use OCP\IDBConnection;
+use OCP\ITempManager;
+use OCP\Server;
+use Override;
+use Psr\Log\LoggerInterface;
 
-class ObjectStoreStorage extends \OC\Files\Storage\Common {
+class ObjectStoreStorage extends Common implements IChunkedFileWrite {
 	use CopyDirectory;
 
-	/**
-	 * @var \OCP\Files\ObjectStore\IObjectStore $objectStore
-	 */
-	protected $objectStore;
-	/**
-	 * @var string $id
-	 */
-	protected $id;
-	/**
-	 * @var \OC\User\User $user
-	 */
-	protected $user;
+	protected IObjectStore $objectStore;
+	protected string $id;
+	private string $objectPrefix = 'urn:oid:';
 
-	private $objectPrefix = 'urn:oid:';
+	private LoggerInterface $logger;
+	protected bool $validateWrites = true;
+	private bool $preserveCacheItemsOnDelete = false;
+	private ?int $totalSizeLimit = null;
 
-	private $logger;
-
-	public function __construct($params) {
-		if (isset($params['objectstore']) && $params['objectstore'] instanceof IObjectStore) {
-			$this->objectStore = $params['objectstore'];
+	/**
+	 * @param array $parameters
+	 * @throws \Exception
+	 */
+	public function __construct(array $parameters) {
+		if (isset($parameters['objectstore']) && $parameters['objectstore'] instanceof IObjectStore) {
+			$this->objectStore = $parameters['objectstore'];
 		} else {
 			throw new \Exception('missing IObjectStore instance');
 		}
-		if (isset($params['storageid'])) {
-			$this->id = 'object::store:' . $params['storageid'];
+		if (isset($parameters['storageid'])) {
+			$this->id = 'object::store:' . $parameters['storageid'];
 		} else {
 			$this->id = 'object::store:' . $this->objectStore->getStorageId();
 		}
-		if (isset($params['objectPrefix'])) {
-			$this->objectPrefix = $params['objectPrefix'];
+		if (isset($parameters['objectPrefix'])) {
+			$this->objectPrefix = $parameters['objectPrefix'];
 		}
-		//initialize cache with root directory in cache
-		if (!$this->is_dir('/')) {
-			$this->mkdir('/');
+		if (isset($parameters['validateWrites'])) {
+			$this->validateWrites = (bool)$parameters['validateWrites'];
+		}
+		if (isset($parameters['totalSizeLimit'])) {
+			$this->totalSizeLimit = $parameters['totalSizeLimit'];
 		}
 
-		$this->logger = \OC::$server->getLogger();
+		$this->logger = Server::get(LoggerInterface::class);
 	}
 
-	public function mkdir($path) {
+	#[\Override]
+	public function mkdir(string $path, bool $force = false, array $metadata = []): bool {
 		$path = $this->normalizePath($path);
-
-		if ($this->file_exists($path)) {
+		if (!$force && $this->file_exists($path)) {
+			// The storage root is created on the fly by getMetaData() whenever the
+			// cache has no entry for it, so a caller that only wants to make sure the
+			// root exists would be warned about a folder this storage just created
+			// itself. An existing root is never an error, so say nothing about it.
+			if ($path !== '') {
+				$this->logger->warning("Tried to create an object store folder that already exists: '$path'");
+			}
 			return false;
 		}
 
 		$mTime = time();
 		$data = [
 			'mimetype' => 'httpd/unix-directory',
-			'size' => 0,
+			'size' => $metadata['size'] ?? 0,
 			'mtime' => $mTime,
 			'storage_mtime' => $mTime,
-			'permissions' => \OCP\Constants::PERMISSION_ALL,
+			'permissions' => Constants::PERMISSION_ALL,
 		];
 		if ($path === '') {
 			//create root on the fly
@@ -110,10 +112,12 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 			if ($parentType === false) {
 				if (!$this->mkdir($parent)) {
 					// something went wrong
+					$this->logger->warning("Parent folder ($parent) doesn't exist and couldn't be created");
 					return false;
 				}
 			} elseif ($parentType === 'file') {
 				// parent is a file
+				$this->logger->warning("Parent ($parent) is a file");
 				return false;
 			}
 			// finally create the new dir
@@ -126,17 +130,13 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 		}
 	}
 
-	/**
-	 * @param string $path
-	 * @return string
-	 */
-	private function normalizePath($path) {
+	private function normalizePath(string $path): string {
 		$path = trim($path, '/');
 		//FIXME why do we sometimes get a path like 'files//username'?
 		$path = str_replace('//', '/', $path);
 
 		// dirname('/folder') returns '.' but internally (in the cache) we store the root as ''
-		if (!$path || $path === '.') {
+		if ($path === '.') {
 			$path = '';
 		}
 
@@ -146,95 +146,114 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 	/**
 	 * Object Stores use a NoopScanner because metadata is directly stored in
 	 * the file cache and cannot really scan the filesystem. The storage passed in is not used anywhere.
-	 *
-	 * @param string $path
-	 * @param \OC\Files\Storage\Storage (optional) the storage to pass to the scanner
-	 * @return \OC\Files\ObjectStore\NoopScanner
 	 */
-	public function getScanner($path = '', $storage = null) {
+	#[\Override]
+	public function getScanner(string $path = '', ?IStorage $storage = null): IScanner {
 		if (!$storage) {
 			$storage = $this;
 		}
 		if (!isset($this->scanner)) {
-			$this->scanner = new NoopScanner($storage);
+			$this->scanner = new ObjectStoreScanner($storage);
 		}
+		/** @var ObjectStoreScanner */
 		return $this->scanner;
 	}
 
-	public function getId() {
+	#[\Override]
+	public function getId(): string {
 		return $this->id;
 	}
 
-	public function rmdir($path) {
+	#[\Override]
+	public function rmdir(string $path): bool {
 		$path = $this->normalizePath($path);
+		$entry = $this->getCache()->get($path);
 
-		if (!$this->is_dir($path)) {
+		if (!$entry || $entry->getMimeType() !== ICacheEntry::DIRECTORY_MIMETYPE) {
 			return false;
 		}
 
-		if (!$this->rmObjects($path)) {
-			return false;
-		}
-
-		$this->getCache()->remove($path);
-
-		return true;
+		return $this->rmObjects($entry);
 	}
 
-	private function rmObjects($path) {
-		$children = $this->getCache()->getFolderContents($path);
+	private function rmObjects(ICacheEntry $entry): bool {
+		$children = $this->getCache()->getFolderContentsById($entry->getId());
 		foreach ($children as $child) {
-			if ($child['mimetype'] === 'httpd/unix-directory') {
-				if (!$this->rmObjects($child['path'])) {
+			if ($child->getMimeType() === ICacheEntry::DIRECTORY_MIMETYPE) {
+				if (!$this->rmObjects($child)) {
 					return false;
 				}
 			} else {
-				if (!$this->unlink($child['path'])) {
+				if (!$this->rmObject($child)) {
 					return false;
 				}
 			}
 		}
 
+		if (!$this->preserveCacheItemsOnDelete) {
+			$this->getCache()->remove($entry->getPath());
+		}
+
 		return true;
 	}
 
-	public function unlink($path) {
+	#[\Override]
+	public function unlink(string $path): bool {
 		$path = $this->normalizePath($path);
-		$stat = $this->stat($path);
+		$entry = $this->getCache()->get($path);
 
-		if ($stat && isset($stat['fileid'])) {
-			if ($stat['mimetype'] === 'httpd/unix-directory') {
-				return $this->rmdir($path);
+		if ($entry instanceof ICacheEntry) {
+			if ($entry->getMimeType() === ICacheEntry::DIRECTORY_MIMETYPE) {
+				return $this->rmObjects($entry);
+			} else {
+				return $this->rmObject($entry);
 			}
-			try {
-				$this->objectStore->deleteObject($this->getURN($stat['fileid']));
-			} catch (\Exception $ex) {
-				if ($ex->getCode() !== 404) {
-					$this->logger->logException($ex, [
-						'app' => 'objectstore',
-						'message' => 'Could not delete object ' . $this->getURN($stat['fileid']) . ' for ' . $path,
-					]);
-					return false;
-				}
-				//removing from cache is ok as it does not exist in the objectstore anyway
-			}
-			$this->getCache()->remove($path);
-			return true;
 		}
 		return false;
 	}
 
-	public function stat($path) {
+	public function rmObject(ICacheEntry $entry): bool {
+		try {
+			$this->objectStore->deleteObject($this->getURN($entry->getId()));
+		} catch (\Exception $ex) {
+			if ($ex->getCode() !== 404) {
+				$this->logger->error(
+					'Could not delete object ' . $this->getURN($entry->getId()) . ' for ' . $entry->getPath(),
+					[
+						'app' => 'objectstore',
+						'exception' => $ex,
+					]
+				);
+				return false;
+			}
+			//removing from cache is ok as it does not exist in the objectstore anyway
+		}
+		if (!$this->preserveCacheItemsOnDelete) {
+			$this->getCache()->remove($entry->getPath());
+		}
+		return true;
+	}
+
+	#[\Override]
+	public function stat(string $path): array|false {
 		$path = $this->normalizePath($path);
 		$cacheEntry = $this->getCache()->get($path);
 		if ($cacheEntry instanceof CacheEntry) {
 			return $cacheEntry->getData();
 		} else {
+			if ($path === '') {
+				$this->mkdir('', true);
+				$cacheEntry = $this->getCache()->get($path);
+				if ($cacheEntry instanceof CacheEntry) {
+					return $cacheEntry->getData();
+				}
+			}
 			return false;
 		}
 	}
 
-	public function getPermissions($path) {
+	#[\Override]
+	public function getPermissions(string $path): int {
 		$stat = $this->stat($path);
 
 		if (is_array($stat) && isset($stat['permissions'])) {
@@ -249,17 +268,14 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 	 * The default implementations just appends the fileId to 'urn:oid:'. Make sure the URN is unique over all users.
 	 * You may need a mapping table to store your URN if it cannot be generated from the fileid.
 	 *
-	 * @param int $fileId the fileid
-	 * @return null|string the unified resource name used to identify the object
+	 * @return string the unified resource name used to identify the object
 	 */
-	public function getURN($fileId) {
-		if (is_numeric($fileId)) {
-			return $this->objectPrefix . $fileId;
-		}
-		return null;
+	public function getURN(int $fileId): string {
+		return $this->objectPrefix . $fileId;
 	}
 
-	public function opendir($path) {
+	#[\Override]
+	public function opendir(string $path) {
 		$path = $this->normalizePath($path);
 
 		try {
@@ -271,12 +287,13 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 
 			return IteratorDirectory::wrap($files);
 		} catch (\Exception $e) {
-			$this->logger->logException($e);
+			$this->logger->error($e->getMessage(), ['exception' => $e]);
 			return false;
 		}
 	}
 
-	public function filetype($path) {
+	#[\Override]
+	public function filetype(string $path): string|false {
 		$path = $this->normalizePath($path);
 		$stat = $this->stat($path);
 		if ($stat) {
@@ -289,11 +306,13 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 		}
 	}
 
-	public function fopen($path, $mode) {
+	#[\Override]
+	public function fopen(string $path, string $mode) {
 		$path = $this->normalizePath($path);
 
-		if (strrpos($path, '.') !== false) {
-			$ext = substr($path, strrpos($path, '.'));
+		$baseName = basename($path);
+		if (strrpos($baseName, '.') !== false) {
+			$ext = substr($baseName, strrpos($baseName, '.'));
 		} else {
 			$ext = '';
 		}
@@ -303,38 +322,64 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 			case 'rb':
 				$stat = $this->stat($path);
 				if (is_array($stat)) {
+					$filesize = $stat['size'] ?? 0;
 					// Reading 0 sized files is a waste of time
-					if (isset($stat['size']) && $stat['size'] === 0) {
+					if ($filesize === 0) {
 						return fopen('php://memory', $mode);
 					}
 
 					try {
-						return $this->objectStore->readObject($this->getURN($stat['fileid']));
+						$handle = $this->objectStore->readObject($this->getURN($stat['fileid']));
+						if ($handle === false) {
+							return false; // keep backward compatibility
+						}
+						$streamStat = fstat($handle);
+						$actualSize = $streamStat['size'] ?? -1;
+						if ($actualSize > -1 && $actualSize !== $filesize) {
+							$this->getCache()->update((int)$stat['fileid'], ['size' => $actualSize]);
+						}
+						return $handle;
 					} catch (NotFoundException $e) {
-						$this->logger->logException($e, [
-							'app' => 'objectstore',
-							'message' => 'Could not get object ' . $this->getURN($stat['fileid']) . ' for file ' . $path,
-						]);
+						$this->logger->error(
+							'Could not get object ' . $this->getURN($stat['fileid']) . ' for file ' . $path,
+							[
+								'app' => 'objectstore',
+								'exception' => $e,
+							]
+						);
 						throw $e;
-					} catch (\Exception $ex) {
-						$this->logger->logException($ex, [
-							'app' => 'objectstore',
-							'message' => 'Could not get object ' . $this->getURN($stat['fileid']) . ' for file ' . $path,
-						]);
+					} catch (\Exception $e) {
+						$this->logger->error(
+							'Could not get object ' . $this->getURN($stat['fileid']) . ' for file ' . $path,
+							[
+								'app' => 'objectstore',
+								'exception' => $e,
+							]
+						);
 						return false;
 					}
 				} else {
 					return false;
 				}
-			// no break
+				// no break
 			case 'w':
 			case 'wb':
 			case 'w+':
 			case 'wb+':
-				$tmpFile = \OC::$server->getTempManager()->getTemporaryFile($ext);
+				$dirName = dirname($path);
+				$parentExists = $this->is_dir($dirName);
+				if (!$parentExists) {
+					return false;
+				}
+
+				$tmpFile = Server::get(ITempManager::class)->getTemporaryFile($ext);
+				if ($tmpFile === false) {
+					return false;
+				}
 				$handle = fopen($tmpFile, $mode);
-				return CallbackWrapper::wrap($handle, null, null, function () use ($path, $tmpFile) {
+				return CallbackWrapper::wrap($handle, null, null, function () use ($path, $tmpFile): void {
 					$this->writeBack($tmpFile, $path);
+					unlink($tmpFile);
 				});
 			case 'a':
 			case 'ab':
@@ -344,25 +389,31 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 			case 'x+':
 			case 'c':
 			case 'c+':
-				$tmpFile = \OC::$server->getTempManager()->getTemporaryFile($ext);
+				$tmpFile = Server::get(ITempManager::class)->getTemporaryFile($ext);
+				if ($tmpFile === false) {
+					return false;
+				}
 				if ($this->file_exists($path)) {
 					$source = $this->fopen($path, 'r');
 					file_put_contents($tmpFile, $source);
 				}
 				$handle = fopen($tmpFile, $mode);
-				return CallbackWrapper::wrap($handle, null, null, function () use ($path, $tmpFile) {
+				return CallbackWrapper::wrap($handle, null, null, function () use ($path, $tmpFile): void {
 					$this->writeBack($tmpFile, $path);
+					unlink($tmpFile);
 				});
 		}
 		return false;
 	}
 
-	public function file_exists($path) {
+	#[\Override]
+	public function file_exists(string $path): bool {
 		$path = $this->normalizePath($path);
 		return (bool)$this->stat($path);
 	}
 
-	public function rename($source, $target) {
+	#[\Override]
+	public function rename(string $source, string $target): bool {
 		$source = $this->normalizePath($source);
 		$target = $this->normalizePath($target);
 		$this->remove($target);
@@ -371,12 +422,14 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 		return true;
 	}
 
-	public function getMimeType($path) {
+	#[\Override]
+	public function getMimeType(string $path): string|false {
 		$path = $this->normalizePath($path);
 		return parent::getMimeType($path);
 	}
 
-	public function touch($path, $mtime = null) {
+	#[\Override]
+	public function touch(string $path, ?int $mtime = null): bool {
 		if (is_null($mtime)) {
 			$mtime = time();
 		}
@@ -398,60 +451,57 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 				//create a empty file, need to have at least on char to make it
 				// work with all object storage implementations
 				$this->file_put_contents($path, ' ');
-				$mimeType = \OC::$server->getMimeTypeDetector()->detectPath($path);
-				$stat = [
-					'etag' => $this->getETag($path),
-					'mimetype' => $mimeType,
-					'size' => 0,
-					'mtime' => $mtime,
-					'storage_mtime' => $mtime,
-					'permissions' => \OCP\Constants::PERMISSION_ALL - \OCP\Constants::PERMISSION_CREATE,
-				];
-				$this->getCache()->put($path, $stat);
 			} catch (\Exception $ex) {
-				$this->logger->logException($ex, [
-					'app' => 'objectstore',
-					'message' => 'Could not create object for ' . $path,
-				]);
+				$this->logger->error(
+					'Could not create object for ' . $path,
+					[
+						'app' => 'objectstore',
+						'exception' => $ex,
+					]
+				);
 				throw $ex;
 			}
 		}
 		return true;
 	}
 
-	public function writeBack($tmpFile, $path) {
+	public function writeBack(string $tmpFile, string $path) {
 		$size = filesize($tmpFile);
 		$this->writeStream($path, fopen($tmpFile, 'r'), $size);
 	}
 
-	/**
-	 * external changes are not supported, exclusive access to the object storage is assumed
-	 *
-	 * @param string $path
-	 * @param int $time
-	 * @return false
-	 */
-	public function hasUpdated($path, $time) {
+	#[\Override]
+	public function hasUpdated(string $path, int $time): bool {
 		return false;
 	}
 
-	public function needsPartFile() {
+	#[\Override]
+	public function needsPartFile(): bool {
 		return false;
 	}
 
-	public function file_put_contents($path, $data) {
-		$handle = $this->fopen($path, 'w+');
-		$result = fwrite($handle, $data);
-		fclose($handle);
-		return $result;
+	#[\Override]
+	public function file_put_contents(string $path, mixed $data): int {
+		$fh = fopen('php://temp', 'w+');
+		fwrite($fh, $data);
+		rewind($fh);
+		return $this->writeStream($path, $fh, strlen($data));
 	}
 
-	public function writeStream(string $path, $stream, int $size = null): int {
+	#[\Override]
+	public function writeStream(string $path, $stream, ?int $size = null): int {
+		if ($size === null) {
+			$stats = fstat($stream);
+			if (is_array($stats) && isset($stats['size'])) {
+				$size = $stats['size'];
+			}
+		}
+
 		$stat = $this->stat($path);
 		if (empty($stat)) {
 			// create new file
 			$stat = [
-				'permissions' => \OCP\Constants::PERMISSION_ALL - \OCP\Constants::PERMISSION_CREATE,
+				'permissions' => Constants::PERMISSION_ALL - Constants::PERMISSION_CREATE,
 			];
 		}
 		// update stat with new data
@@ -460,8 +510,16 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 		$stat['mtime'] = $mTime;
 		$stat['storage_mtime'] = $mTime;
 
-		$mimetypeDetector = \OC::$server->getMimeTypeDetector();
+		$mimetypeDetector = Server::get(IMimeTypeDetector::class);
 		$mimetype = $mimetypeDetector->detectPath($path);
+		$metadata = [
+			'mimetype' => $mimetype,
+			'original-storage' => $this->getId(),
+			'original-path' => preg_replace('/\s+/', ' ', $path) ?? $path,
+		];
+		if ($size) {
+			$metadata['size'] = $size;
+		}
 
 		$stat['mimetype'] = $mimetype;
 		$stat['etag'] = $this->getETag($path);
@@ -473,30 +531,37 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 		if ($exists) {
 			$fileId = $stat['fileid'];
 		} else {
+			$parent = $this->normalizePath(dirname($path));
+			if (!$this->is_dir($parent)) {
+				throw new \InvalidArgumentException("trying to upload a file ($path) inside a non-directory ($parent)");
+			}
 			$fileId = $this->getCache()->put($uploadPath, $stat);
 		}
 
 		$urn = $this->getURN($fileId);
 		try {
 			//upload to object storage
-			if ($size === null) {
-				$countStream = CountWrapper::wrap($stream, function ($writtenSize) use ($fileId, &$size) {
+
+			$totalWritten = 0;
+			$countStream = CountWrapper::wrap($stream, function ($writtenSize) use ($fileId, $size, $exists, &$totalWritten): void {
+				if (is_null($size) && !$exists) {
 					$this->getCache()->update($fileId, [
 						'size' => $writtenSize,
 					]);
-					$size = $writtenSize;
-				});
-				$this->objectStore->writeObject($urn, $countStream, $mimetype);
-				if (is_resource($countStream)) {
-					fclose($countStream);
 				}
-				$stat['size'] = $size;
+				$totalWritten = $writtenSize;
+			});
+
+			if ($this->objectStore instanceof IObjectStoreMetaData) {
+				$this->objectStore->writeObjectWithMetaData($urn, $countStream, $metadata);
 			} else {
-				$this->objectStore->writeObject($urn, $stream, $mimetype);
-				if (is_resource($stream)) {
-					fclose($stream);
-				}
+				$this->objectStore->writeObject($urn, $countStream, $metadata['mimetype']);
 			}
+			if (is_resource($countStream)) {
+				fclose($countStream);
+			}
+
+			$stat['size'] = $totalWritten;
 		} catch (\Exception $ex) {
 			if (!$exists) {
 				/*
@@ -504,23 +569,31 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 				 * Else people lose access to existing files
 				 */
 				$this->getCache()->remove($uploadPath);
-				$this->logger->logException($ex, [
-					'app' => 'objectstore',
-					'message' => 'Could not create object ' . $urn . ' for ' . $path,
-				]);
+				$this->logger->error(
+					'Could not create object ' . $urn . ' for ' . $path,
+					[
+						'app' => 'objectstore',
+						'exception' => $ex,
+					]
+				);
 			} else {
-				$this->logger->logException($ex, [
-					'app' => 'objectstore',
-					'message' => 'Could not update object ' . $urn . ' for ' . $path,
-				]);
+				$this->logger->error(
+					'Could not update object ' . $urn . ' for ' . $path,
+					[
+						'app' => 'objectstore',
+						'exception' => $ex,
+					]
+				);
 			}
-			throw $ex; // make this bubble up
+			throw new GenericFileException('Error while writing stream to object store', 0, $ex);
 		}
 
 		if ($exists) {
+			// Always update the unencrypted size, for encryption the Encryption wrapper will update this afterwards anyways
+			$stat['unencrypted_size'] = $stat['size'];
 			$this->getCache()->update($fileId, $stat);
 		} else {
-			if ($this->objectStore->objectExists($urn)) {
+			if (!$this->validateWrites || $this->objectStore->objectExists($urn)) {
 				$this->getCache()->move($uploadPath, $path);
 			} else {
 				$this->getCache()->remove($uploadPath);
@@ -528,19 +601,41 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 			}
 		}
 
-		return $size;
+		return $totalWritten;
 	}
 
 	public function getObjectStore(): IObjectStore {
 		return $this->objectStore;
 	}
 
-	public function copyFromStorage(IStorage $sourceStorage, $sourceInternalPath, $targetInternalPath, $preserveMtime = false) {
+	#[\Override]
+	public function copyFromStorage(
+		IStorage $sourceStorage,
+		string $sourceInternalPath,
+		string $targetInternalPath,
+		bool $preserveMtime = false,
+	): bool {
+		// the shortcuts below copy the object verbatim, an encrypted source has to be
+		// read through its encryption wrapper instead
+		if ($sourceStorage->instanceOfStorage(Encryption::class)
+			&& $this->sourceMayContainEncryptedContent($sourceStorage->getCache()->get($sourceInternalPath))
+		) {
+			return parent::copyFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
+		}
+
 		if ($sourceStorage->instanceOfStorage(ObjectStoreStorage::class)) {
 			/** @var ObjectStoreStorage $sourceStorage */
 			if ($sourceStorage->getObjectStore()->getStorageId() === $this->getObjectStore()->getStorageId()) {
+				/** @var CacheEntry $sourceEntry */
 				$sourceEntry = $sourceStorage->getCache()->get($sourceInternalPath);
-				$this->copyInner($sourceEntry, $targetInternalPath);
+				$sourceEntryData = $sourceEntry->getData();
+				// $sourceEntry['permissions'] here is the permissions from the jailed storage for the current
+				// user. Instead, we use $sourceEntryData['scan_permissions'] that are the permissions from the
+				// unjailed storage.
+				if (is_array($sourceEntryData) && $sourceEntryData['scan_permissions'] !== null) {
+					$sourceEntry['permissions'] = $sourceEntryData['scan_permissions'];
+				}
+				$this->copyInner($sourceStorage->getCache(), $sourceEntry, $targetInternalPath);
 				return true;
 			}
 		}
@@ -548,48 +643,178 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 		return parent::copyFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
 	}
 
-	public function copy($path1, $path2) {
-		$path1 = $this->normalizePath($path1);
-		$path2 = $this->normalizePath($path2);
-
-		$cache = $this->getCache();
-		$sourceEntry = $cache->get($path1);
-		if (!$sourceEntry) {
-			throw new NotFoundException('Source object not found');
+	#[\Override]
+	public function moveFromStorage(IStorage $sourceStorage, string $sourceInternalPath, string $targetInternalPath, ?ICacheEntry $sourceCacheEntry = null): bool {
+		if (!$sourceStorage->isDeletable($sourceInternalPath)) {
+			return false;
 		}
 
-		$this->copyInner($sourceEntry, $path2);
+		$sourceCache = $sourceStorage->getCache();
+
+		// An encrypted source has to be read through its encryption wrapper: the metadata
+		// only move below would leave the ciphertext untouched, and copyObjects() reuses
+		// the source file id, which resolves to the same object on a shared object store.
+		if ($sourceStorage->instanceOfStorage(Encryption::class)) {
+			if (!$sourceCacheEntry) {
+				$sourceCacheEntry = $sourceCache->get($sourceInternalPath);
+			}
+			if ($this->sourceMayContainEncryptedContent($sourceCacheEntry)) {
+				return parent::moveFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
+			}
+		}
+
+		if (
+			$sourceStorage->instanceOfStorage(ObjectStoreStorage::class)
+			&& $sourceStorage->getObjectStore()->getStorageId() === $this->getObjectStore()->getStorageId()
+		) {
+			if ($this->getCache()->get($targetInternalPath)) {
+				$this->unlink($targetInternalPath);
+				$this->getCache()->remove($targetInternalPath);
+			}
+			$this->getCache()->moveFromCache($sourceCache, $sourceInternalPath, $targetInternalPath);
+			// Do not import any data when source and target bucket are identical.
+			return true;
+		}
+		if (!$sourceCacheEntry) {
+			$sourceCacheEntry = $sourceCache->get($sourceInternalPath);
+		}
+
+		$this->copyObjects($sourceStorage, $sourceCache, $sourceCacheEntry);
+		if ($sourceStorage->instanceOfStorage(ObjectStoreStorage::class)) {
+			/** @var ObjectStoreStorage $sourceStorage */
+			$sourceStorage->setPreserveCacheOnDelete(true);
+		}
+		if ($sourceCacheEntry->getMimeType() === ICacheEntry::DIRECTORY_MIMETYPE) {
+			$sourceStorage->rmdir($sourceInternalPath);
+		} else {
+			$sourceStorage->unlink($sourceInternalPath);
+		}
+		if ($sourceStorage->instanceOfStorage(ObjectStoreStorage::class)) {
+			/** @var ObjectStoreStorage $sourceStorage */
+			$sourceStorage->setPreserveCacheOnDelete(false);
+		}
+		if ($this->getCache()->get($targetInternalPath)) {
+			$this->unlink($targetInternalPath);
+			$this->getCache()->remove($targetInternalPath);
+		}
+		$this->getCache()->moveFromCache($sourceCache, $sourceInternalPath, $targetInternalPath);
 
 		return true;
 	}
 
-	private function copyInner(ICacheEntry $sourceEntry, string $to) {
+	/**
+	 * The encryption wrapper covers a whole storage while only some of its paths are
+	 * encrypted (files/ but not e.g. uploads/), so the wrapper alone is too coarse a
+	 * signal for skipping the raw object shortcuts. Folders and unreadable cache
+	 * entries count as encrypted, a folder's own flag says nothing about its children.
+	 */
+	private function sourceMayContainEncryptedContent(ICacheEntry|false|null $sourceCacheEntry): bool {
+		if (!$sourceCacheEntry instanceof ICacheEntry) {
+			return true;
+		}
+		if ($sourceCacheEntry->getMimeType() === ICacheEntry::DIRECTORY_MIMETYPE) {
+			return true;
+		}
+		return $sourceCacheEntry->isEncrypted();
+	}
+
+	/**
+	 * Copy the object(s) of a file or folder into this storage, without touching the cache
+	 */
+	private function copyObjects(IStorage $sourceStorage, ICache $sourceCache, ICacheEntry $sourceCacheEntry) {
+		$copiedFiles = [];
+		try {
+			foreach ($this->getAllChildObjects($sourceCache, $sourceCacheEntry) as $file) {
+				$sourceStream = $sourceStorage->fopen($file->getPath(), 'r');
+				if (!$sourceStream) {
+					throw new \Exception("Failed to open source file {$file->getPath()} ({$file->getId()})");
+				}
+				$this->objectStore->writeObject($this->getURN($file->getId()), $sourceStream, $file->getMimeType());
+				if (is_resource($sourceStream)) {
+					fclose($sourceStream);
+				}
+				$copiedFiles[] = $file->getId();
+			}
+		} catch (\Exception $e) {
+			foreach ($copiedFiles as $fileId) {
+				try {
+					$this->objectStore->deleteObject($this->getURN($fileId));
+				} catch (\Exception $e) {
+					// ignore
+				}
+			}
+			throw $e;
+		}
+	}
+
+	/**
+	 * @return \Iterator<ICacheEntry>
+	 */
+	private function getAllChildObjects(ICache $cache, ICacheEntry $entry): \Iterator {
+		if ($entry->getMimeType() === FileInfo::MIMETYPE_FOLDER) {
+			foreach ($cache->getFolderContentsById($entry->getId()) as $child) {
+				yield from $this->getAllChildObjects($cache, $child);
+			}
+		} else {
+			yield $entry;
+		}
+	}
+
+	#[\Override]
+	public function copy(string $source, string $target): bool {
+		$source = $this->normalizePath($source);
+		$target = $this->normalizePath($target);
+
+		$cache = $this->getCache();
+		$sourceEntry = $cache->get($source);
+		if (!$sourceEntry) {
+			throw new NotFoundException('Source object not found');
+		}
+
+		$this->copyInner($cache, $sourceEntry, $target);
+
+		return true;
+	}
+
+	private function copyInner(ICache $sourceCache, ICacheEntry $sourceEntry, string $to) {
 		$cache = $this->getCache();
 
 		if ($sourceEntry->getMimeType() === FileInfo::MIMETYPE_FOLDER) {
 			if ($cache->inCache($to)) {
 				$cache->remove($to);
 			}
-			$this->mkdir($to);
+			$this->mkdir($to, false, ['size' => $sourceEntry->getSize()]);
 
-			foreach ($cache->getFolderContentsById($sourceEntry->getId()) as $child) {
-				$this->copyInner($child, $to . '/' . $child->getName());
+			foreach ($sourceCache->getFolderContentsById($sourceEntry->getId()) as $child) {
+				$this->copyInner($sourceCache, $child, $to . '/' . $child->getName());
 			}
 		} else {
-			$this->copyFile($sourceEntry, $to);
+			$this->copyFile($sourceCache, $sourceEntry, $to);
 		}
 	}
 
-	private function copyFile(ICacheEntry $sourceEntry, string $to) {
+	private function copyFile(ICache $sourceCache, ICacheEntry $sourceEntry, string $to) {
 		$cache = $this->getCache();
 
 		$sourceUrn = $this->getURN($sourceEntry->getId());
 
 		if (!$cache instanceof Cache) {
-			throw new \Exception("Invalid source cache for object store copy");
+			throw new \Exception('Invalid source cache for object store copy');
 		}
 
-		$targetId = $cache->copyFromCache($cache, $sourceEntry, $to);
+		$targetId = $cache->copyFromCache($sourceCache, $sourceEntry, $to);
+
+		if ($targetId === $sourceEntry->getId()) {
+			// copying a file to itself? No need to do anything
+			$e = new \Exception('Object ' . $sourceEntry->getPath() . ' (' . $sourceEntry->getId() . ') being copied to itself');
+			if ($sourceEntry instanceof CacheEntry) {
+				$sourceData = $sourceEntry->getData();
+			} else {
+				$sourceData = null;
+			}
+			$this->logger->warning($e->getMessage(), ['exception' => $e, 'source' => $sourceData]);
+			return;
+		}
 
 		$targetUrn = $this->getURN($targetId);
 
@@ -600,5 +825,146 @@ class ObjectStoreStorage extends \OC\Files\Storage\Common {
 
 			throw $e;
 		}
+	}
+
+	#[\Override]
+	public function startChunkedWrite(string $targetPath): string {
+		if (!$this->objectStore instanceof IObjectStoreMultiPartUpload) {
+			throw new GenericFileException('Object store does not support multipart upload');
+		}
+		$cacheEntry = $this->getCache()->get($targetPath);
+		$urn = $this->getURN($cacheEntry->getId());
+		return $this->objectStore->initiateMultipartUpload($urn);
+	}
+
+	/**
+	 * @throws GenericFileException
+	 */
+	#[\Override]
+	public function putChunkedWritePart(
+		string $targetPath,
+		string $writeToken,
+		string $chunkId,
+		$data,
+		$size = null,
+	): ?array {
+		if (!$this->objectStore instanceof IObjectStoreMultiPartUpload) {
+			throw new GenericFileException('Object store does not support multipart upload');
+		}
+
+		$cacheEntry = $this->getCache()->get($targetPath);
+		$urn = $this->getURN($cacheEntry->getId());
+
+		$result = $this->objectStore->uploadMultipartPart($urn, $writeToken, (int)$chunkId, $data, $size);
+
+		$parts[$chunkId] = [
+			'PartNumber' => $chunkId,
+			'ETag' => trim($result->get('ETag'), '"'),
+		];
+		return $parts[$chunkId];
+	}
+
+	#[\Override]
+	public function completeChunkedWrite(string $targetPath, string $writeToken): int {
+		if (!$this->objectStore instanceof IObjectStoreMultiPartUpload) {
+			throw new GenericFileException('Object store does not support multipart upload');
+		}
+		$cacheEntry = $this->getCache()->get($targetPath);
+		$urn = $this->getURN($cacheEntry->getId());
+		$parts = $this->objectStore->getMultipartUploads($urn, $writeToken);
+		$sortedParts = array_values($parts);
+		sort($sortedParts);
+		try {
+			$size = $this->objectStore->completeMultipartUpload($urn, $writeToken, $sortedParts);
+			$stat = $this->stat($targetPath);
+			$mtime = time();
+			if (is_array($stat)) {
+				$stat['size'] = $size;
+				$stat['mtime'] = $mtime;
+				$stat['mimetype'] = $this->getMimeType($targetPath);
+				$this->getCache()->update($stat['fileid'], $stat);
+			}
+		} catch (S3MultipartUploadException|S3Exception $e) {
+			$this->logger->error(
+				'Unable to complete multipart upload for "' . $urn . '" (uploadId: "' . $writeToken . '")',
+				[
+					'app' => 'objectstore',
+					'exception' => $e,
+				]
+			);
+			try {
+				$this->objectStore->abortMultipartUpload($urn, $writeToken);
+			} catch (S3Exception $e) {
+				$this->logger->error(
+					'Unable to abort multipart upload for "' . $urn . '" (uploadId: "' . $writeToken . '") after completion error',
+					[
+						'app' => 'objectstore',
+						'exception' => $e,
+					]
+				);
+			}
+			throw new GenericFileException('Could not write chunked file');
+		}
+		return $size;
+	}
+
+	#[\Override]
+	public function cancelChunkedWrite(string $targetPath, string $writeToken): void {
+		if (!$this->objectStore instanceof IObjectStoreMultiPartUpload) {
+			throw new GenericFileException('Object store does not support multipart upload');
+		}
+		$cacheEntry = $this->getCache()->get($targetPath);
+		$urn = $this->getURN($cacheEntry->getId());
+		$this->objectStore->abortMultipartUpload($urn, $writeToken);
+	}
+
+	public function setPreserveCacheOnDelete(bool $preserve) {
+		$this->preserveCacheItemsOnDelete = $preserve;
+	}
+
+	#[\Override]
+	public function free_space(string $path): int|float|false {
+		if ($this->totalSizeLimit === null) {
+			return FileInfo::SPACE_UNLIMITED;
+		}
+
+		// To avoid iterating all objects in the object store, calculate the sum of the cached sizes of the root folders of all object storages.
+		$qb = Server::get(IDBConnection::class)->getQueryBuilder();
+		$result = $qb->select($qb->func()->sum('f.size'))
+			->from('storages', 's')
+			->leftJoin('s', 'filecache', 'f', $qb->expr()->eq('f.storage', 's.numeric_id'))
+			->where($qb->expr()->like('s.id', $qb->createNamedParameter('object::%'), IQueryBuilder::PARAM_STR))
+			->andWhere($qb->expr()->eq('f.path', $qb->createNamedParameter('')))
+			->executeQuery();
+		$used = $result->fetchOne();
+		$result->closeCursor();
+
+		$available = $this->totalSizeLimit - $used;
+		if ($available < 0) {
+			$available = 0;
+		}
+
+		return $available;
+	}
+
+	#[Override]
+	public function getDirectDownloadById(string $fileId): array|false {
+		$expiration = new \DateTimeImmutable('+60 minutes');
+		$cacheEntry = $this->getCache()->get((int)$fileId);
+		$name = $cacheEntry ? $cacheEntry->getName() : null;
+		$filename = is_string($name) && $name !== '' ? $name : null;
+		$url = $this->objectStore->preSignedUrl($this->getURN((int)$fileId), $expiration, $filename);
+		return $url ? ['url' => $url, 'expiration' => $expiration->getTimestamp()] : false;
+	}
+
+	#[Override]
+	public function getDirectDownload(string $path): array|false {
+		$path = $this->normalizePath($path);
+		$cacheEntry = $this->getCache()->get($path);
+
+		if (!$cacheEntry || $cacheEntry->getMimeType() === FileInfo::MIMETYPE_FOLDER) {
+			return false;
+		}
+		return $this->getDirectDownloadById((string)$cacheEntry->getId());
 	}
 }

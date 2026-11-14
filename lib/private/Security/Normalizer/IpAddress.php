@@ -3,32 +3,14 @@
 declare(strict_types=1);
 
 /**
- * @copyright Copyright (c) 2017 Lukas Reschke <lukas@statuscode.ch>
- *
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Konrad Bucheli <kb@open.ch>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Thomas Citharel <nextcloud@tcit.fr>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OC\Security\Normalizer;
+
+use OCP\IConfig;
+use OCP\Server;
 
 /**
  * Class IpAddress is used for normalizing IPv4 and IPv6 addresses in security
@@ -37,83 +19,92 @@ namespace OC\Security\Normalizer;
  * @package OC\Security\Normalizer
  */
 class IpAddress {
-	/** @var string */
-	private $ip;
-
 	/**
-	 * @param string $ip IP to normalized
+	 * @param string $ip IP to normalize
 	 */
-	public function __construct(string $ip) {
-		$this->ip = $ip;
+	public function __construct(
+		private string $ip,
+	) {
 	}
 
 	/**
-	 * Return the given subnet for an IPv4 address and mask bits
-	 *
-	 * @param string $ip
-	 * @param int $maskBits
-	 * @return string
+	 * Return the given subnet for an IPv6 address
+	 * Rely on security.ipv6_normalized_subnet_size, defaults to 56
 	 */
-	private function getIPv4Subnet(string $ip, int $maskBits = 32): string {
-		$binary = \inet_pton($ip);
-		for ($i = 32; $i > $maskBits; $i -= 8) {
-			$j = \intdiv($i, 8) - 1;
-			$k = \min(8, $i - $maskBits);
-			$mask = (0xff - ((2 ** $k) - 1));
-			$int = \unpack('C', $binary[$j]);
-			$binary[$j] = \pack('C', $int[1] & $mask);
+	private function getIPv6Subnet(string $ip): string {
+		if (str_starts_with($ip, '[') && str_ends_with($ip, ']')) {
+			$ip = substr($ip, 1, -1);
 		}
-		return \inet_ntop($binary).'/'.$maskBits;
-	}
 
-	/**
-	 * Return the given subnet for an IPv6 address and mask bits
-	 *
-	 * @param string $ip
-	 * @param int $maskBits
-	 * @return string
-	 */
-	private function getIPv6Subnet(string $ip, int $maskBits = 48): string {
-		if ($ip[0] === '[' && $ip[-1] === ']') { // If IP is with brackets, for example [::1]
-			$ip = substr($ip, 1, strlen($ip) - 2);
-		}
-		$pos = strpos($ip, '%'); // if there is an explicit interface added to the IP, e.g. fe80::ae2d:d1e7:fe1e:9a8d%enp2s0
+		// Remove explicit interface if present (e.g., %enp2s0)
+		$pos = strpos($ip, '%');
 		if ($pos !== false) {
-			$ip = substr($ip, 0, $pos - 1);
+			$ip = substr($ip, 0, $pos);
 		}
-		$binary = \inet_pton($ip);
-		for ($i = 128; $i > $maskBits; $i -= 8) {
-			$j = \intdiv($i, 8) - 1;
-			$k = \min(8, $i - $maskBits);
-			$mask = (0xff - ((2 ** $k) - 1));
-			$int = \unpack('C', $binary[$j]);
-			$binary[$j] = \pack('C', $int[1] & $mask);
+
+		$config = Server::get(IConfig::class);
+		$maskSize = min(64, max(32, $config->getSystemValueInt('security.ipv6_normalized_subnet_size', 56)));
+
+		$binary = inet_pton($ip);
+		if ($binary === false) {
+			return $ip . '/' . $maskSize;
 		}
-		return \inet_ntop($binary).'/'.$maskBits;
+
+		if (PHP_INT_SIZE === 4) {
+			// 32-bit PHP
+			$value = match($maskSize) {
+				64 => -1,
+				63 => PHP_INT_MAX,
+				default => (1 << ($maskSize - 32)) - 1,
+			};
+			// as long as we support 32bit PHP we cannot use the `P` pack formatter (and not overflow 32bit integer)
+			$mask = pack('VVVV', -1, $value, 0, 0);
+		} else {
+			// 64-bit PHP
+			$mask = pack('VVP', (1 << 32) - 1, (1 << ($maskSize - 32)) - 1, 0);
+		}
+
+		return inet_ntop($binary & $mask) . '/' . $maskSize;
 	}
 
 	/**
-	 * Gets either the /32 (IPv4) or the /64 (IPv6) subnet of an IP address
+	 * Returns the IPv4 address embedded in an IPv6 if applicable.
+	 * The detected format is "::ffff:x.x.x.x" using the binary form.
 	 *
-	 * @return string
+	 * @return string|null embedded IPv4 string or null if none was found
+	 */
+	private function getEmbeddedIpv4(string $ipv6): ?string {
+		$binary = inet_pton($ipv6);
+		if ($binary === false) {
+			return null;
+		}
+
+		$mask = inet_pton('::FFFF:FFFF');
+		if (($binary & ~$mask) !== inet_pton('::FFFF:0.0.0.0')) {
+			return null;
+		}
+
+		return inet_ntop(substr($binary, -4));
+	}
+
+	/**
+	 * Gets either the /32 (IPv4) or the /56 (default for IPv6) subnet of an IP address
 	 */
 	public function getSubnet(): string {
-		if (\preg_match('/^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$/', $this->ip)) {
-			return $this->getIPv4Subnet(
-				$this->ip,
-				32
-			);
+		if (filter_var($this->ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+			return $this->ip . '/32';
 		}
-		return $this->getIPv6Subnet(
-			$this->ip,
-			64
-		);
+
+		$ipv4 = $this->getEmbeddedIpv4($this->ip);
+		if ($ipv4 !== null) {
+			return $ipv4 . '/32';
+		}
+
+		return $this->getIPv6Subnet($this->ip);
 	}
 
 	/**
 	 * Returns the specified IP address
-	 *
-	 * @return string
 	 */
 	public function __toString(): string {
 		return $this->ip;

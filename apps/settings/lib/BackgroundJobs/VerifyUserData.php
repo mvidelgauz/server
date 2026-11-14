@@ -1,32 +1,12 @@
 <?php
+
+declare(strict_types=1);
+
 /**
- * @copyright Copyright (c) 2017 Bjoern Schiessle <bjoern@schiessle.org>
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Bjoern Schiessle <bjoern@schiessle.org>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Patrik Kernstock <info@pkern.at>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCA\Settings\BackgroundJobs;
 
 use OCP\Accounts\IAccountManager;
@@ -35,67 +15,42 @@ use OCP\AppFramework\Http;
 use OCP\AppFramework\Utility\ITimeFactory;
 use OCP\BackgroundJob\IJobList;
 use OCP\BackgroundJob\Job;
+use OCP\GlobalScale\IConfig as GlobalScaleConfig;
 use OCP\Http\Client\IClientService;
 use OCP\IConfig;
-use OCP\ILogger;
 use OCP\IUserManager;
+use Psr\Log\LoggerInterface;
 
 class VerifyUserData extends Job {
-
-	/** @var  bool */
-	private $retainJob = true;
+	/** @var bool */
+	private bool $retainJob = true;
 
 	/** @var int max number of attempts to send the request */
-	private $maxTry = 24;
+	private int $maxTry = 24;
 
 	/** @var int how much time should be between two tries (1 hour) */
-	private $interval = 3600;
+	private int $interval = 3600;
+	private string $lookupServerUrl;
 
-	/** @var IAccountManager */
-	private $accountManager;
-
-	/** @var IUserManager */
-	private $userManager;
-
-	/** @var IClientService */
-	private $httpClientService;
-
-	/** @var ILogger */
-	private $logger;
-
-	/** @var string */
-	private $lookupServerUrl;
-
-	/** @var IConfig */
-	private $config;
-
-	public function __construct(IAccountManager $accountManager,
-								IUserManager $userManager,
-								IClientService $clientService,
-								ILogger $logger,
-								ITimeFactory $timeFactory,
-								IConfig $config
+	public function __construct(
+		private IAccountManager $accountManager,
+		private IUserManager $userManager,
+		private IClientService $httpClientService,
+		private LoggerInterface $logger,
+		ITimeFactory $timeFactory,
+		private IConfig $config,
+		private GlobalScaleConfig $globalScaleConfig,
 	) {
 		parent::__construct($timeFactory);
-		$this->accountManager = $accountManager;
-		$this->userManager = $userManager;
-		$this->httpClientService = $clientService;
-		$this->logger = $logger;
 
 		$lookupServerUrl = $config->getSystemValue('lookup_server', 'https://lookup.nextcloud.com');
 		$this->lookupServerUrl = rtrim($lookupServerUrl, '/');
-		$this->config = $config;
 	}
 
-	/**
-	 * run the job, then remove it from the jobList
-	 *
-	 * @param IJobList $jobList
-	 * @param ILogger|null $logger
-	 */
-	public function execute(IJobList $jobList, ILogger $logger = null) {
+	#[\Override]
+	public function start(IJobList $jobList): void {
 		if ($this->shouldRun($this->argument)) {
-			parent::execute($jobList, $logger);
+			parent::start($jobList);
 			$jobList->remove($this, $this->argument);
 			if ($this->retainJob) {
 				$this->reAddJob($jobList, $this->argument);
@@ -105,6 +60,7 @@ class VerifyUserData extends Job {
 		}
 	}
 
+	#[\Override]
 	protected function run($argument) {
 		$try = (int)$argument['try'] + 1;
 
@@ -169,9 +125,11 @@ class VerifyUserData extends Job {
 	}
 
 	protected function verifyViaLookupServer(array $argument, string $dataType): bool {
-		if (empty($this->lookupServerUrl) ||
-			$this->config->getAppValue('files_sharing', 'lookupServerUploadEnabled', 'yes') !== 'yes' ||
-			$this->config->getSystemValue('has_internet_connection', true) === false) {
+		// TODO: Consider to enable for non-global-scale setups by checking 'files_sharing', 'lookupServerUploadEnabled'
+		if (!$this->globalScaleConfig->isGlobalScaleEnabled()
+			|| empty($this->lookupServerUrl)
+			|| $this->config->getSystemValue('has_internet_connection', true) === false
+		) {
 			return true;
 		}
 
@@ -269,7 +227,6 @@ class VerifyUserData extends Job {
 		$lastRun = (int)$argument['lastRun'];
 		return ((time() - $lastRun) > $this->interval);
 	}
-
 
 	/**
 	 * reset verification state after max tries are reached

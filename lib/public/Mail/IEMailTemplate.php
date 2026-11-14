@@ -3,30 +3,10 @@
 declare(strict_types=1);
 
 /**
- * @copyright 2017, Morris Jobke <hey@morrisjobke.de>
- *
- * @author Brad Rubenstein <brad@wbr.tech>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Lukas Reschke <lukas@statuscode.ch>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- *
- * @license GNU AGPL version 3 or any later version
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
+ * SPDX-FileCopyrightText: 2017 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+
 namespace OCP\Mail;
 
 /**
@@ -57,6 +37,24 @@ namespace OCP\Mail;
  * @since 12.0.0
  */
 interface IEMailTemplate {
+	/**
+	 * Note for content written by a user, e.g. a share note
+	 *
+	 * @since 36.0.0
+	 */
+	public const NOTE_NEUTRAL = 'neutral';
+	/**
+	 * @since 36.0.0
+	 */
+	public const NOTE_INFO = 'info';
+	/**
+	 * @since 36.0.0
+	 */
+	public const NOTE_WARNING = 'warning';
+	/**
+	 * @since 36.0.0
+	 */
+	public const NOTE_ERROR = 'error';
 
 	/**
 	 * Sets the subject of the email
@@ -75,11 +73,24 @@ interface IEMailTemplate {
 	public function addHeader();
 
 	/**
+	 * Sets the language of the recipient
+	 *
+	 * Used for the lang and dir attributes of the HTML email, mirrors the
+	 * layout for right-to-left languages, and is the default language of
+	 * the footer. Call it before addFooter().
+	 *
+	 * @param string $language Language code, e.g. `ar` or `pt_BR`
+	 *
+	 * @since 36.0.0
+	 */
+	public function setLanguage(string $language): void;
+
+	/**
 	 * Adds a heading to the email
 	 *
 	 * @param string $title
 	 * @param string|bool $plainTitle Title that is used in the plain text email
-	 *   if empty the $title is used, if false none will be used
+	 *                                if empty the $title is used, if false none will be used
 	 *
 	 * @since 12.0.0
 	 */
@@ -90,7 +101,7 @@ interface IEMailTemplate {
 	 *
 	 * @param string $text; Note: When $plainText falls back to this, HTML is automatically escaped in the HTML email
 	 * @param string|bool $plainText Text that is used in the plain text email
-	 *   if empty the $text is used, if false none will be used
+	 *                               if empty the $text is used, if false none will be used
 	 *
 	 * @since 12.0.0
 	 */
@@ -103,9 +114,9 @@ interface IEMailTemplate {
 	 * @param string $metaInfo; Note: When $plainMetaInfo falls back to this, HTML is automatically escaped in the HTML email
 	 * @param string $icon Absolute path, must be 16*16 pixels
 	 * @param string|bool $plainText Text that is used in the plain text email
-	 *   if empty the $text is used, if false none will be used
+	 *                               if empty the $text is used, if false none will be used
 	 * @param string|bool $plainMetaInfo Meta info that is used in the plain text email
-	 *   if empty the $metaInfo is used, if false none will be used
+	 *                                   if empty the $metaInfo is used, if false none will be used
 	 * @param integer plainIndent If > 0, Indent plainText by this amount.
 	 * @since 12.0.0
 	 */
@@ -131,11 +142,52 @@ interface IEMailTemplate {
 	 * @param string $text Text of button; Note: When $plainText falls back to this, HTML is automatically escaped in the HTML email
 	 * @param string $url URL of button
 	 * @param string|false $plainText Text of button in plain text version
-	 * 		if empty the $text is used, if false none will be used
+	 *                                if empty the $text is used, if false none will be used
 	 *
 	 * @since 12.0.0
 	 */
 	public function addBodyButton(string $text, string $url, $plainText = '');
+
+	/**
+	 * Adds a row of buttons to the body of the email, the first one is the primary action
+	 *
+	 * @param non-empty-list<array{text: string, url: string}> $buttons
+	 * @param string $label Optional text shown above the buttons, e.g. "Will you attend?"
+	 *
+	 * @since 36.0.0
+	 */
+	public function addBodyButtons(array $buttons, string $label = ''): void;
+
+	/**
+	 * Adds the person an email is about (sharer, organizer...), shown with an initials circle
+	 *
+	 * @param string $subline Optional second line, e.g. the email address
+	 *
+	 * @since 36.0.0
+	 */
+	public function addBodySender(string $displayName, string $subline = ''): void;
+
+	/**
+	 * Adds a highlighted box to the body of the email
+	 *
+	 * Use {@see self::NOTE_NEUTRAL} for content written by a user (share note,
+	 * event description), the other types for messages from the server itself.
+	 * Line breaks in $text are kept. A short note about a shared item goes
+	 * before its details card, longer content like an event description after it.
+	 *
+	 * @param string $label Label above the text for neutral notes, bold title before it for the other types
+	 * @param self::NOTE_* $type
+	 *
+	 * @since 36.0.0
+	 */
+	public function addBodyNote(string $text, string $label = '', string $type = self::NOTE_NEUTRAL): void;
+
+	/**
+	 * Adds a card with a title and labelled rows to the body of the email
+	 *
+	 * @since 36.0.0
+	 */
+	public function addBodyDetails(EMailDetails $details): void;
 
 	/**
 	 * Adds a logo and a text to the footer. <br> in the text will be replaced by new lines in the plain text email

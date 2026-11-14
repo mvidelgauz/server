@@ -1,14 +1,23 @@
 <?php
 
+/**
+ * SPDX-FileCopyrightText: 2016-2024 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 namespace Test\Files\Storage\Wrapper;
 
+use Exception;
 use OC\Encryption\Exceptions\ModuleDoesNotExistsException;
-use OC\Encryption\Update;
+use OC\Encryption\File;
 use OC\Encryption\Util;
+use OC\Files\Cache\Cache;
+use OC\Files\Cache\CacheEntry;
+use OC\Files\Mount\MountPoint;
 use OC\Files\Storage\Temporary;
 use OC\Files\Storage\Wrapper\Encryption;
 use OC\Files\View;
-use OC\Log;
 use OC\Memcache\ArrayCache;
 use OC\User\Manager;
 use OCP\Encryption\IEncryptionModule;
@@ -19,104 +28,44 @@ use OCP\Files\Cache\ICache;
 use OCP\Files\Mount\IMountPoint;
 use OCP\ICacheFactory;
 use OCP\IConfig;
-use OCP\ILogger;
-use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use OCP\ITempManager;
+use OCP\Server;
+use PHPUnit\Framework\MockObject\MockObject;
+use Psr\Log\LoggerInterface;
 use Test\Files\Storage\Storage;
 
 class EncryptionTest extends Storage {
-
 	/**
 	 * block size will always be 8192 for a PHP stream
 	 * @see https://bugs.php.net/bug.php?id=21641
-	 * @var integer
 	 */
-	protected $headerSize = 8192;
-
-	/**
-	 * @var Temporary
-	 */
-	private $sourceStorage;
-
-	/**
-	 * @var \OC\Files\Storage\Wrapper\Encryption | \PHPUnit\Framework\MockObject\MockObject
-	 */
+	protected int $headerSize = 8192;
+	private Temporary $sourceStorage;
+	/** @var Encryption&MockObject */
 	protected $instance;
+	private \OC\Encryption\Keys\Storage&MockObject $keyStore;
+	private Util&MockObject $util;
+	private \OC\Encryption\Manager&MockObject $encryptionManager;
+	private IEncryptionModule&MockObject $encryptionModule;
+	private Cache&MockObject $cache;
+	private LoggerInterface&MockObject $logger;
+	private File&MockObject $file;
+	private MountPoint&MockObject $mount;
+	private \OC\Files\Mount\Manager&MockObject $mountManager;
+	private \OC\Group\Manager&MockObject $groupManager;
+	private IConfig&MockObject $config;
+	private ArrayCache&MockObject $arrayCache;
+	/** dummy unencrypted size */
+	private int $dummySize = -1;
 
-	/**
-	 * @var \OC\Encryption\Keys\Storage | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $keyStore;
-
-	/**
-	 * @var \OC\Encryption\Util | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $util;
-
-	/**
-	 * @var \OC\Encryption\Manager | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $encryptionManager;
-
-	/**
-	 * @var \OCP\Encryption\IEncryptionModule | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $encryptionModule;
-
-	/**
-	 * @var \OC\Encryption\Update | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $update;
-
-	/**
-	 * @var \OC\Files\Cache\Cache | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $cache;
-
-	/**
-	 * @var \OC\Log | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $logger;
-
-	/**
-	 * @var \OC\Encryption\File | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $file;
-
-
-	/**
-	 * @var \OC\Files\Mount\MountPoint | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $mount;
-
-	/**
-	 * @var \OC\Files\Mount\Manager | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $mountManager;
-
-	/**
-	 * @var \OC\Group\Manager | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $groupManager;
-
-	/**
-	 * @var \OCP\IConfig | \PHPUnit\Framework\MockObject\MockObject
-	 */
-	private $config;
-
-	/** @var  \OC\Memcache\ArrayCache | \PHPUnit\Framework\MockObject\MockObject */
-	private $arrayCache;
-
-
-	/** @var  integer dummy unencrypted size */
-	private $dummySize = -1;
-
+	#[\Override]
 	protected function setUp(): void {
 		parent::setUp();
 
 		$mockModule = $this->buildMockModule();
-		$this->encryptionManager = $this->getMockBuilder('\OC\Encryption\Manager')
+		$this->encryptionManager = $this->getMockBuilder(\OC\Encryption\Manager::class)
 			->disableOriginalConstructor()
-			->setMethods(['getEncryptionModule', 'isEnabled'])
+			->onlyMethods(['getEncryptionModule', 'isEnabled'])
 			->getMock();
 		$this->encryptionManager->expects($this->any())
 			->method('getEncryptionModule')
@@ -130,13 +79,13 @@ class EncryptionTest extends Storage {
 			->disableOriginalConstructor()
 			->getMock();
 
-		$this->util = $this->getMockBuilder('\OC\Encryption\Util')
-			->setMethods(['getUidAndFilename', 'isFile', 'isExcluded'])
+		$this->util = $this->getMockBuilder(Util::class)
+			->onlyMethods(['getUidAndFilename', 'isFile', 'isExcluded', 'stripPartialFileExtension'])
 			->setConstructorArgs([new View(), new Manager(
 				$this->config,
-				$this->createMock(EventDispatcherInterface::class),
 				$this->createMock(ICacheFactory::class),
-				$this->createMock(IEventDispatcher::class)
+				$this->createMock(IEventDispatcher::class),
+				$this->createMock(LoggerInterface::class),
 			), $this->groupManager, $this->config, $this->arrayCache])
 			->getMock();
 		$this->util->expects($this->any())
@@ -144,26 +93,27 @@ class EncryptionTest extends Storage {
 			->willReturnCallback(function ($path) {
 				return ['user1', $path];
 			});
+		$this->util->expects($this->any())
+			->method('stripPartialFileExtension')
+			->willReturnCallback(function ($path) {
+				return $path;
+			});
 
-		$this->file = $this->getMockBuilder('\OC\Encryption\File')
+		$this->file = $this->getMockBuilder(File::class)
 			->disableOriginalConstructor()
-			->setMethods(['getAccessList'])
+			->onlyMethods(['getAccessList'])
 			->getMock();
 		$this->file->expects($this->any())->method('getAccessList')->willReturn([]);
 
-		$this->logger = $this->createMock(Log::class);
+		$this->logger = $this->createMock(LoggerInterface::class);
 
 		$this->sourceStorage = new Temporary([]);
 
-		$this->keyStore = $this->getMockBuilder('\OC\Encryption\Keys\Storage')
-			->disableOriginalConstructor()->getMock();
+		$this->keyStore = $this->createMock(\OC\Encryption\Keys\Storage::class);
 
-		$this->update = $this->getMockBuilder('\OC\Encryption\Update')
-			->disableOriginalConstructor()->getMock();
-
-		$this->mount = $this->getMockBuilder('\OC\Files\Mount\MountPoint')
+		$this->mount = $this->getMockBuilder(MountPoint::class)
 			->disableOriginalConstructor()
-			->setMethods(['getOption'])
+			->onlyMethods(['getOption'])
 			->getMock();
 		$this->mount->expects($this->any())->method('getOption')->willReturnCallback(function ($option, $default) {
 			if ($option === 'encrypt' && $default === true) {
@@ -187,7 +137,7 @@ class EncryptionTest extends Storage {
 		$this->mountManager->method('findByStorageId')
 			->willReturn([]);
 
-		$this->instance = $this->getMockBuilder('\OC\Files\Storage\Wrapper\Encryption')
+		$this->instance = $this->getMockBuilder(Encryption::class)
 			->setConstructorArgs(
 				[
 					[
@@ -196,10 +146,17 @@ class EncryptionTest extends Storage {
 						'mountPoint' => '/',
 						'mount' => $this->mount
 					],
-					$this->encryptionManager, $this->util, $this->logger, $this->file, null, $this->keyStore, $this->update, $this->mountManager, $this->arrayCache
+					$this->encryptionManager,
+					$this->util,
+					$this->logger,
+					$this->file,
+					null,
+					$this->keyStore,
+					$this->mountManager,
+					$this->arrayCache
 				]
 			)
-			->setMethods(['getMetaData', 'getCache', 'getEncryptionModule'])
+			->onlyMethods(['getMetaData', 'getCache', 'getEncryptionModule'])
 			->getMock();
 
 		$this->instance->expects($this->any())
@@ -217,13 +174,10 @@ class EncryptionTest extends Storage {
 			->willReturn($mockModule);
 	}
 
-	/**
-	 * @return \PHPUnit\Framework\MockObject\MockObject
-	 */
-	protected function buildMockModule() {
+	protected function buildMockModule(): IEncryptionModule&MockObject {
 		$this->encryptionModule = $this->getMockBuilder('\OCP\Encryption\IEncryptionModule')
 			->disableOriginalConstructor()
-			->setMethods(['getId', 'getDisplayName', 'begin', 'end', 'encrypt', 'decrypt', 'update', 'shouldEncrypt', 'getUnencryptedBlockSize', 'isReadable', 'encryptAll', 'prepareDecryptAll', 'isReadyForUser', 'needDetailedAccessList'])
+			->onlyMethods(['getId', 'getDisplayName', 'begin', 'end', 'encrypt', 'decrypt', 'update', 'shouldEncrypt', 'getUnencryptedBlockSize', 'isReadable', 'encryptAll', 'prepareDecryptAll', 'isReadyForUser', 'needDetailedAccessList'])
 			->getMock();
 
 		$this->encryptionModule->expects($this->any())->method('getId')->willReturn('UNIT_TEST_MODULE');
@@ -241,7 +195,6 @@ class EncryptionTest extends Storage {
 	}
 
 	/**
-	 * @dataProvider dataTestGetMetaData
 	 *
 	 * @param string $path
 	 * @param array $metaData
@@ -250,7 +203,8 @@ class EncryptionTest extends Storage {
 	 * @param int $storedUnencryptedSize
 	 * @param array $expected
 	 */
-	public function testGetMetaData($path, $metaData, $encrypted, $unencryptedSizeSet, $storedUnencryptedSize, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestGetMetaData')]
+	public function testGetMetaData($path, $metaData, $encrypted, $unencryptedSizeSet, $storedUnencryptedSize, $expected): void {
 		$sourceStorage = $this->getMockBuilder('\OC\Files\Storage\Storage')
 			->disableOriginalConstructor()->getMock();
 
@@ -260,11 +214,11 @@ class EncryptionTest extends Storage {
 			->method('get')
 			->willReturnCallback(
 				function ($path) use ($encrypted) {
-					return ['encrypted' => $encrypted, 'path' => $path, 'size' => 0, 'fileid' => 1];
+					return new CacheEntry(['encrypted' => $encrypted, 'path' => $path, 'size' => 0, 'fileid' => 1]);
 				}
 			);
 
-		$this->instance = $this->getMockBuilder('\OC\Files\Storage\Wrapper\Encryption')
+		$this->instance = $this->getMockBuilder(Encryption::class)
 			->setConstructorArgs(
 				[
 					[
@@ -273,14 +227,21 @@ class EncryptionTest extends Storage {
 						'mountPoint' => '/',
 						'mount' => $this->mount
 					],
-					$this->encryptionManager, $this->util, $this->logger, $this->file, null, $this->keyStore, $this->update, $this->mountManager, $this->arrayCache
+					$this->encryptionManager,
+					$this->util,
+					$this->logger,
+					$this->file,
+					null,
+					$this->keyStore,
+					$this->mountManager,
+					$this->arrayCache,
 				]
 			)
-			->setMethods(['getCache', 'verifyUnencryptedSize'])
+			->onlyMethods(['getCache', 'verifyUnencryptedSize'])
 			->getMock();
 
 		if ($unencryptedSizeSet) {
-			$this->invokePrivate($this->instance, 'unencryptedSize', [[$path => $storedUnencryptedSize]]);
+			$this->instance->updateUnencryptedSize($path, $storedUnencryptedSize);
 		}
 
 		$fileEntry = $this->getMockBuilder('\OC\Files\Cache\Cache')
@@ -319,7 +280,7 @@ class EncryptionTest extends Storage {
 		}
 	}
 
-	public function dataTestGetMetaData() {
+	public static function dataTestGetMetaData(): array {
 		return [
 			['/test.txt', ['size' => 42, 'encrypted' => 2, 'encryptedVersion' => 2, 'fileid' => 1], true, true, 12, ['size' => 12, 'encrypted' => true, 'encryptedVersion' => 2]],
 			['/test.txt', null, true, true, 12, null],
@@ -328,14 +289,14 @@ class EncryptionTest extends Storage {
 		];
 	}
 
-	public function testFilesize() {
+	public function testFilesize(): void {
 		$cache = $this->getMockBuilder('\OC\Files\Cache\Cache')
 			->disableOriginalConstructor()->getMock();
 		$cache->expects($this->any())
 			->method('get')
-			->willReturn(['encrypted' => true, 'path' => '/test.txt', 'size' => 0, 'fileid' => 1]);
+			->willReturn(new CacheEntry(['encrypted' => true, 'path' => '/test.txt', 'size' => 0, 'fileid' => 1]));
 
-		$this->instance = $this->getMockBuilder('\OC\Files\Storage\Wrapper\Encryption')
+		$this->instance = $this->getMockBuilder(Encryption::class)
 			->setConstructorArgs(
 				[
 					[
@@ -344,16 +305,22 @@ class EncryptionTest extends Storage {
 						'mountPoint' => '/',
 						'mount' => $this->mount
 					],
-					$this->encryptionManager, $this->util, $this->logger, $this->file, null, $this->keyStore, $this->update, $this->mountManager, $this->arrayCache
+					$this->encryptionManager,
+					$this->util,
+					$this->logger,
+					$this->file,
+					null,
+					$this->keyStore,
+					$this->mountManager,
+					$this->arrayCache,
 				]
 			)
-			->setMethods(['getCache', 'verifyUnencryptedSize'])
+			->onlyMethods(['getCache', 'verifyUnencryptedSize'])
 			->getMock();
 
 		$this->instance->expects($this->any())->method('getCache')->willReturn($cache);
 		$this->instance->expects($this->any())->method('verifyUnencryptedSize')
 			->willReturn(42);
-
 
 		$this->assertSame(42,
 			$this->instance->filesize('/test.txt')
@@ -361,18 +328,268 @@ class EncryptionTest extends Storage {
 	}
 
 	/**
-	 * @dataProvider dataTestVerifyUnencryptedSize
+	 * @param string[] $mockedMethods
+	 * @param \OC\Files\Storage\Storage|null $sourceStorage the wrapped storage, defaults to a temporary storage
+	 * @return Encryption&MockObject
+	 */
+	private function getInstanceWithMockedMethods(array $mockedMethods, $sourceStorage = null) {
+		return $this->getMockBuilder(Encryption::class)
+			->setConstructorArgs(
+				[
+					[
+						'storage' => $sourceStorage ?? $this->sourceStorage,
+						'root' => 'foo',
+						'mountPoint' => '/',
+						'mount' => $this->mount
+					],
+					$this->encryptionManager,
+					$this->util,
+					$this->logger,
+					$this->file,
+					null,
+					$this->keyStore,
+					$this->mountManager,
+					$this->arrayCache,
+				]
+			)
+			->onlyMethods($mockedMethods)
+			->getMock();
+	}
+
+	/**
+	 * @param ICache&MockObject $cache
+	 * @return Encryption&MockObject
+	 */
+	private function getInstanceWithCache(ICache $cache) {
+		$instance = $this->getInstanceWithMockedMethods(['getCache', 'verifyUnencryptedSize']);
+		$instance->expects($this->any())->method('getCache')->willReturn($cache);
+
+		return $instance;
+	}
+
+	/**
+	 * Instance with a mocked source storage, so that no real file system is touched
+	 *
+	 * @return array{Encryption&MockObject, \OC\Files\Storage\Storage&MockObject}
+	 */
+	private function getInstanceWithMockedStorage(): array {
+		$sourceStorage = $this->createMock(\OC\Files\Storage\Storage::class);
+
+		$instance = $this->getInstanceWithMockedMethods(['getCache', 'getEncryptionModule'], $sourceStorage);
+		$instance->expects($this->any())->method('getCache')->willReturn($this->cache);
+		$instance->expects($this->any())->method('getEncryptionModule')->willReturn($this->encryptionModule);
+
+		return [$instance, $sourceStorage];
+	}
+
+	private function getRememberedUnencryptedSizes(Encryption $instance): array {
+		return self::invokePrivate($instance, 'unencryptedSize');
+	}
+
+	public static function dataDirectDownload(): array {
+		return [
+			'encrypted file' => [new CacheEntry(['encrypted' => true, 'fileid' => 42]), false],
+			'unencrypted file' => [new CacheEntry(['encrypted' => false, 'fileid' => 42]), ['url' => 'https://example.com/42']],
+			'no cache entry' => [false, false],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataDirectDownload')]
+	public function testGetDirectDownload(CacheEntry|false $cacheEntry, array|false $expected): void {
+		$cache = $this->createMock(Cache::class);
+		$cache->method('get')->with('/test.txt')->willReturn($cacheEntry);
+
+		$sourceStorage = $this->createMock(\OC\Files\Storage\Storage::class);
+		$sourceStorage->method('getDirectDownload')->with('/test.txt')->willReturn(['url' => 'https://example.com/42']);
+
+		$instance = $this->getInstanceWithMockedMethods(['getCache'], $sourceStorage);
+		$instance->method('getCache')->willReturn($cache);
+
+		$this->assertSame($expected, $instance->getDirectDownload('/test.txt'));
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataDirectDownload')]
+	public function testGetDirectDownloadById(CacheEntry|false $cacheEntry, array|false $expected): void {
+		$cache = $this->createMock(Cache::class);
+		$cache->method('get')->with(42)->willReturn($cacheEntry);
+
+		$sourceStorage = $this->createMock(\OC\Files\Storage\Storage::class);
+		$sourceStorage->method('getDirectDownloadById')->with('42')->willReturn(['url' => 'https://example.com/42']);
+
+		$instance = $this->getInstanceWithMockedMethods(['getCache'], $sourceStorage);
+		$instance->method('getCache')->willReturn($cache);
+
+		$this->assertSame($expected, $instance->getDirectDownloadById('42'));
+	}
+
+	public function testUnencryptedSizeIsForgottenOnceStoredInFileCache(): void {
+		$cachedUnencryptedSize = 0;
+
+		$cache = $this->createMock(Cache::class);
+		$cache->expects($this->any())
+			->method('get')
+			->willReturnCallback(function () use (&$cachedUnencryptedSize) {
+				return new CacheEntry([
+					'encrypted' => true,
+					'encryptedVersion' => 1,
+					'path' => '/test.txt',
+					'size' => 8192,
+					'unencrypted_size' => $cachedUnencryptedSize,
+					'fileid' => 1,
+				]);
+			});
+		$cache->expects($this->once())
+			->method('update')
+			->with(1, ['unencrypted_size' => 42])
+			->willReturnCallback(function () use (&$cachedUnencryptedSize): void {
+				$cachedUnencryptedSize = 42;
+			});
+
+		$instance = $this->getInstanceWithCache($cache);
+		$instance->expects($this->any())
+			->method('verifyUnencryptedSize')
+			->willReturnCallback(fn (string $path, int $unencryptedSize): int => $unencryptedSize);
+		$instance->updateUnencryptedSize('/test.txt', 42);
+
+		$this->assertSame(42, $instance->filesize('/test.txt'));
+		$this->assertSame([], $this->getRememberedUnencryptedSizes($instance));
+		// the size is read from the file cache from now on
+		$this->assertSame(42, $instance->filesize('/test.txt'));
+	}
+
+	public function testUnencryptedSizeIsKeptForUncachedFiles(): void {
+		$cache = $this->createMock(Cache::class);
+		// part files have no file cache entry
+		$cache->expects($this->any())
+			->method('get')
+			->willReturn(['encrypted' => true, 'path' => '/test.txt.part']);
+		$cache->expects($this->never())->method('update');
+
+		$instance = $this->getInstanceWithCache($cache);
+		$instance->updateUnencryptedSize('/test.txt.part', 42);
+
+		$this->assertSame(42, $instance->filesize('/test.txt.part'));
+		$this->assertSame(['/test.txt.part' => 42], $this->getRememberedUnencryptedSizes($instance));
+	}
+
+	public function testUnencryptedSizeIsKeptIfFileCacheIsNotFlaggedEncrypted(): void {
+		$cache = $this->createMock(Cache::class);
+		$cache->expects($this->any())
+			->method('get')
+			->willReturn(new CacheEntry(['encrypted' => false, 'path' => '/test.txt', 'size' => 8192, 'fileid' => 1]));
+
+		$instance = $this->getInstanceWithCache($cache);
+		$instance->updateUnencryptedSize('/test.txt', 42);
+
+		$this->assertSame(42, $instance->filesize('/test.txt'));
+		$this->assertSame(['/test.txt' => 42], $this->getRememberedUnencryptedSizes($instance));
+	}
+
+	public function testUnencryptedSizeIsForgottenOnUnlink(): void {
+		[$instance, $sourceStorage] = $this->getInstanceWithMockedStorage();
+		$sourceStorage->expects($this->once())->method('unlink')->with('/test.txt')->willReturn(true);
+
+		$instance->updateUnencryptedSize('/test.txt', 42);
+
+		$this->assertTrue($instance->unlink('/test.txt'));
+		$this->assertSame([], $this->getRememberedUnencryptedSizes($instance));
+	}
+
+	public function testUnencryptedSizeIsForgottenOnRmdir(): void {
+		[$instance, $sourceStorage] = $this->getInstanceWithMockedStorage();
+		$sourceStorage->expects($this->once())->method('rmdir')->with('/folder')->willReturn(true);
+
+		$instance->updateUnencryptedSize('/folder', 42);
+		$instance->updateUnencryptedSize('/folder/test.txt', 42);
+		$instance->updateUnencryptedSize('/folder.txt', 12);
+
+		$this->assertTrue($instance->rmdir('/folder'));
+		$this->assertSame(['/folder.txt' => 12], $this->getRememberedUnencryptedSizes($instance));
+	}
+
+	public function testUnencryptedSizeIsMovedOnRename(): void {
+		[$instance, $sourceStorage] = $this->getInstanceWithMockedStorage();
+		$sourceStorage->expects($this->exactly(2))->method('rename')->willReturn(true);
+		$this->encryptionManager->expects($this->any())->method('isEnabled')->willReturn(true);
+		$this->keyStore->expects($this->any())->method('renameKeys')->willReturn(true);
+
+		$instance->updateUnencryptedSize('/source.txt', 42);
+		$instance->updateUnencryptedSize('/folder/source.txt', 12);
+
+		$this->assertTrue($instance->rename('/source.txt', '/target.txt'));
+		$this->assertTrue($instance->rename('/folder', '/renamed'));
+
+		$this->assertEquals([
+			'/target.txt' => 42,
+			'/renamed/source.txt' => 12,
+		], $this->getRememberedUnencryptedSizes($instance));
+	}
+
+	public function testUnencryptedSizesDoNotAccumulate(): void {
+		$cache = $this->createMock(Cache::class);
+		$cache->expects($this->any())
+			->method('get')
+			->willReturnCallback(fn (string $path) => new CacheEntry([
+				'encrypted' => true,
+				'encryptedVersion' => 1,
+				'path' => $path,
+				'size' => 8192,
+				'unencrypted_size' => 0,
+				'fileid' => 1,
+			]));
+
+		$instance = $this->getInstanceWithCache($cache);
+
+		for ($i = 0; $i < 1024; $i++) {
+			$path = '/test' . $i . '.txt';
+			$instance->updateUnencryptedSize($path, 42);
+			$this->assertSame(42, $instance->filesize($path));
+		}
+
+		$this->assertSame([], $this->getRememberedUnencryptedSizes($instance));
+	}
+
+	public function testUnencryptedSizeIsForgottenOnceTheFileCacheAgrees(): void {
+		$cache = $this->createMock(Cache::class);
+		$cache->expects($this->any())
+			->method('get')
+			->willReturn(new CacheEntry([
+				'encrypted' => true,
+				'encryptedVersion' => 1,
+				'path' => '/test.txt',
+				'size' => 8192,
+				'unencrypted_size' => 42,
+				'fileid' => 1,
+			]));
+
+		$sourceStorage = $this->createMock(\OC\Files\Storage\Storage::class);
+		$sourceStorage->expects($this->once())
+			->method('getMetaData')
+			->with('/test.txt')
+			->willReturn(['size' => 8192, 'encrypted' => false, 'fileid' => 1]);
+
+		$instance = $this->getInstanceWithMockedMethods(['getCache'], $sourceStorage);
+		$instance->expects($this->any())->method('getCache')->willReturn($cache);
+		$instance->updateUnencryptedSize('/test.txt', 42);
+
+		$metaData = $instance->getMetaData('/test.txt');
+		$this->assertSame(42, $metaData['size']);
+		$this->assertSame([], $this->getRememberedUnencryptedSizes($instance));
+	}
+
+	/**
 	 *
 	 * @param int $encryptedSize
 	 * @param int $unencryptedSize
 	 * @param bool $failure
 	 * @param int $expected
 	 */
-	public function testVerifyUnencryptedSize($encryptedSize, $unencryptedSize, $failure, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestVerifyUnencryptedSize')]
+	public function testVerifyUnencryptedSize($encryptedSize, $unencryptedSize, $failure, $expected): void {
 		$sourceStorage = $this->getMockBuilder('\OC\Files\Storage\Storage')
 			->disableOriginalConstructor()->getMock();
 
-		$this->instance = $this->getMockBuilder('\OC\Files\Storage\Wrapper\Encryption')
+		$this->instance = $this->getMockBuilder(Encryption::class)
 			->setConstructorArgs(
 				[
 					[
@@ -381,10 +598,17 @@ class EncryptionTest extends Storage {
 						'mountPoint' => '/',
 						'mount' => $this->mount
 					],
-					$this->encryptionManager, $this->util, $this->logger, $this->file, null, $this->keyStore, $this->update, $this->mountManager, $this->arrayCache
+					$this->encryptionManager,
+					$this->util,
+					$this->logger,
+					$this->file,
+					null,
+					$this->keyStore,
+					$this->mountManager,
+					$this->arrayCache,
 				]
 			)
-			->setMethods(['fixUnencryptedSize'])
+			->onlyMethods(['fixUnencryptedSize'])
 			->getMock();
 
 		$sourceStorage->expects($this->once())->method('filesize')->willReturn($encryptedSize);
@@ -394,7 +618,7 @@ class EncryptionTest extends Storage {
 			->willReturnCallback(
 				function () use ($failure, $expected) {
 					if ($failure) {
-						throw new \Exception();
+						throw new Exception();
 					} else {
 						return $expected;
 					}
@@ -407,27 +631,154 @@ class EncryptionTest extends Storage {
 		);
 	}
 
-	public function dataTestVerifyUnencryptedSize() {
+	public static function dataTestVerifyUnencryptedSize(): array {
 		return [
 			[120, 80, false, 80],
 			[120, 120, false, 80],
 			[120, -1, false, 80],
-			[120, -1, true, -1]
+			[120, -1, true, -1],
+			// Zero-byte encrypted file: on-disk size equals header only (8192) — should NOT recalculate
+			[8192, 0, false, 0],
+			// Encrypted file with content beyond header but unencrypted_size=0 — SHOULD recalculate
+			[16384, 0, false, 80],
 		];
 	}
 
 	/**
-	 * @dataProvider dataTestCopyAndRename
+	 * The unencrypted block size depends on the encoding stored in the file header,
+	 * which the encryption module only knows once begin() has read the header.
+	 */
+	public function testFixUnencryptedSizeUsesBlockSizeOfFileEncoding(): void {
+		$begun = false;
+		$module = $this->createMock(IEncryptionModule::class);
+		$module->method('begin')->willReturnCallback(function () use (&$begun) {
+			$begun = true;
+			return [];
+		});
+		$module->method('getUnencryptedBlockSize')->willReturnCallback(function (bool $signed) use (&$begun) {
+			return $begun ? 6072 : 8096;
+		});
+		$module->method('decrypt')->willReturn(str_repeat('a', 42));
+		$module->method('end')->willReturn('');
+
+		$header = ['cipher' => 'AES-256-CTR', 'signed' => 'true', 'oc_encryption_module' => 'UNIT_TEST_MODULE'];
+		$content = str_pad(Util::HEADER_START, $this->headerSize, '-') . str_repeat('x', 2 * 8192 + 100);
+		$stream = fopen('php://memory', 'r+');
+		fwrite($stream, $content);
+		rewind($stream);
+		$cache = $this->createMock(ICache::class);
+		$cache->method('get')->with('legacy.txt')->willReturn(['fileid' => 42]);
+		$sourceStorage = $this->createMock(\OC\Files\Storage\Storage::class);
+		$sourceStorage->method('fopen')->with('legacy.txt', 'r')->willReturn($stream);
+		$sourceStorage->method('getCache')->willReturn($cache);
+
+		$expected = 2 * 6072 + 42;
+		$cache->expects($this->once())->method('update')->with(42, ['unencrypted_size' => $expected]);
+
+		$instance = $this->getMockBuilder(Encryption::class)
+			->setConstructorArgs(
+				[
+					[
+						'storage' => $sourceStorage,
+						'root' => 'foo',
+						'mountPoint' => '/',
+						'mount' => $this->mount
+					],
+					$this->encryptionManager,
+					$this->util,
+					$this->logger,
+					$this->file,
+					null,
+					$this->keyStore,
+					$this->mountManager,
+					$this->arrayCache,
+				]
+			)
+			->onlyMethods(['getHeader', 'getHeaderSize', 'getEncryptionModule'])
+			->getMock();
+		$instance->method('getHeader')->willReturn($header);
+		$instance->method('getHeaderSize')->willReturn($this->headerSize);
+		$instance->method('getEncryptionModule')->willReturn($module);
+
+		$this->assertEquals(
+			$expected,
+			$this->invokePrivate($instance, 'fixUnencryptedSize', ['legacy.txt', strlen($content), 0])
+		);
+	}
+
+	/**
+	 * filesize() remembers a recalculated size and updates the file cache whenever the
+	 * remembered size is not identical to the cached one, which also dispatches an event.
+	 */
+	public function testFilesizeUpdatesRecalculatedSizeOnce(): void {
+		$module = $this->createMock(IEncryptionModule::class);
+		$module->method('begin')->willReturn([]);
+		$module->method('getUnencryptedBlockSize')->willReturn(6072);
+		$module->method('decrypt')->willReturn(str_repeat('a', 42));
+		$module->method('end')->willReturn('');
+
+		$header = ['cipher' => 'AES-256-CTR', 'signed' => 'true', 'oc_encryption_module' => 'UNIT_TEST_MODULE'];
+		$content = str_pad(Util::HEADER_START, $this->headerSize, '-') . str_repeat('x', 2 * 8192 + 100);
+		$stream = fopen('php://memory', 'r+');
+		fwrite($stream, $content);
+		rewind($stream);
+
+		$entry = new CacheEntry(['fileid' => 42, 'encrypted' => true, 'encryptedVersion' => 1, 'size' => 0, 'unencrypted_size' => 0]);
+		$cache = $this->createMock(ICache::class);
+		$cache->method('get')->with('file.003')->willReturnCallback(function () use (&$entry) {
+			return $entry;
+		});
+		$cache->expects($this->once())->method('update')
+			->willReturnCallback(function (int $id, array $data) use (&$entry): void {
+				$entry = new CacheEntry(array_merge($entry->getData(), $data));
+			});
+		$sourceStorage = $this->createMock(\OC\Files\Storage\Storage::class);
+		$sourceStorage->method('filesize')->with('file.003')->willReturn(strlen($content));
+		$sourceStorage->method('fopen')->with('file.003', 'r')->willReturn($stream);
+		$sourceStorage->method('getCache')->willReturn($cache);
+
+		$instance = $this->getMockBuilder(Encryption::class)
+			->setConstructorArgs(
+				[
+					[
+						'storage' => $sourceStorage,
+						'root' => 'foo',
+						'mountPoint' => '/',
+						'mount' => $this->mount
+					],
+					$this->encryptionManager,
+					$this->util,
+					$this->logger,
+					$this->file,
+					null,
+					$this->keyStore,
+					$this->mountManager,
+					$this->arrayCache,
+				]
+			)
+			->onlyMethods(['getHeader', 'getHeaderSize', 'getEncryptionModule'])
+			->getMock();
+		$instance->method('getHeader')->willReturn($header);
+		$instance->method('getHeaderSize')->willReturn($this->headerSize);
+		$instance->method('getEncryptionModule')->willReturn($module);
+
+		$expected = 2 * 6072 + 42;
+		$this->assertSame($expected, $instance->filesize('file.003'));
+		$this->assertSame($expected, $instance->filesize('file.003'));
+	}
+
+	/**
 	 *
 	 * @param string $source
 	 * @param string $target
 	 * @param $encryptionEnabled
 	 * @param boolean $renameKeysReturn
 	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestCopyAndRename')]
 	public function testRename($source,
-							   $target,
-							   $encryptionEnabled,
-							   $renameKeysReturn) {
+		$target,
+		$encryptionEnabled,
+		$renameKeysReturn): void {
 		if ($encryptionEnabled) {
 			$this->keyStore
 				->expects($this->once())
@@ -447,7 +798,7 @@ class EncryptionTest extends Storage {
 		$this->instance->rename($source, $target);
 	}
 
-	public function testCopyEncryption() {
+	public function testCopyEncryption(): void {
 		$this->instance->file_put_contents('source.txt', 'bar');
 		$this->instance->copy('source.txt', 'target.txt');
 		$this->assertSame('bar', $this->instance->file_get_contents('target.txt'));
@@ -462,7 +813,7 @@ class EncryptionTest extends Storage {
 	 *
 	 * @return array
 	 */
-	public function dataTestCopyAndRename() {
+	public static function dataTestCopyAndRename(): array {
 		return [
 			['source', 'target', true, false, false],
 			['source', 'target', true, true, false],
@@ -472,40 +823,46 @@ class EncryptionTest extends Storage {
 		];
 	}
 
-	public function testIsLocal() {
+	public function testIsLocal(): void {
 		$this->encryptionManager->expects($this->once())
 			->method('isEnabled')->willReturn(true);
 		$this->assertFalse($this->instance->isLocal());
 	}
 
 	/**
-	 * @dataProvider dataTestRmdir
 	 *
 	 * @param string $path
 	 * @param boolean $rmdirResult
 	 * @param boolean $isExcluded
 	 * @param boolean $encryptionEnabled
 	 */
-	public function testRmdir($path, $rmdirResult, $isExcluded, $encryptionEnabled) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestRmdir')]
+	public function testRmdir($path, $rmdirResult, $isExcluded, $encryptionEnabled): void {
 		$sourceStorage = $this->getMockBuilder('\OC\Files\Storage\Storage')
 			->disableOriginalConstructor()->getMock();
 
 		$util = $this->getMockBuilder('\OC\Encryption\Util')->disableOriginalConstructor()->getMock();
 
 		$sourceStorage->expects($this->once())->method('rmdir')->willReturn($rmdirResult);
-		$util->expects($this->any())->method('isExcluded')-> willReturn($isExcluded);
+		$util->expects($this->any())->method('isExcluded')->willReturn($isExcluded);
 		$this->encryptionManager->expects($this->any())->method('isEnabled')->willReturn($encryptionEnabled);
 
-		$encryptionStorage = new \OC\Files\Storage\Wrapper\Encryption(
-					[
-						'storage' => $sourceStorage,
-						'root' => 'foo',
-						'mountPoint' => '/mountPoint',
-						'mount' => $this->mount
-					],
-					$this->encryptionManager, $util, $this->logger, $this->file, null, $this->keyStore, $this->update
+		$encryptionStorage = new Encryption(
+			[
+				'storage' => $sourceStorage,
+				'root' => 'foo',
+				'mountPoint' => '/mountPoint',
+				'mount' => $this->mount
+			],
+			$this->encryptionManager,
+			$util,
+			$this->logger,
+			$this->file,
+			null,
+			$this->keyStore,
+			$this->mountManager,
+			$this->arrayCache,
 		);
-
 
 		if ($rmdirResult === true && $isExcluded === false && $encryptionEnabled === true) {
 			$this->keyStore->expects($this->once())->method('deleteAllFileKeys')->with('/mountPoint' . $path);
@@ -516,7 +873,7 @@ class EncryptionTest extends Storage {
 		$encryptionStorage->rmdir($path);
 	}
 
-	public function dataTestRmdir() {
+	public static function dataTestRmdir(): array {
 		return [
 			['/file.txt', true, true, true],
 			['/file.txt', false, true, true],
@@ -530,12 +887,12 @@ class EncryptionTest extends Storage {
 	}
 
 	/**
-	 * @dataProvider dataTestCopyKeys
 	 *
 	 * @param boolean $excluded
 	 * @param boolean $expected
 	 */
-	public function testCopyKeys($excluded, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestCopyKeys')]
+	public function testCopyKeys($excluded, $expected): void {
 		$this->util->expects($this->once())
 			->method('isExcluded')
 			->willReturn($excluded);
@@ -551,7 +908,7 @@ class EncryptionTest extends Storage {
 		);
 	}
 
-	public function dataTestCopyKeys() {
+	public static function dataTestCopyKeys(): array {
 		return [
 			[true, false],
 			[false, true],
@@ -559,13 +916,13 @@ class EncryptionTest extends Storage {
 	}
 
 	/**
-	 * @dataProvider dataTestGetHeader
 	 *
 	 * @param string $path
 	 * @param bool $strippedPathExists
 	 * @param string $strippedPath
 	 */
-	public function testGetHeader($path, $strippedPathExists, $strippedPath) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestGetHeader')]
+	public function testGetHeader($path, $strippedPathExists, $strippedPath): void {
 		$sourceStorage = $this->getMockBuilder('\OC\Files\Storage\Storage')
 			->disableOriginalConstructor()->getMock();
 
@@ -575,16 +932,16 @@ class EncryptionTest extends Storage {
 					new View(),
 					new Manager(
 						$this->config,
-						$this->createMock(EventDispatcherInterface::class),
 						$this->createMock(ICacheFactory::class),
-						$this->createMock(IEventDispatcher::class)
+						$this->createMock(IEventDispatcher::class),
+						$this->createMock(LoggerInterface::class),
 					),
 					$this->groupManager,
 					$this->config,
 					$this->arrayCache
 				]
 			)->getMock();
-		
+
 		$cache = $this->getMockBuilder('\OC\Files\Cache\Cache')
 			->disableOriginalConstructor()->getMock();
 		$cache->expects($this->any())
@@ -593,7 +950,7 @@ class EncryptionTest extends Storage {
 				return ['encrypted' => true, 'path' => $path];
 			});
 
-		$instance = $this->getMockBuilder('\OC\Files\Storage\Wrapper\Encryption')
+		$instance = $this->getMockBuilder(Encryption::class)
 			->setConstructorArgs(
 				[
 					[
@@ -602,36 +959,43 @@ class EncryptionTest extends Storage {
 						'mountPoint' => '/',
 						'mount' => $this->mount
 					],
-					$this->encryptionManager, $util, $this->logger, $this->file, null, $this->keyStore, $this->update, $this->mountManager, $this->arrayCache
+					$this->encryptionManager,
+					$util,
+					$this->logger,
+					$this->file,
+					null,
+					$this->keyStore,
+					$this->mountManager,
+					$this->arrayCache,
 				]
 			)
-			->setMethods(['getCache','readFirstBlock', 'parseRawHeader'])
+			->onlyMethods(['getCache', 'readFirstBlock'])
 			->getMock();
-		
-		$instance->expects($this->once())->method('getCache')->willReturn($cache);
-		
-		$instance->expects($this->once())->method(('parseRawHeader'))
+
+		$instance->method('getCache')->willReturn($cache);
+
+		$util->method('parseRawHeader')
 			->willReturn([Util::HEADER_ENCRYPTION_MODULE_KEY => 'OC_DEFAULT_MODULE']);
 
 		if ($strippedPathExists) {
-			$instance->expects($this->once())->method('readFirstBlock')
+			$instance->method('readFirstBlock')
 				->with($strippedPath)->willReturn('');
 		} else {
-			$instance->expects($this->once())->method('readFirstBlock')
+			$instance->method('readFirstBlock')
 				->with($path)->willReturn('');
 		}
 
 		$util->expects($this->once())->method('stripPartialFileExtension')
 			->with($path)->willReturn($strippedPath);
 		$sourceStorage->expects($this->once())
-			->method('file_exists')
+			->method('is_file')
 			->with($strippedPath)
 			->willReturn($strippedPathExists);
 
 		$this->invokePrivate($instance, 'getHeader', [$path]);
 	}
 
-	public function dataTestGetHeader() {
+	public static function dataTestGetHeader(): array {
 		return [
 			['/foo/bar.txt', false, '/foo/bar.txt'],
 			['/foo/bar.txt.part', false, '/foo/bar.txt'],
@@ -644,35 +1008,40 @@ class EncryptionTest extends Storage {
 	/**
 	 * test if getHeader adds the default module correctly to the header for
 	 * legacy files
-	 *
-	 * @dataProvider dataTestGetHeaderAddLegacyModule
 	 */
-	public function testGetHeaderAddLegacyModule($header, $isEncrypted, $exists, $expected) {
-		$sourceStorage = $this->getMockBuilder('\OC\Files\Storage\Storage')
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestGetHeaderAddLegacyModule')]
+	public function testGetHeaderAddLegacyModule($header, $isEncrypted, $strippedPathExists, $expected): void {
+		$sourceStorage = $this->getMockBuilder(\OC\Files\Storage\Storage::class)
 			->disableOriginalConstructor()->getMock();
 
 		$sourceStorage->expects($this->once())
-			->method('file_exists')
-			->willReturn($exists);
+			->method('is_file')
+			->with('test.txt')
+			->willReturn($strippedPathExists);
 
-		$util = $this->getMockBuilder('\OC\Encryption\Util')
+		$util = $this->getMockBuilder(Util::class)
+			->onlyMethods(['stripPartialFileExtension', 'parseRawHeader'])
 			->setConstructorArgs([new View(), new Manager(
 				$this->config,
-				$this->createMock(EventDispatcherInterface::class),
 				$this->createMock(ICacheFactory::class),
-				$this->createMock(IEventDispatcher::class)
+				$this->createMock(IEventDispatcher::class),
+				$this->createMock(LoggerInterface::class),
 			), $this->groupManager, $this->config, $this->arrayCache])
 			->getMock();
+		$util->expects($this->any())
+			->method('stripPartialFileExtension')
+			->willReturnCallback(function ($path) {
+				return $path;
+			});
 
-		$cache = $this->getMockBuilder('\OC\Files\Cache\Cache')
-			->disableOriginalConstructor()->getMock();
+		$cache = $this->createMock(Cache::class);
 		$cache->expects($this->any())
 			->method('get')
 			->willReturnCallback(function ($path) use ($isEncrypted) {
 				return ['encrypted' => $isEncrypted, 'path' => $path];
 			});
 
-		$instance = $this->getMockBuilder('\OC\Files\Storage\Wrapper\Encryption')
+		$instance = $this->getMockBuilder(Encryption::class)
 			->setConstructorArgs(
 				[
 					[
@@ -681,14 +1050,23 @@ class EncryptionTest extends Storage {
 						'mountPoint' => '/',
 						'mount' => $this->mount
 					],
-					$this->encryptionManager, $util, $this->logger, $this->file, null, $this->keyStore, $this->update, $this->mountManager, $this->arrayCache
+					$this->encryptionManager,
+					$util,
+					$this->logger,
+					$this->file,
+					null,
+					$this->keyStore,
+					$this->mountManager,
+					$this->arrayCache,
 				]
 			)
-			->setMethods(['readFirstBlock', 'parseRawHeader', 'getCache'])
+			->onlyMethods(['readFirstBlock', 'getCache'])
 			->getMock();
 
-		$instance->expects($this->any())->method(('parseRawHeader'))->willReturn($header);
-		$instance->expects($this->once())->method('getCache')->willReturn($cache);
+		$instance->method('readFirstBlock')->willReturn('');
+
+		$util->method(('parseRawHeader'))->willReturn($header);
+		$instance->method('getCache')->willReturn($cache);
 
 		$result = $this->invokePrivate($instance, 'getHeader', ['test.txt']);
 		$this->assertSameSize($expected, $result);
@@ -698,7 +1076,7 @@ class EncryptionTest extends Storage {
 		}
 	}
 
-	public function dataTestGetHeaderAddLegacyModule() {
+	public static function dataTestGetHeaderAddLegacyModule(): array {
 		return [
 			[['cipher' => 'AES-128'], true, true, ['cipher' => 'AES-128', Util::HEADER_ENCRYPTION_MODULE_KEY => 'OC_DEFAULT_MODULE']],
 			[[], true, false, []],
@@ -707,45 +1085,7 @@ class EncryptionTest extends Storage {
 		];
 	}
 
-	/**
-	 * @dataProvider dataTestParseRawHeader
-	 */
-	public function testParseRawHeader($rawHeader, $expected) {
-		$instance = new \OC\Files\Storage\Wrapper\Encryption(
-					[
-						'storage' => $this->sourceStorage,
-						'root' => 'foo',
-						'mountPoint' => '/',
-						'mount' => $this->mount
-					],
-					$this->encryptionManager, $this->util, $this->logger, $this->file, null, $this->keyStore, $this->update, $this->mountManager, $this->arrayCache
-
-			);
-
-		$result = $this->invokePrivate($instance, 'parseRawHeader', [$rawHeader]);
-		$this->assertSameSize($expected, $result);
-		foreach ($result as $key => $value) {
-			$this->assertArrayHasKey($key, $expected);
-			$this->assertSame($expected[$key], $value);
-		}
-	}
-
-	public function dataTestParseRawHeader() {
-		return [
-			[str_pad('HBEGIN:oc_encryption_module:0:HEND', $this->headerSize, '-', STR_PAD_RIGHT)
-				, [Util::HEADER_ENCRYPTION_MODULE_KEY => '0']],
-			[str_pad('HBEGIN:oc_encryption_module:0:custom_header:foo:HEND', $this->headerSize, '-', STR_PAD_RIGHT)
-				, ['custom_header' => 'foo', Util::HEADER_ENCRYPTION_MODULE_KEY => '0']],
-			[str_pad('HelloWorld', $this->headerSize, '-', STR_PAD_RIGHT), []],
-			['', []],
-			[str_pad('HBEGIN:oc_encryption_module:0', $this->headerSize, '-', STR_PAD_RIGHT)
-				, []],
-			[str_pad('oc_encryption_module:0:HEND', $this->headerSize, '-', STR_PAD_RIGHT)
-				, []],
-		];
-	}
-
-	public function dataCopyBetweenStorage() {
+	public static function dataCopyBetweenStorage(): array {
 		return [
 			[true, true, true],
 			[true, false, false],
@@ -754,7 +1094,76 @@ class EncryptionTest extends Storage {
 		];
 	}
 
-	public function testCopyBetweenStorageMinimumEncryptedVersion() {
+	public static function dataUpdateEncryptedVersion(): array {
+		return [
+			// the target is written through the encryption stream, which signs its blocks
+			// with the version that follows the version of the file they replace
+			'copy onto an existing file' => [['encryptedVersion' => 4], ['encryptedVersion' => 3], false, 3],
+			'copy onto a new file' => [['encryptedVersion' => 4], false, false, 1],
+			'copy onto a file that is not encrypted yet' => [['encryptedVersion' => 4], ['encryptedVersion' => 0], false, 1],
+			// a 1:1 copy reuses the keys and the ciphertext of the source
+			'1:1 copy' => [['encryptedVersion' => 5], false, true, 5],
+			'1:1 copy of a file that is not encrypted yet' => [['encryptedVersion' => 0], false, true, 1],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataUpdateEncryptedVersion')]
+	public function testUpdateEncryptedVersion(
+		array|false $sourceCacheEntry,
+		array|false $targetCacheEntry,
+		bool $keepEncryptionVersion,
+		int $expectedVersion,
+	): void {
+		$sourceCache = $this->createMock(ICache::class);
+		$sourceCache->method('get')
+			->with('source.txt')
+			->willReturn($sourceCacheEntry);
+		$sourceStorage = $this->createMock(\OC\Files\Storage\Storage::class);
+		$sourceStorage->method('getCache')
+			->willReturn($sourceCache);
+
+		$targetCache = $this->createMock(ICache::class);
+		$targetCache->method('get')
+			->with('target.txt')
+			->willReturn($targetCacheEntry);
+		$targetCache->expects($this->once())
+			->method('put')
+			->with('target.txt', ['encrypted' => true, 'encryptedVersion' => $expectedVersion]);
+
+		$instance = $this->getMockBuilder(Encryption::class)
+			->setConstructorArgs(
+				[
+					[
+						'storage' => $this->sourceStorage,
+						'root' => 'foo',
+						'mountPoint' => '/',
+						'mount' => $this->mount
+					],
+					$this->encryptionManager,
+					$this->util,
+					$this->logger,
+					$this->file,
+					null,
+					$this->keyStore,
+					$this->mountManager,
+					$this->arrayCache
+				]
+			)
+			->onlyMethods(['getCache', 'getEncryptionModule'])
+			->getMock();
+		$instance->method('getCache')->willReturn($targetCache);
+		$instance->method('getEncryptionModule')->willReturn($this->encryptionModule);
+
+		$this->encryptionManager->expects($this->any())
+			->method('isEnabled')
+			->willReturn(true);
+		global $mockedMountPointEncryptionEnabled;
+		$mockedMountPointEncryptionEnabled = true;
+
+		$this->invokePrivate($instance, 'updateEncryptedVersion', [$sourceStorage, 'source.txt', 'target.txt', false, $keepEncryptionVersion]);
+	}
+
+	public function testCopyBetweenStorageMinimumEncryptedVersion(): void {
 		$storage2 = $this->createMock(\OC\Files\Storage\Storage::class);
 
 		$sourceInternalPath = $targetInternalPath = 'file.txt';
@@ -763,7 +1172,7 @@ class EncryptionTest extends Storage {
 		$storage2->expects($this->any())
 			->method('fopen')
 			->willReturnCallback(function ($path, $mode) {
-				$temp = \OC::$server->getTempManager();
+				$temp = Server::get(ITempManager::class);
 				return fopen($temp->getTemporaryFile(), $mode);
 			});
 		$storage2->method('getId')
@@ -797,13 +1206,13 @@ class EncryptionTest extends Storage {
 	}
 
 	/**
-	 * @dataProvider dataCopyBetweenStorage
 	 *
 	 * @param bool $encryptionEnabled
 	 * @param bool $mountPointEncryptionEnabled
 	 * @param bool $expectedEncrypted
 	 */
-	public function testCopyBetweenStorage($encryptionEnabled, $mountPointEncryptionEnabled, $expectedEncrypted) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataCopyBetweenStorage')]
+	public function testCopyBetweenStorage($encryptionEnabled, $mountPointEncryptionEnabled, $expectedEncrypted): void {
 		$storage2 = $this->createMock(\OC\Files\Storage\Storage::class);
 
 		$sourceInternalPath = $targetInternalPath = 'file.txt';
@@ -812,7 +1221,7 @@ class EncryptionTest extends Storage {
 		$storage2->expects($this->any())
 			->method('fopen')
 			->willReturnCallback(function ($path, $mode) {
-				$temp = \OC::$server->getTempManager();
+				$temp = Server::get(ITempManager::class);
 				return fopen($temp->getTemporaryFile(), $mode);
 			});
 		$storage2->method('getId')
@@ -831,10 +1240,10 @@ class EncryptionTest extends Storage {
 			->method('isEnabled')
 			->willReturn($encryptionEnabled);
 		// FIXME can not overwrite the return after definition
-//		$this->mount->expects($this->at(0))
-//			->method('getOption')
-//			->with('encrypt', true)
-//			->willReturn($mountPointEncryptionEnabled);
+		//		$this->mount->expects($this->at(0))
+		//			->method('getOption')
+		//			->with('encrypt', true)
+		//			->willReturn($mountPointEncryptionEnabled);
 		global $mockedMountPointEncryptionEnabled;
 		$mockedMountPointEncryptionEnabled = $mountPointEncryptionEnabled;
 
@@ -857,14 +1266,14 @@ class EncryptionTest extends Storage {
 	}
 
 	/**
-	 * @dataProvider dataTestCopyBetweenStorageVersions
 	 *
 	 * @param string $sourceInternalPath
 	 * @param string $targetInternalPath
 	 * @param bool $copyResult
 	 * @param bool $encrypted
 	 */
-	public function testCopyBetweenStorageVersions($sourceInternalPath, $targetInternalPath, $copyResult, $encrypted) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestCopyBetweenStorageVersions')]
+	public function testCopyBetweenStorageVersions($sourceInternalPath, $targetInternalPath, $copyResult, $encrypted): void {
 		$sourceStorage = $this->createMock(\OC\Files\Storage\Storage::class);
 
 		$targetStorage = $this->createMock(\OC\Files\Storage\Storage::class);
@@ -874,8 +1283,8 @@ class EncryptionTest extends Storage {
 
 		$mountPoint = '/mountPoint';
 
-		/** @var \OC\Files\Storage\Wrapper\Encryption |\PHPUnit\Framework\MockObject\MockObject  $instance */
-		$instance = $this->getMockBuilder('\OC\Files\Storage\Wrapper\Encryption')
+		/** @var Encryption |MockObject $instance */
+		$instance = $this->getMockBuilder(Encryption::class)
 			->setConstructorArgs(
 				[
 					[
@@ -890,12 +1299,11 @@ class EncryptionTest extends Storage {
 					$this->file,
 					null,
 					$this->keyStore,
-					$this->update,
 					$this->mountManager,
 					$this->arrayCache
 				]
 			)
-			->setMethods(['updateUnencryptedSize', 'getCache'])
+			->onlyMethods(['updateUnencryptedSize', 'getCache'])
 			->getMock();
 
 		$targetStorage->expects($this->once())->method('copyFromStorage')
@@ -911,7 +1319,7 @@ class EncryptionTest extends Storage {
 		if ($copyResult) {
 			$cache->expects($this->once())->method('get')
 				->with($sourceInternalPath)
-				->willReturn(['encrypted' => $encrypted, 'size' => 42]);
+				->willReturn(new CacheEntry(['encrypted' => $encrypted, 'size' => 42]));
 			if ($encrypted) {
 				$instance->expects($this->once())->method('updateUnencryptedSize')
 					->with($mountPoint . $targetInternalPath, 42);
@@ -937,7 +1345,7 @@ class EncryptionTest extends Storage {
 		$this->assertSame($copyResult, $result);
 	}
 
-	public function dataTestCopyBetweenStorageVersions() {
+	public static function dataTestCopyBetweenStorageVersions(): array {
 		return [
 			['/files/foo.txt', '/files_versions/foo.txt.768743', true, true],
 			['/files/foo.txt', '/files_versions/foo.txt.768743', true, false],
@@ -947,22 +1355,21 @@ class EncryptionTest extends Storage {
 			['/files_versions/foo.txt.6487634', '/files/foo.txt', true, false],
 			['/files_versions/foo.txt.6487634', '/files/foo.txt', false, true],
 			['/files_versions/foo.txt.6487634', '/files/foo.txt', false, false],
-
 		];
 	}
 
 	/**
-	 * @dataProvider dataTestIsVersion
 	 * @param string $path
 	 * @param bool $expected
 	 */
-	public function testIsVersion($path, $expected) {
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestIsVersion')]
+	public function testIsVersion($path, $expected): void {
 		$this->assertSame($expected,
 			$this->invokePrivate($this->instance, 'isVersion', [$path])
 		);
 	}
 
-	public function dataTestIsVersion() {
+	public static function dataTestIsVersion(): array {
 		return [
 			['files_versions/foo', true],
 			['/files_versions/foo', true],
@@ -973,27 +1380,18 @@ class EncryptionTest extends Storage {
 		];
 	}
 
-	/**
-	 * @dataProvider dataTestShouldEncrypt
-	 *
-	 * @param bool $encryptMountPoint
-	 * @param mixed $encryptionModule
-	 * @param bool $encryptionModuleShouldEncrypt
-	 * @param bool $expected
-	 */
+	#[\PHPUnit\Framework\Attributes\DataProvider('dataTestShouldEncrypt')]
 	public function testShouldEncrypt(
-		$encryptMountPoint,
-		$encryptionModule,
-		$encryptionModuleShouldEncrypt,
-		$expected
-	) {
+		bool $encryptionEnabled,
+		bool|string $encryptMountPoint,
+		?bool $encryptionModule,
+		bool $encryptionModuleShouldEncrypt,
+		bool $expected,
+	): void {
 		$encryptionManager = $this->createMock(\OC\Encryption\Manager::class);
 		$util = $this->createMock(Util::class);
-		$logger = $this->createMock(ILogger::class);
 		$fileHelper = $this->createMock(IFile::class);
-		$uid = null;
 		$keyStorage = $this->createMock(IStorage::class);
-		$update = $this->createMock(Update::class);
 		$mountManager = $this->createMock(\OC\Files\Mount\Manager::class);
 		$mount = $this->createMock(IMountPoint::class);
 		$arrayCache = $this->createMock(ArrayCache::class);
@@ -1004,28 +1402,29 @@ class EncryptionTest extends Storage {
 		$wrapper = $this->getMockBuilder(Encryption::class)
 			->setConstructorArgs(
 				[
-					['mountPoint' => '', 'mount' => $mount, 'storage' => ''],
+					['mountPoint' => '', 'mount' => $mount, 'storage' => null],
 					$encryptionManager,
 					$util,
-					$logger,
+					$this->logger,
 					$fileHelper,
-					$uid,
+					null,
 					$keyStorage,
-					$update,
 					$mountManager,
 					$arrayCache
 				]
 			)
-			->setMethods(['getFullPath', 'getEncryptionModule'])
+			->onlyMethods(['getFullPath', 'getEncryptionModule'])
 			->getMock();
 
+		$encryptionManager->method('isEnabled')->willReturn($encryptionEnabled);
+
 		if ($encryptionModule === true) {
-			/** @var IEncryptionModule|\PHPUnit\Framework\MockObject\MockObject $encryptionModule */
+			/** @var IEncryptionModule|MockObject $encryptionModule */
 			$encryptionModule = $this->createMock(IEncryptionModule::class);
 		}
 
 		$wrapper->method('getFullPath')->with($path)->willReturn($fullPath);
-		$wrapper->expects($encryptMountPoint ? $this->once() : $this->never())
+		$wrapper->expects(($encryptionEnabled && $encryptMountPoint) ? $this->once() : $this->never())
 			->method('getEncryptionModule')
 			->with($fullPath)
 			->willReturnCallback(
@@ -1036,7 +1435,8 @@ class EncryptionTest extends Storage {
 					return $encryptionModule;
 				}
 			);
-		$mount->expects($this->once())->method('getOption')->with('encrypt', true)
+		$mount->expects($encryptionEnabled ? $this->once() : $this->never())
+			->method('getOption')->with('encrypt', true)
 			->willReturn($encryptMountPoint);
 
 		if ($encryptionModule !== null && $encryptionModule !== false) {
@@ -1058,13 +1458,15 @@ class EncryptionTest extends Storage {
 		$this->assertSame($expected, $result);
 	}
 
-	public function dataTestShouldEncrypt() {
+	public static function dataTestShouldEncrypt(): array {
 		return [
-			[false, false, false, false],
-			[true, false, false, false],
-			[true, true, false, false],
-			[true, true, true, true],
-			[true, null, false, true],
+			[true, false, false, false, false],
+			[true, '', false, false, false],
+			[true, true, false, false, false],
+			[true, true, true, false, false],
+			[true, true, true, true, true],
+			[true, true, null, false, true],
+			[false, true, true, true, false],
 		];
 	}
 }

@@ -1,44 +1,26 @@
 <?php
+
 /**
- * @copyright Copyright (c) 2016, ownCloud, Inc.
- *
- * @author Arthur Schiwon <blizzz@arthur-schiwon.de>
- * @author Christoph Wurst <christoph@winzerhof-wurst.at>
- * @author Georg Ehrke <oc.list@georgehrke.com>
- * @author Joas Schilling <coding@schilljs.com>
- * @author Julius Härtl <jus@bitgrid.net>
- * @author Morris Jobke <hey@morrisjobke.de>
- * @author Robin Appelman <robin@icewind.nl>
- * @author Robin McCorkell <robin@mccorkell.me.uk>
- * @author Roeland Jago Douma <roeland@famdouma.nl>
- * @author Vincent Petry <vincent@nextcloud.com>
- *
- * @license AGPL-3.0
- *
- * This code is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License, version 3,
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License, version 3,
- * along with this program. If not, see <http://www.gnu.org/licenses/>
- *
+ * SPDX-FileCopyrightText: 2022 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-FileCopyrightText: 2016 ownCloud, Inc.
+ * SPDX-License-Identifier: AGPL-3.0-only
  */
+
 namespace OC\Files\Node;
 
 use OC\Files\Cache\QuerySearchHelper;
 use OC\Files\Search\SearchBinaryOperator;
-use OC\Files\Cache\Wrapper\CacheJail;
 use OC\Files\Search\SearchComparison;
 use OC\Files\Search\SearchOrder;
 use OC\Files\Search\SearchQuery;
+use OC\Files\Utils\PathHelper;
+use OC\User\LazyUser;
+use OCP\Constants;
 use OCP\Files\Cache\ICacheEntry;
 use OCP\Files\FileInfo;
+use OCP\Files\Folder as IFolder;
 use OCP\Files\Mount\IMountPoint;
+use OCP\Files\Node as INode;
 use OCP\Files\NotFoundException;
 use OCP\Files\NotPermittedException;
 use OCP\Files\Search\ISearchBinaryOperator;
@@ -46,15 +28,24 @@ use OCP\Files\Search\ISearchComparison;
 use OCP\Files\Search\ISearchOperator;
 use OCP\Files\Search\ISearchOrder;
 use OCP\Files\Search\ISearchQuery;
+use OCP\IConfig;
 use OCP\IUserManager;
+use OCP\Server;
+use Override;
 
-class Folder extends Node implements \OCP\Files\Folder {
+class Folder extends Node implements IFolder {
+
+	private ?IUserManager $userManager = null;
+
+	private bool $wasDeleted = false;
+
 	/**
 	 * Creates a Folder that represents a non-existing path
 	 *
 	 * @param string $path path
-	 * @return string non-existing node class
+	 * @return NonExistingFolder non-existing node
 	 */
+	#[\Override]
 	protected function createNonExistingNode($path) {
 		return new NonExistingFolder($this->root, $this->view, $path);
 	}
@@ -64,29 +55,22 @@ class Folder extends Node implements \OCP\Files\Folder {
 	 * @return string
 	 * @throws \OCP\Files\NotPermittedException
 	 */
+	#[\Override]
 	public function getFullPath($path) {
+		$path = $this->normalizePath($path);
 		if (!$this->isValidPath($path)) {
-			throw new NotPermittedException('Invalid path');
+			throw new NotPermittedException('Invalid path "' . $path . '"');
 		}
-		return $this->path . $this->normalizePath($path);
+		return $this->path . $path;
 	}
 
 	/**
 	 * @param string $path
 	 * @return string|null
 	 */
+	#[\Override]
 	public function getRelativePath($path) {
-		if ($this->path === '' or $this->path === '/') {
-			return $this->normalizePath($path);
-		}
-		if ($path === $this->path) {
-			return '/';
-		} elseif (strpos($path, $this->path . '/') !== 0) {
-			return null;
-		} else {
-			$path = substr($path, strlen($this->path));
-			return $this->normalizePath($path);
-		}
+		return PathHelper::getRelativePath($this->getPath(), $path);
 	}
 
 	/**
@@ -95,66 +79,49 @@ class Folder extends Node implements \OCP\Files\Folder {
 	 * @param \OC\Files\Node\Node $node
 	 * @return bool
 	 */
+	#[\Override]
 	public function isSubNode($node) {
-		return strpos($node->getPath(), $this->path . '/') === 0;
+		return str_starts_with($node->getPath(), $this->path . '/');
 	}
 
-	/**
-	 * get the content of this directory
-	 *
-	 * @return Node[]
-	 * @throws \OCP\Files\NotFoundException
-	 */
-	public function getDirectoryListing() {
-		$folderContent = $this->view->getDirectoryContent($this->path);
+	#[Override]
+	public function getDirectoryListing(?string $mimetypeFilter = null): array {
+		$folderContent = $this->view->getDirectoryContent($this->path, $mimetypeFilter, $this->getFileInfo(false));
 
-		return array_map(function (FileInfo $info) {
-			if ($info->getMimetype() === 'httpd/unix-directory') {
-				return new Folder($this->root, $this->view, $info->getPath(), $info);
+		return array_map(function (FileInfo $info): Node {
+			if ($info->getMimetype() === FileInfo::MIMETYPE_FOLDER) {
+				return new Folder($this->root, $this->view, $info->getPath(), $info, $this);
 			} else {
-				return new File($this->root, $this->view, $info->getPath(), $info);
+				return new File($this->root, $this->view, $info->getPath(), $info, $this);
 			}
 		}, $folderContent);
 	}
 
-	/**
-	 * @param string $path
-	 * @param FileInfo $info
-	 * @return File|Folder
-	 */
-	protected function createNode($path, FileInfo $info = null) {
+	protected function createNode(string $path, ?FileInfo $info = null, bool $infoHasSubMountsIncluded = true): INode {
 		if (is_null($info)) {
 			$isDir = $this->view->is_dir($path);
 		} else {
 			$isDir = $info->getType() === FileInfo::TYPE_FOLDER;
 		}
+		$parent = dirname($path) === $this->getPath() ? $this : null;
 		if ($isDir) {
-			return new Folder($this->root, $this->view, $path, $info);
+			return new Folder($this->root, $this->view, $path, $info, $parent, $infoHasSubMountsIncluded);
 		} else {
-			return new File($this->root, $this->view, $path, $info);
+			return new File($this->root, $this->view, $path, $info, $parent);
 		}
 	}
 
-	/**
-	 * Get the node at $path
-	 *
-	 * @param string $path
-	 * @return \OC\Files\Node\Node
-	 * @throws \OCP\Files\NotFoundException
-	 */
+	#[\Override]
 	public function get($path) {
 		return $this->root->get($this->getFullPath($path));
 	}
 
-	/**
-	 * @param string $path
-	 * @return bool
-	 */
+	#[\Override]
 	public function nodeExists($path) {
 		try {
 			$this->get($path);
 			return true;
-		} catch (NotFoundException $e) {
+		} catch (NotFoundException|NotPermittedException) {
 			return false;
 		}
 	}
@@ -164,33 +131,50 @@ class Folder extends Node implements \OCP\Files\Folder {
 	 * @return \OC\Files\Node\Folder
 	 * @throws \OCP\Files\NotPermittedException
 	 */
+	#[\Override]
 	public function newFolder($path) {
-		if ($this->checkPermissions(\OCP\Constants::PERMISSION_CREATE)) {
+		if ($this->checkPermissions(Constants::PERMISSION_CREATE)) {
 			$fullPath = $this->getFullPath($path);
 			$nonExisting = new NonExistingFolder($this->root, $this->view, $fullPath);
 			$this->sendHooks(['preWrite', 'preCreate'], [$nonExisting]);
 			if (!$this->view->mkdir($fullPath)) {
-				throw new NotPermittedException('Could not create folder');
+				// maybe another concurrent process created the folder already
+				if (!$this->view->is_dir($fullPath)) {
+					throw new NotPermittedException('Could not create folder "' . $fullPath . '"');
+				} else {
+					// we need to ensure we don't return before the concurrent request has finished updating the cache
+					$tries = 5;
+					while (!$this->view->getFileInfo($fullPath)) {
+						if ($tries < 1) {
+							throw new NotPermittedException('Could not create folder "' . $fullPath . '", folder exists but unable to get cache entry');
+						}
+						usleep(5 * 1000);
+						$tries--;
+					}
+				}
 			}
-			$node = new Folder($this->root, $this->view, $fullPath);
+			$parent = dirname($fullPath) === $this->getPath() ? $this : null;
+			$node = new Folder($this->root, $this->view, $fullPath, null, $parent);
 			$this->sendHooks(['postWrite', 'postCreate'], [$node]);
 			return $node;
 		} else {
-			throw new NotPermittedException('No create permission for folder');
+			throw new NotPermittedException('No create permission for folder "' . $path . '"');
 		}
 	}
 
 	/**
 	 * @param string $path
 	 * @param string | resource | null $content
-	 * @return \OC\Files\Node\File
+	 * @return File
 	 * @throws \OCP\Files\NotPermittedException
 	 */
+	#[\Override]
 	public function newFile($path, $content = null) {
-		if (empty($path)) {
+		if ($path === '') {
 			throw new NotPermittedException('Could not create as provided path is empty');
 		}
-		if ($this->checkPermissions(\OCP\Constants::PERMISSION_CREATE)) {
+		$this->recreateIfNeeded();
+		if ($this->checkPermissions(Constants::PERMISSION_CREATE)) {
 			$fullPath = $this->getFullPath($path);
 			$nonExisting = new NonExistingFile($this->root, $this->view, $fullPath);
 			$this->sendHooks(['preWrite', 'preCreate'], [$nonExisting]);
@@ -200,24 +184,25 @@ class Folder extends Node implements \OCP\Files\Folder {
 				$result = $this->view->touch($fullPath);
 			}
 			if ($result === false) {
-				throw new NotPermittedException('Could not create path');
+				throw new NotPermittedException('Could not create path "' . $fullPath . '"');
 			}
-			$node = new File($this->root, $this->view, $fullPath);
+			$node = new File($this->root, $this->view, $fullPath, null, $this);
+			$this->view->putFileInfo($fullPath, ['creation_time' => time()]);
 			$this->sendHooks(['postWrite', 'postCreate'], [$node]);
 			return $node;
 		}
-		throw new NotPermittedException('No create permission for path');
+		throw new NotPermittedException('No create permission for path "' . $path . '"');
 	}
 
-	private function queryFromOperator(ISearchOperator $operator, string $uid = null): ISearchQuery {
+	private function queryFromOperator(ISearchOperator $operator, ?string $uid = null, int $limit = 0, int $offset = 0): ISearchQuery {
 		if ($uid === null) {
 			$user = null;
 		} else {
 			/** @var IUserManager $userManager */
-			$userManager = \OC::$server->query(IUserManager::class);
+			$userManager = Server::get(IUserManager::class);
 			$user = $userManager->get($uid);
 		}
-		return new SearchQuery($operator, 0, 0, [], $user);
+		return new SearchQuery($operator, $limit, $offset, [], $user);
 	}
 
 	/**
@@ -226,9 +211,28 @@ class Folder extends Node implements \OCP\Files\Folder {
 	 * @param string|ISearchQuery $query
 	 * @return \OC\Files\Node\Node[]
 	 */
+	#[\Override]
 	public function search($query) {
 		if (is_string($query)) {
-			$query = $this->queryFromOperator(new SearchComparison(ISearchComparison::COMPARE_LIKE, 'name', '%' . $query . '%'));
+			$operator = new SearchComparison(
+				ISearchComparison::COMPARE_LIKE,
+				'name',
+				'%' . $query . '%',
+			);
+			$parts = explode('/', $this->path);
+			$uid = null;
+			if (count($parts) > 2) {
+				[, $uid] = $parts;
+				$operator = new SearchBinaryOperator(ISearchBinaryOperator::OPERATOR_OR, [
+					$operator,
+					new SearchComparison(
+						ISearchComparison::COMPARE_LIKE,
+						'mount_point_name',
+						'%' . $query . '%',
+					)
+				]);
+			}
+			$query = $this->queryFromOperator($operator, $uid);
 		}
 
 		// search is handled by a single query covering all caches that this folder contains
@@ -236,43 +240,16 @@ class Folder extends Node implements \OCP\Files\Folder {
 
 		$limitToHome = $query->limitToHome();
 		if ($limitToHome && count(explode('/', $this->path)) !== 3) {
-			throw new \InvalidArgumentException('searching by owner is only allows on the users home folder');
-		}
-
-		$rootLength = strlen($this->path);
-		$mount = $this->root->getMount($this->path);
-		$storage = $mount->getStorage();
-		$internalPath = $mount->getInternalPath($this->path);
-
-		// collect all caches for this folder, indexed by their mountpoint relative to this folder
-		// and save the mount which is needed later to construct the FileInfo objects
-
-		if ($internalPath !== '') {
-			// a temporary CacheJail is used to handle filtering down the results to within this folder
-			$caches = ['' => new CacheJail($storage->getCache(''), $internalPath)];
-		} else {
-			$caches = ['' => $storage->getCache('')];
-		}
-		$mountByMountPoint = ['' => $mount];
-
-		if (!$limitToHome) {
-			$mounts = $this->root->getMountsIn($this->path);
-			foreach ($mounts as $mount) {
-				$storage = $mount->getStorage();
-				if ($storage) {
-					$relativeMountPoint = ltrim(substr($mount->getMountPoint(), $rootLength), '/');
-					$caches[$relativeMountPoint] = $storage->getCache('');
-					$mountByMountPoint[$relativeMountPoint] = $mount;
-				}
-			}
+			throw new \InvalidArgumentException('searching by owner is only allowed in the users home folder');
 		}
 
 		/** @var QuerySearchHelper $searchHelper */
-		$searchHelper = \OC::$server->get(QuerySearchHelper::class);
+		$searchHelper = Server::get(QuerySearchHelper::class);
+		[$caches, $mountByMountPoint] = $searchHelper->getCachesAndMountPointsForSearch($this->root, $this->path, $limitToHome);
 		$resultsPerCache = $searchHelper->searchInCaches($query, $caches);
 
-		// loop trough all results per-cache, constructing the FileInfo object from the CacheEntry and merge them all
-		$files = array_merge(...array_map(function (array $results, $relativeMountPoint) use ($mountByMountPoint) {
+		// loop through all results per-cache, constructing the FileInfo object from the CacheEntry and merge them all
+		$files = array_merge(...array_map(function (array $results, string $relativeMountPoint) use ($mountByMountPoint) {
 			$mount = $mountByMountPoint[$relativeMountPoint];
 			return array_map(function (ICacheEntry $result) use ($relativeMountPoint, $mount) {
 				return $this->cacheEntryToFileInfo($mount, $relativeMountPoint, $result);
@@ -280,9 +257,9 @@ class Folder extends Node implements \OCP\Files\Folder {
 		}, array_values($resultsPerCache), array_keys($resultsPerCache)));
 
 		// don't include this folder in the results
-		$files = array_filter($files, function (FileInfo $file) {
+		$files = array_values(array_filter($files, function (FileInfo $file) {
 			return $file->getPath() !== $this->getPath();
-		});
+		}));
 
 		// since results were returned per-cache, they are no longer fully sorted
 		$order = $query->getOrder();
@@ -305,9 +282,28 @@ class Folder extends Node implements \OCP\Files\Folder {
 
 	private function cacheEntryToFileInfo(IMountPoint $mount, string $appendRoot, ICacheEntry $cacheEntry): FileInfo {
 		$cacheEntry['internalPath'] = $cacheEntry['path'];
-		$cacheEntry['path'] = $appendRoot . $cacheEntry->getPath();
+		$cacheEntry['path'] = rtrim($appendRoot . $cacheEntry->getPath(), '/');
 		$subPath = $cacheEntry['path'] !== '' ? '/' . $cacheEntry['path'] : '';
-		return new \OC\Files\FileInfo($this->path . $subPath, $mount->getStorage(), $cacheEntry['internalPath'], $cacheEntry, $mount);
+		$storage = $mount->getStorage();
+
+		$owner = null;
+		$ownerId = $storage->getOwner($cacheEntry['internalPath']);
+		if ($ownerId !== false) {
+			// Cache the user manager (for performance)
+			if ($this->userManager === null) {
+				$this->userManager = Server::get(IUserManager::class);
+			}
+			$owner = new LazyUser($ownerId, $this->userManager);
+		}
+
+		return new \OC\Files\FileInfo(
+			$this->path . $subPath,
+			$storage,
+			$cacheEntry['internalPath'],
+			$cacheEntry,
+			$mount,
+			$owner,
+		);
 	}
 
 	/**
@@ -316,8 +312,9 @@ class Folder extends Node implements \OCP\Files\Folder {
 	 * @param string $mimetype
 	 * @return Node[]
 	 */
+	#[\Override]
 	public function searchByMime($mimetype) {
-		if (strpos($mimetype, '/') === false) {
+		if (!str_contains($mimetype, '/')) {
 			$query = $this->queryFromOperator(new SearchComparison(ISearchComparison::COMPARE_LIKE, 'mimetype', $mimetype . '/%'));
 		} else {
 			$query = $this->queryFromOperator(new SearchComparison(ISearchComparison::COMPARE_EQUAL, 'mimetype', $mimetype));
@@ -332,84 +329,34 @@ class Folder extends Node implements \OCP\Files\Folder {
 	 * @param string $userId owner of the tags
 	 * @return Node[]
 	 */
+	#[\Override]
 	public function searchByTag($tag, $userId) {
 		$query = $this->queryFromOperator(new SearchComparison(ISearchComparison::COMPARE_EQUAL, 'tagname', $tag), $userId);
 		return $this->search($query);
 	}
 
-	/**
-	 * @param int $id
-	 * @return \OC\Files\Node\Node[]
-	 */
-	public function getById($id) {
-		$mountCache = $this->root->getUserMountCache();
-		if (strpos($this->getPath(), '/', 1) > 0) {
-			[, $user] = explode('/', $this->getPath());
-		} else {
-			$user = null;
-		}
-		$mountsContainingFile = $mountCache->getMountsForFileId((int)$id, $user);
-
-		// when a user has access trough the same storage trough multiple paths
-		// (such as an external storage that is both mounted for a user and shared to the user)
-		// the mount cache will only hold a single entry for the storage
-		// this can lead to issues as the different ways the user has access to a storage can have different permissions
-		//
-		// so instead of using the cached entries directly, we instead filter the current mounts by the rootid of the cache entry
-
-		$mountRootIds = array_map(function ($mount) {
-			return $mount->getRootId();
-		}, $mountsContainingFile);
-		$mountRootPaths = array_map(function ($mount) {
-			return $mount->getRootInternalPath();
-		}, $mountsContainingFile);
-		$mountRoots = array_combine($mountRootIds, $mountRootPaths);
-
-		$mounts = $this->root->getMountsIn($this->path);
-		$mounts[] = $this->root->getMount($this->path);
-
-		$mountsContainingFile = array_filter($mounts, function ($mount) use ($mountRoots) {
-			return isset($mountRoots[$mount->getStorageRootId()]);
-		});
-
-		if (count($mountsContainingFile) === 0) {
-			if ($user === $this->getAppDataDirectoryName()) {
-				return $this->getByIdInRootMount((int)$id);
-			}
-			return [];
-		}
-
-		$nodes = array_map(function (IMountPoint $mount) use ($id, $mountRoots) {
-			$rootInternalPath = $mountRoots[$mount->getStorageRootId()];
-			$cacheEntry = $mount->getStorage()->getCache()->get((int)$id);
-			if (!$cacheEntry) {
-				return null;
-			}
-
-			// cache jails will hide the "true" internal path
-			$internalPath = ltrim($rootInternalPath . '/' . $cacheEntry->getPath(), '/');
-			$pathRelativeToMount = substr($internalPath, strlen($rootInternalPath));
-			$pathRelativeToMount = ltrim($pathRelativeToMount, '/');
-			$absolutePath = rtrim($mount->getMountPoint() . $pathRelativeToMount, '/');
-			return $this->root->createNode($absolutePath, new \OC\Files\FileInfo(
-				$absolutePath, $mount->getStorage(), $cacheEntry->getPath(), $cacheEntry, $mount,
-				\OC::$server->getUserManager()->get($mount->getStorage()->getOwner($pathRelativeToMount))
-			));
-		}, $mountsContainingFile);
-
-		$nodes = array_filter($nodes);
-
-		$folders = array_filter($nodes, function (Node $node) {
-			return $this->getRelativePath($node->getPath());
-		});
-		usort($folders, function ($a, $b) {
-			return $b->getPath() <=> $a->getPath();
-		});
-		return $folders;
+	#[\Override]
+	public function searchBySystemTag(string $tagName, string $userId, int $limit = 0, int $offset = 0): array {
+		$query = $this->queryFromOperator(new SearchComparison(ISearchComparison::COMPARE_EQUAL, 'systemtag', $tagName), $userId, $limit, $offset);
+		return $this->search($query);
 	}
 
-	protected function getAppDataDirectoryName(): string {
-		$instanceId = \OC::$server->getConfig()->getSystemValueString('instanceid');
+	/**
+	 * @param int $id
+	 * @return \OCP\Files\Node[]
+	 */
+	#[\Override]
+	public function getById($id) {
+		return $this->root->getByIdInPath((int)$id, $this->getPath());
+	}
+
+	#[\Override]
+	public function getFirstNodeById(int $id): ?INode {
+		return $this->root->getFirstNodeByIdInPath($id, $this->getPath());
+	}
+
+	public function getAppDataDirectoryName(): string {
+		$instanceId = Server::get(IConfig::class)->getSystemValueString('instanceid');
 		return 'appdata_' . $instanceId;
 	}
 
@@ -426,8 +373,15 @@ class Folder extends Node implements \OCP\Files\Folder {
 	 * @return array
 	 */
 	protected function getByIdInRootMount(int $id): array {
+		if (!method_exists($this->root, 'createNode')) {
+			// Always expected to be false. Being a method of Folder, this is
+			// always implemented. For it is an internal method and should not
+			// be exposed and made public, it is not part of an interface.
+			return [];
+		}
 		$mount = $this->root->getMount('');
-		$cacheEntry = $mount->getStorage()->getCache($this->path)->get($id);
+		$storage = $mount->getStorage();
+		$cacheEntry = $storage?->getCache($this->path)->get($id);
 		if (!$cacheEntry) {
 			return [];
 		}
@@ -435,86 +389,195 @@ class Folder extends Node implements \OCP\Files\Folder {
 		$absolutePath = '/' . ltrim($cacheEntry->getPath(), '/');
 		$currentPath = rtrim($this->path, '/') . '/';
 
-		if (strpos($absolutePath, $currentPath) !== 0) {
+		if (!str_starts_with($absolutePath, $currentPath)) {
 			return [];
 		}
 
 		return [$this->root->createNode(
 			$absolutePath, new \OC\Files\FileInfo(
-			$absolutePath,
-			$mount->getStorage(),
-			$cacheEntry->getPath(),
-			$cacheEntry,
-			$mount
-		))];
+				$absolutePath,
+				$storage,
+				$cacheEntry->getPath(),
+				$cacheEntry,
+				$mount
+			))];
 	}
 
+	#[\Override]
 	public function getFreeSpace() {
 		return $this->view->free_space($this->path);
 	}
 
+	#[\Override]
 	public function delete() {
-		if ($this->checkPermissions(\OCP\Constants::PERMISSION_DELETE)) {
+		if ($this->checkPermissions(Constants::PERMISSION_DELETE)) {
 			$this->sendHooks(['preDelete']);
 			$fileInfo = $this->getFileInfo();
 			$this->view->rmdir($this->path);
 			$nonExisting = new NonExistingFolder($this->root, $this->view, $this->path, $fileInfo);
 			$this->sendHooks(['postDelete'], [$nonExisting]);
-			$this->exists = false;
+			$this->wasDeleted = true;
 		} else {
-			throw new NotPermittedException('No delete permission for path');
+			throw new NotPermittedException('No delete permission for path "' . $this->path . '"');
 		}
 	}
 
 	/**
 	 * Add a suffix to the name in case the file exists
 	 *
-	 * @param string $name
+	 * @param string $filename
 	 * @return string
 	 * @throws NotPermittedException
 	 */
-	public function getNonExistingName($name) {
-		$uniqueName = \OC_Helper::buildNotExistingFileNameForView($this->getPath(), $name, $this->view);
-		return trim($this->getRelativePath($uniqueName), '/');
+	#[\Override]
+	public function getNonExistingName($filename) {
+		$path = $this->getPath();
+		if ($path === '/') {
+			$path = '';
+		}
+		if ($pos = strrpos($filename, '.')) {
+			$name = substr($filename, 0, $pos);
+			$ext = substr($filename, $pos);
+		} else {
+			$name = $filename;
+			$ext = '';
+		}
+
+		$newpath = $path . '/' . $filename;
+		if ($this->view->file_exists($newpath)) {
+			if (preg_match_all('/\((\d+)\)/', $name, $matches, PREG_OFFSET_CAPTURE)) {
+				/** @var array<int<0, max>, array> $matches */
+				//Replace the last "(number)" with "(number+1)"
+				$last_match = count($matches[0]) - 1;
+				$counter = $matches[1][$last_match][0] + 1;
+				$offset = $matches[0][$last_match][1];
+				$match_length = strlen($matches[0][$last_match][0]);
+			} else {
+				$counter = 2;
+				$match_length = 0;
+				$offset = false;
+			}
+			do {
+				if ($offset) {
+					//Replace the last "(number)" with "(number+1)"
+					$newname = substr_replace($name, '(' . $counter . ')', $offset, $match_length);
+				} else {
+					$newname = $name . ' (' . $counter . ')';
+				}
+				$newpath = $path . '/' . $newname . $ext;
+				$counter++;
+			} while ($this->view->file_exists($newpath));
+		}
+
+		return trim($this->getRelativePath($newpath), '/');
 	}
 
 	/**
 	 * @param int $limit
 	 * @param int $offset
-	 * @return \OCP\Files\Node[]
+	 * @return INode[]
 	 */
+	#[\Override]
 	public function getRecent($limit, $offset = 0) {
-		$query = new SearchQuery(
-			new SearchBinaryOperator(
-				// filter out non empty folders
-				ISearchBinaryOperator::OPERATOR_OR,
-				[
-					new SearchBinaryOperator(
-						ISearchBinaryOperator::OPERATOR_NOT,
-						[
-							new SearchComparison(
-								ISearchComparison::COMPARE_EQUAL,
-								'mimetype',
-								FileInfo::MIMETYPE_FOLDER
-							),
-						]
-					),
-					new SearchComparison(
-						ISearchComparison::COMPARE_EQUAL,
-						'size',
-						0
-					),
-				]
-			),
-			$limit,
-			$offset,
+		$filterOutNonEmptyFolder = new SearchBinaryOperator(
+			// filter out non empty folders
+			ISearchBinaryOperator::OPERATOR_OR,
 			[
-				new SearchOrder(
-					ISearchOrder::DIRECTION_DESCENDING,
-					'mtime'
+				new SearchBinaryOperator(
+					ISearchBinaryOperator::OPERATOR_NOT,
+					[
+						new SearchComparison(
+							ISearchComparison::COMPARE_EQUAL,
+							'mimetype',
+							FileInfo::MIMETYPE_FOLDER
+						),
+					]
+				),
+				new SearchComparison(
+					ISearchComparison::COMPARE_EQUAL,
+					'size',
+					0
 				),
 			]
 		);
+
+		$filterNonRecentFiles = new SearchComparison(
+			ISearchComparison::COMPARE_GREATER_THAN,
+			'mtime',
+			strtotime('-2 week')
+		);
+		if ($offset === 0 && $limit <= 100) {
+			$query = new SearchQuery(
+				new SearchBinaryOperator(
+					ISearchBinaryOperator::OPERATOR_AND,
+					[
+						$filterOutNonEmptyFolder,
+						$filterNonRecentFiles,
+					],
+				),
+				$limit,
+				$offset,
+				[
+					new SearchOrder(
+						ISearchOrder::DIRECTION_DESCENDING,
+						'mtime'
+					),
+				]
+			);
+		} else {
+			$query = new SearchQuery(
+				$filterOutNonEmptyFolder,
+				$limit,
+				$offset,
+				[
+					new SearchOrder(
+						ISearchOrder::DIRECTION_DESCENDING,
+						'mtime'
+					),
+				]
+			);
+		}
+
 		return $this->search($query);
+	}
+
+	#[\Override]
+	public function verifyPath($fileName, $readonly = false): void {
+		$this->view->verifyPath(
+			$this->getPath(),
+			$fileName,
+			$readonly,
+		);
+	}
+
+	private function recreateIfNeeded(): void {
+		if ($this->wasDeleted) {
+			$this->newFolder('');
+			$this->wasDeleted = false;
+		}
+	}
+
+	#[Override]
+	public function getOrCreateFolder(string $path, int $maxRetries = 5): IFolder {
+		$i = 0;
+		while (true) {
+			$path = $i === 0 ? $path : $path . ' (' . $i . ')';
+			try {
+				$folder = $this->get($path);
+				if ($folder instanceof IFolder) {
+					return $folder;
+				}
+			} catch (NotFoundException) {
+				$folder = in_array(dirname($path), ['.','/'], true) ? $this : $this->get(dirname($path));
+				if (!($folder instanceof Folder)) {
+					throw new NotPermittedException("Unable to create folder $path. Parent is not a directory.");
+				}
+				return $folder->newFolder(basename($path));
+			}
+			$i++;
+			if ($i === $maxRetries) {
+				throw new NotPermittedException('Unable to load or create folder.');
+			}
+		}
 	}
 }
